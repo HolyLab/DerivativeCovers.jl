@@ -11,14 +11,21 @@ covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of
 """
 module CoverAD
 
+using LinearAlgebra: norm, opnorm
+using Random: AbstractRNG, MersenneTwister, randn
+
 export Tape, TVar, tape_function, nnodes, value
 export CoverResult, cover_hessian, adjoints, sensitivities, hessian_bound,
        local_covers, balanced_split, abs_reverse
+export cyclic_partition, node_levels, level_partition, group_seeds, cover_hybrid
+export hvp, scaled_spectral_radius, spectral_shrink
 export cover_ratio, bound_ratio, rank1_ratio, tightness
 
 include("tape.jl")
 include("overloads.jl")
 include("covers.jl")
+include("merges.jl")
+include("spectral.jl")
 include("metrics.jl")
 
 end
