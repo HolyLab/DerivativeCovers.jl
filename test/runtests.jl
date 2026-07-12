@@ -199,6 +199,120 @@ const GATE = 1 + 1e-10
         end
     end
 
+    # Independent reference for the variance channel: propagate the squared partials forward from
+    # each input, so `u2[k][a]` is the sum over paths from input `a` to node `k` of the squared
+    # partials along the path. Contracting with the squared seeds gives the channel's value.
+    function squared_sensitivities(t)
+        n, N = t.ninputs, nnodes(t)
+        u2 = [zeros(n) for _ in 1:N]
+        for a in 1:n
+            u2[a][a] = 1.0
+        end
+        for k in (n + 1):N, (i, p) in enumerate(t.parents[k])
+            u2[k] .+= t.ds[k][i]^2 .* u2[p]
+        end
+        return u2
+    end
+
+    @testset "variance channel — $name" for (name, f, x0) in PROBLEMS
+        t, outidx = tape_function(f, x0)
+        res = cover_hessian(t, outidx)
+        vc = cover_variance(t, outidx)
+
+        @test vc.grad ≈ res.grad
+        @test vc.h_sum ≈ res.h_sum rtol=1e-12             # the hard channel is the sum merge
+        @test all(>=(0), vc.h_var)
+        # Quadrature over paths, then over nodes, then summation: h_var <= h_quad <= h_sum.
+        @test all(vc.h_var .<= res.h_quad .* GATE)
+        @test all(res.h_quad .<= vc.h_sum .* GATE)
+        # The two channels carry seed weight along the same paths, so they vanish together.
+        @test (vc.h_var .== 0) == (vc.h_sum .== 0)
+        @test all(vc.severity .>= 1 / GATE)
+        @test all(isfinite, vc.severity)
+
+        rhos, _ = local_covers(t, adjoints(t, outidx))
+        theta2 = variance_seeds(t, rhos)
+        u2 = squared_sensitivities(t)
+        ref = [sqrt(sum(theta2[j] * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
+        @test vc.h_var ≈ ref rtol=1e-12
+    end
+
+    @testset "variance channel is exact on tree-structured graphs" begin
+        # Each input reaches each node along a single path, and no node has two parents sharing an
+        # input, so there is no covariance to drop: the estimate attains the quadrature merge.
+        for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
+            @test cover_variance(f, x0).h_var ≈ cover_hessian(f, x0).h_quad rtol=1e-12
+        end
+        # One nonlinear node carries the whole Hessian of the factored quadratic, so the estimate
+        # lands on the exact minimal cover.
+        @test cover_variance(quad_factored(WQ), XQ).h_var ≈ abs.(WQ)
+    end
+
+    @testset "variance channel underestimates where paths reconverge" begin
+        # The entrywise quadratic routes each input through n nonlinear nodes whose contributions
+        # overlap — exactly the covariances the independence assumption drops.
+        f, x0 = quad_entrywise(AQ), XQ
+        @test all(cover_variance(f, x0).h_var .< cover_hessian(f, x0).h_quad)
+        @test maximum(cover_variance(f, x0).severity) > 1.5
+
+        # The estimate is not a cover. The diamond makes that concrete: its quadrature merge
+        # attains the minimal cover [3, 1], so any undershoot loses the guarantee. x₁ reaches the
+        # squaring node along two paths of strength 2 and 1, which the variance channel combines
+        # in quadrature as sqrt(5) instead of summing to 3.
+        H = ForwardDiff.hessian(reconvergent_diamond, [0.4, -0.9])
+        res = cover_hessian(reconvergent_diamond, [0.4, -0.9])
+        vc = cover_variance(reconvergent_diamond, [0.4, -0.9])
+        @test H ≈ [9.0 -3.0; -3.0 1.0]
+        @test res.h_quad ≈ [3.0, 1.0]
+        @test cover_ratio(H, res.h_quad) ≈ 1
+        @test vc.h_var ≈ [sqrt(5.0), 1.0]
+        @test cover_ratio(H, vc.h_var) ≈ 9 / 5     # the (1,1) entry is no longer covered
+    end
+
+    @testset "variance channel covariance" begin
+        cases = [("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1e-6, 1e3]),
+                 ("quad matvec", quad_matvec(AQ), XQ, [1e-6, 1e3, 1.0, 1e-2, 1e4]),
+                 ("logsumexp n=8", logsumexp,
+                  [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
+                  [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3])]
+        @testset "$name" for (name, f, x0, d) in cases
+            vc = cover_variance(f, x0)
+
+            # Rescaling the inputs puts a factor 1/d[a] on each input edge, whose square the
+            # variance channel picks up; the severity, a ratio of the two channels, is invariant.
+            vcd = cover_variance(xt -> f(xt ./ d), d .* x0)
+            @test vcd.h_var ≈ vc.h_var ./ d rtol=1e-12
+            @test vcd.severity ≈ vc.severity rtol=1e-12
+
+            # f -> c*f scales every rho by sqrt(c), hence every squared seed by c.
+            c = 7.3
+            vcc = cover_variance(x -> c * f(x), x0)
+            @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol=1e-12
+            @test vcc.severity ≈ vc.severity rtol=1e-12
+        end
+    end
+
+    @testset "dependency sweep and severity" begin
+        t, outidx = tape_function(x -> exp(x[1] * x[2]), [0.5, -2.0])
+        N = nnodes(t)
+        theta = Float64[k == outidx ? 1.0 : 0.0 for k in 1:N]
+
+        # A zero variance seed leaves the hard channel exactly the single-channel sweep.
+        abar, vbar = dependency_sweep(t, theta, zeros(N))
+        @test abar ≈ abs_reverse(t, theta)
+        @test all(iszero, vbar)
+        # Seeding only the variance channel squares the coefficients along the way.
+        _, vbar = dependency_sweep(t, zeros(N), theta)
+        @test vbar[1] ≈ (t.ds[outidx][1] * t.ds[outidx - 1][1])^2
+
+        @test_throws DimensionMismatch dependency_sweep(t, theta, zeros(N + 1))
+        @test_throws DimensionMismatch dependency_sweep(t, zeros(N - 1), zeros(N))
+
+        @test dependency_severity([2.0, 0.0], [1.0, 0.0]) == [2.0, 1.0]
+        @test dependency_severity([1.0], [0.0]) == [Inf]
+        @test_throws DimensionMismatch dependency_severity([1.0], [1.0, 2.0])
+    end
+
     @testset "hvp — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         v = Float64[cos(3i) for i in eachindex(x0)]

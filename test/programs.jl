@@ -145,6 +145,29 @@ function cancellation_summed(x)
     return s2 / 2 - s^2 / (2n)
 end
 
+"""
+A program whose graph is a tree: every input and every intermediate feeds exactly one consumer, so
+each input reaches each node along a single path, and no node has two parents that share an input.
+"""
+function tree_program(x)
+    a = tanh(x[1] * x[2])
+    b = exp(x[3] / 2)
+    c = a * b
+    d = x[4]^2 + x[5]
+    return c * d + sin(x[6])
+end
+
+"""
+f = (3x₁ - x₂)²/2, written so that x₁ reaches the squaring node along two reconverging paths.
+The paths carry the same sign, so the absolute-value sensitivities are exact and the single
+nonlinear node makes the quadrature merge attain the minimal cover [3, 1].
+"""
+function reconvergent_diamond(x)
+    a = 2 * x[1]
+    b = x[1] - x[2]
+    return (a + b)^2 / 2
+end
+
 # ---- fixed problem instances --------------------------------------------------------------
 
 const WQ = [1e-2, 1e-1, 1e0, 1e1, 1e2]     # rank-1 quadratic: A = WQ*WQ'
@@ -156,6 +179,8 @@ const MLP_YTAR = 0.7
 const MLP_P = randn(MersenneTwister(20240607), 17)
 
 const CANCEL_X = [1.0, -2.0, 3.0, -0.5, 2.5, -1.5, 0.7, -3.0]
+
+const TREE_X = [0.7, -1.3, 0.4, 2.0, -0.6, 1.1]
 
 "Name, program, and evaluation point for each test problem."
 const PROBLEMS = [
