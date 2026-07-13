@@ -480,6 +480,38 @@ const GATE = 1 + 1e-10
         @test isfinite(shared.f(100 .* shared.x0))
     end
 
+    @testset "random_dag keeps every derivative alive at scale" begin
+        # tanh saturates: `1 - tanh(v)^2` evaluates to exactly zero in Float64 for |v| ≳ 19,
+        # and a derivative-dead node erases its whole subtree from the gradient and the
+        # Hessian. At sharing = 0 the program's tail is a single unary chain (binary ops need
+        # two unconsumed nodes and run out), so one saturated tanh there zeroes *every*
+        # derivative of the program. The generator normalizes tanh inputs to prevent this;
+        # small-n spot checks miss it because the chance of an untamed input grows with nops.
+        function tanhderivs(r, x0)
+            v = Vector{Float64}(undef, r.ninputs + length(r.ops))
+            v[1:r.ninputs] = x0
+            ds = Float64[]
+            for (k, (op, ps, cs)) in enumerate(r.ops)
+                v[r.ninputs + k] = CoverAD.Problems._apply(op, v, ps, cs)
+                op === :tanh && push!(ds, 1 - tanh(v[ps[1]])^2)
+            end
+            return ds
+        end
+        for sharing in (0.0, 0.6), n in (16, 32, 64, 128, 256, 512)
+            p = random_dag(n; sharing, rng=MersenneTwister(1))
+            @test all(>(1e-3), tanhderivs(p.f, p.x0))
+            g = ForwardDiff.gradient(p.f, p.x0)
+            H = ForwardDiff.hessian(p.f, p.x0)
+            @test any(!iszero, H)
+            # An input can be genuinely dead — consumed only through linear paths whose unit
+            # weights cancel exactly in the output sum — but then it must be dead at second
+            # order too, and deadness stays the rare exception.
+            dead = findall(iszero, g)
+            @test all(i -> all(iszero, view(H, i, :)), dead)
+            @test length(dead) <= max(1, n ÷ 8)
+        end
+    end
+
     @testset "rescale is exactly the input-units transformation" begin
         p = quadratic(4; rng=MersenneTwister(5))
         d = logscales(MersenneTwister(6), 4; sigma=4.0)

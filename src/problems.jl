@@ -252,6 +252,14 @@ const _DAG_PUNARY = 0.4
 # so unlike a `tanh` squash it leaves the second-order structure of the program intact.
 const _DAG_BAND = 1e3
 
+# tanh must see a tame input: `1 - tanh(v)^2` evaluates to exactly zero in Float64 for
+# |v| ≳ 19, and a derivative-dead node erases its whole subtree from the gradient and the
+# Hessian — at sharing = 0, where the program's tail is a single unary chain, one saturated
+# tanh zeroes every derivative of the program. The value band above is far too wide to
+# prevent this, so tanh inputs beyond this band are first normalized to magnitude 1, where
+# tanh has healthy first and second derivatives.
+const _DAG_TANH_BAND = 2.0
+
 """
 A random program, stored as the recipe that generated it: `ops[k]` builds node `ninputs + k` from
 earlier nodes, and the output is the sum of `outputs`. Replaying the recipe on a vector of any
@@ -305,20 +313,29 @@ end
 """
     random_dag(n; nops=4n, sharing=0.5, sigma=0.0, rng=MersenneTwister(1)) -> CoverProblem
 
-A random program of `n` inputs and roughly `nops` elementary operations, drawn from `+`, `-`, `*`,
-scaling, `tanh`, squaring, and `sin`. The output sums every node that no other node consumes, so
-every input reaches the output.
+A random program of `n` inputs and at most `nops` elementary operations, drawn from `+`, `-`,
+`*`, scaling, `tanh`, squaring, and `sin`. The output sums every node that no other node
+consumes, so every input reaches the output. At `sharing = 0` generation also stops as soon as
+a single unconsumed node remains (once any curvature-carrying op has been drawn): the only way
+to grow a tree past that point is one long unary chain, whose accumulated derivative factors
+wander into under- or overflow. A draw whose ops all happen to be linear gets one final
+squaring node, so every generated program has a nonzero Hessian.
 
 `sharing` controls subexpression reuse, and with it the reconvergence the cover has to contend
 with. Each operand is either an unconsumed node (probability `1 - sharing`) or an arbitrary
 existing node (probability `sharing`). At `sharing = 0` no node is ever consumed twice, so the
 program's graph is a **tree**: each input reaches each node along at most one path. At
-`sharing = 1` operands are drawn from the whole program and paths reconverge freely.
+`sharing = 1` operands are drawn from the whole program and paths reconverge freely. Reaching
+the output is graph reachability, not influence: with reuse, an input can enter only linearly
+(a zero Hessian row), or even through linear paths whose unit weights cancel exactly (a zero
+gradient entry as well). Both are rare, correct, and must be tolerated by downstream code.
 
 A node whose magnitude at `x0` leaves `[1e-3, 1e3]` is followed by a normalizing scale node, so
-`*` and `^2` chains can neither overflow nor collapse to a numerically zero derivative. Those
-guards are what keep the program nonlinear at every length, and what make the recipe safe to
-replay at points other than `x0`.
+`*` and `^2` chains can neither overflow nor collapse to a numerically zero derivative. A `tanh`
+input outside `[-2, 2]` is likewise normalized to magnitude 1 first: `1 - tanh(v)^2` underflows
+to exactly zero for large `v`, and a derivative-dead node erases its whole subtree from the
+gradient and the Hessian. These guards are what keep the program nonlinear at every length, and
+what make the recipe safe to replay at points other than `x0`.
 
 No closed-form Hessian; differentiate `p.f`.
 """
@@ -339,13 +356,33 @@ function random_dag(n::Integer; nops::Integer=4n, sharing::Real=0.5, sigma::Real
         return length(vals)
     end
 
+    # Normalize node k's magnitude into the band and return it to the unconsumed pool.
+    function finish!(k)
+        v = abs(vals[k])
+        if v != 0 && !(1 / _DAG_BAND <= v <= _DAG_BAND)
+            k = emit!(:scale, [k], [1 / v], sign(vals[k]))
+        end
+        push!(frontier, k)
+        return k
+    end
+
+    ncurved = 0                                 # ops with a nonzero second derivative
     for _ in 1:nops
+        # A tree whose unconsumed nodes have dwindled to one can only keep growing as a
+        # single unary chain, and derivative factors compound multiplicatively along a
+        # chain — hundreds of them wander into under- or overflow and erase (or explode)
+        # every derivative of the program. Stop instead, once the program carries some
+        # curvature; with reuse (`sharing > 0`) the frontier repopulates and no chain forms.
+        sharing == 0 && length(frontier) == 1 && ncurved > 0 && break
         # Without reuse a binary op needs two unconsumed nodes; when they run out, go unary
         # rather than break the tree property that `sharing = 0` promises.
         binary_ok = sharing > 0 || length(frontier) >= 2
         if !binary_ok || rand(rng) < _DAG_PUNARY
             op = rand(rng, _DAG_UNARY)
             p = _take_parent!(rng, frontier, length(vals), sharing)
+            if op === :tanh && abs(vals[p]) > _DAG_TANH_BAND
+                p = emit!(:scale, [p], [1 / abs(vals[p])], sign(vals[p]))
+            end
             cs = op === :scale ? [_coeffs(rng, 1; sigma)[1]] : Float64[]
             k = emit!(op, [p], cs, _apply(op, vals, [p], cs))
         else
@@ -354,11 +391,15 @@ function random_dag(n::Integer; nops::Integer=4n, sharing::Real=0.5, sigma::Real
             p2 = _take_parent!(rng, frontier, length(vals), sharing)
             k = emit!(op, [p1, p2], Float64[], _apply(op, vals, [p1, p2], Float64[]))
         end
-        v = abs(vals[k])
-        if v != 0 && !(1 / _DAG_BAND <= v <= _DAG_BAND)
-            k = emit!(:scale, [k], [1 / v], sign(vals[k]))
-        end
-        push!(frontier, k)
+        ncurved += op in (:mul, :tanh, :sqr, :sin)
+        finish!(k)
+    end
+
+    if ncurved == 0
+        # An entirely linear draw has an identically zero Hessian and poses no covering
+        # problem at all; square one unconsumed node so every generated program has curvature.
+        p = _take_parent!(rng, frontier, length(vals), 0.0)
+        finish!(emit!(:sqr, [p], Float64[], vals[p]^2))
     end
 
     recipe = DagRecipe(n, ops, sort!(frontier))
