@@ -24,6 +24,8 @@ export cyclic_partition, node_levels, level_partition, group_seeds, cover_hybrid
 export VarianceCover, cover_variance, variance_seeds, dependency_sweep, dependency_severity
 export hvp, scaled_spectral_radius, spectral_shrink
 export cover_ratio, bound_ratio, rank1_ratio, tightness
+export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
+export inflation_shape, inflation_factors, inflate, anisotropy
 
 include("tape.jl")
 include("overloads.jl")
@@ -32,6 +34,7 @@ include("merges.jl")
 include("variance.jl")
 include("spectral.jl")
 include("metrics.jl")
+include("inflation.jl")
 include("problems.jl")
 
 end

@@ -541,4 +541,95 @@ const GATE = 1 + 1e-10
         @test_throws ArgumentError random_dag(4; sharing=1.5)
     end
 
+    @testset "every pattern inflates its worst coordinate to exactly the peak" begin
+        n, peak = 12, 4.0
+        patterns = [UniformInflation(), LognormalInflation(), SpikeInflation(5), RampInflation()]
+        for p in patterns
+            f = inflation_factors(p, n, peak)
+            @test length(f) == n
+            @test all(x -> 1 <= x <= peak, f)
+            @test maximum(f) ≈ peak
+            # A peak of 1 is the identity distortion, whatever the shape.
+            @test inflation_factors(p, n, 1.0) ≈ ones(n)
+        end
+        @test_throws ArgumentError inflation_factors(UniformInflation(), n, 0.5)
+    end
+
+    @testset "each pattern realizes the profile it names" begin
+        n, peak = 16, 10.0
+
+        f = inflation_factors(UniformInflation(), n, peak)
+        @test f ≈ fill(peak, n)
+        @test anisotropy(f) ≈ 0 atol=1e-12
+
+        f = inflation_factors(SpikeInflation(3), n, peak)
+        @test f[3] ≈ peak
+        @test f[setdiff(1:n, 3)] ≈ ones(n - 1)
+        @test anisotropy(f) ≈ log(peak) * (1 - 1 / n)
+        @test_throws BoundsError inflation_factors(SpikeInflation(n + 1), n, peak)
+
+        f = inflation_factors(RampInflation(), n, peak)
+        @test issorted(f)
+        @test f[1] ≈ 1
+        @test f[end] ≈ peak
+        @test anisotropy(f) ≈ log(peak) / 2 atol=0.05
+        @test inflation_factors(RampInflation(), 1, peak) ≈ [peak]
+
+        f = inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(3))
+        @test f ≈ inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(3))
+        @test f != inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(4))
+        # Its head is more concentrated than a ramp's: the bulk of a normal draw sits well below
+        # its maximum, and the gap widens with n.
+        big = 256
+        lgn = inflation_factors(LognormalInflation(), big, peak; rng=MersenneTwister(3))
+        @test anisotropy(lgn) > anisotropy(inflation_factors(RampInflation(), big, peak))
+    end
+
+    @testset "an inflated cover is still a cover" begin
+        p = quadratic(6; form=:entrywise, rng=MersenneTwister(7))
+        H = exact_hessian(p)
+        h = cover_hessian(p.f, p.x0).h_sum
+        @test cover_ratio(H, h) <= 1
+
+        for pat in (UniformInflation(), LognormalInflation(), SpikeInflation(2), RampInflation())
+            f = inflation_factors(pat, h, 3.0; rng=MersenneTwister(8))
+            hd = inflate(h, f)
+            # Inflation can only weaken the bound, never break it...
+            @test cover_ratio(H, hd) <= cover_ratio(H, h)
+            @test cover_ratio(H, hd) <= 1
+            # ...and the looseness it adds is exactly the factors that were asked for.
+            @test hd ./ h ≈ f
+            @test tightness(hd, h)[1] ≈ maximum(f)
+        end
+
+        @test inflate(h, UniformInflation(), 2.5) ≈ 2.5 .* h
+        @test_throws ArgumentError inflate(h, fill(0.5, length(h)))
+        @test_throws DimensionMismatch inflate(h, ones(length(h) + 1))
+    end
+
+    @testset "inflation leaves a zero cover coordinate at zero" begin
+        # A cover of a Hessian that ignores an input has an exactly-zero coordinate there; no
+        # multiplicative distortion can loosen a bound that is already exact.
+        H = [2.0 1.0 0.0; 1.0 3.0 0.0; 0.0 0.0 0.0]
+        h = [2.0, 2.0, 0.0]
+        @test cover_ratio(H, h) <= 1
+
+        f = inflation_factors(LognormalInflation(), h, 5.0; rng=MersenneTwister(9))
+        hd = inflate(h, f)
+        @test hd[3] == 0
+        @test cover_ratio(H, hd) <= 1
+        @test tightness(hd, h)[3] == 0          # no coordinate the reference leaves at zero
+    end
+
+    @testset "inflation follows the cover's axes" begin
+        h = [1.0, 2.0, 3.0, 4.0, 5.0]
+        v = view(h, 2:4)
+        f = inflation_factors(RampInflation(), v, 4.0)
+        @test axes(f) == axes(v)
+        @test f ≈ [1.0, 2.0, 4.0]
+        @test inflate(v, f) ≈ [2.0, 6.0, 16.0]
+        @test inflation_shape(SpikeInflation(2), v) ≈ [0.0, 1.0, 0.0]
+        @test_throws BoundsError inflation_shape(SpikeInflation(4), v)
+    end
+
 end
