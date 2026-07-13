@@ -1,6 +1,8 @@
 using CoverAD
+using CoverAD.Problems
 using ForwardDiff
 using LinearAlgebra
+using Random
 using Test
 
 include("programs.jl")
@@ -398,6 +400,113 @@ const GATE = 1 + 1e-10
         @test_throws DimensionMismatch cover_ratio(H, [1.0])
         @test_throws DimensionMismatch bound_ratio(H, zeros(3, 3))
         @test_throws DimensionMismatch tightness([1.0], [1.0, 2.0])
+    end
+
+    # The generated problems are the substrate of the growth and tolerance studies, so what is
+    # tested here is that each family is the function it claims to be, has the graph structure it
+    # claims to have, and stays within the covering chain.
+    GENERATED = [(sigma, g(n))
+                 for sigma in (0.0, 2.0)
+                 for (_, g) in families(; sigma, seed=7)
+                 for n in (3, 6)]
+
+    @testset "generated problems are well-formed — $(p.name) sigma=$sigma" for (sigma, p) in GENERATED
+        @test nvars(p) == length(p.x0)
+        @test isfinite(p.f(p.x0))
+        @test all(isfinite, ForwardDiff.gradient(p.f, p.x0))
+        # A problem with no curvature poses no covering problem at all, and a family that
+        # degenerates to one as `n` grows would silently make every method look perfect.
+        @test any(!iszero, ForwardDiff.hessian(p.f, p.x0))
+        # The twin computes the same function by an independent route (array operations the
+        # scalarized program cannot express), so agreement is evidence the scalarization is right.
+        if has_twin(p)
+            @test p.twin(p.x0) ≈ p.f(p.x0)
+            @test ForwardDiff.gradient(p.twin, p.x0) ≈ ForwardDiff.gradient(p.f, p.x0)
+        end
+        if has_exact_hessian(p)
+            @test exact_hessian(p) ≈ ForwardDiff.hessian(p.f, p.x0)
+        end
+    end
+
+    @testset "covering chain on generated problems — $(p.name) sigma=$sigma" for (sigma, p) in GENERATED
+        H = ForwardDiff.hessian(p.f, p.x0)
+        res = cover_hessian(p.f, p.x0)
+        @test res.grad ≈ ForwardDiff.gradient(p.f, p.x0)
+        @test bound_ratio(H, res.B) <= GATE
+        for h in (res.h_sum, res.h_quad, cover_hybrid(p.f, p.x0, 3))
+            @test all(>=(0), h)
+            @test cover_ratio(H, h) <= GATE
+        end
+    end
+
+    @testset "quadratic forms share a Hessian and differ as programs" begin
+        n = 5
+        ps = [quadratic(n; form=fm, rng=MersenneTwister(3)) for fm in (:entrywise, :matvec, :factored)]
+        A = exact_hessian(ps[1])
+        @test issymmetric(A)
+        @test all(p -> exact_hessian(p) ≈ A, ps)          # one problem, three programs
+        @test all(p -> p.x0 ≈ ps[1].x0, ps)
+        # The factored form's rank-many nonlinear nodes do not overlap, so its cover is far
+        # tighter than the entrywise form's n² overlapping ones.
+        hs = [cover_hessian(p.f, p.x0).h_sum for p in ps]
+        @test all(hs[3] .< hs[1])
+
+        # rank 1: H = w*w' and the minimal cover abs.(w) = sqrt.(diag(A)) is attained.
+        p1 = quadratic(6; rank=1, form=:factored, rng=MersenneTwister(4))
+        @test rank(exact_hessian(p1)) == 1
+        @test cover_hessian(p1.f, p1.x0).h_quad ≈ sqrt.(diag(exact_hessian(p1)))
+    end
+
+    @testset "random_dag sharing controls reconvergence" begin
+        # sharing = 0 consumes each node exactly once, so the graph is a tree: every input reaches
+        # every node along a single path. The variance channel drops covariances between
+        # reconverging paths, so it attains the quadrature merge exactly iff there are none.
+        tree = random_dag(8; nops=40, sharing=0.0, rng=MersenneTwister(11))
+        @test cover_variance(tree.f, tree.x0).h_var ≈ cover_hessian(tree.f, tree.x0).h_quad rtol=1e-10
+
+        # With reuse, paths reconverge; the variance channel drops exactly those covariances and
+        # so falls strictly below the quadrature merge on the coordinates that reconverge.
+        shared = random_dag(8; nops=40, sharing=0.6, rng=MersenneTwister(11))
+        hv = cover_variance(shared.f, shared.x0).h_var
+        hq = cover_hessian(shared.f, shared.x0).h_quad
+        @test all(hv .<= hq .* GATE)
+        @test count(hv .< hq .* (1 - 1e-8)) >= 2
+
+        # Each input reaches the output: nothing is dropped on the floor.
+        @test all(!iszero, ForwardDiff.gradient(shared.f, shared.x0))
+
+        # Values stay bounded no matter where the recipe is replayed, so `*` and `^2` chains
+        # cannot overflow.
+        @test isfinite(shared.f(100 .* shared.x0))
+    end
+
+    @testset "rescale is exactly the input-units transformation" begin
+        p = quadratic(4; rng=MersenneTwister(5))
+        d = logscales(MersenneTwister(6), 4; sigma=4.0)
+        @test maximum(d) / minimum(d) > 1e2                # a genuinely wide spread
+        q = rescale(p, d)
+
+        @test q.x0 ≈ d .* p.x0
+        @test q.f(q.x0) ≈ p.f(p.x0)
+        @test exact_hessian(q) ≈ ForwardDiff.hessian(q.f, q.x0)
+        @test exact_hessian(q) ≈ Diagonal(inv.(d)) * exact_hessian(p) * Diagonal(inv.(d))
+        # The cover is covariant under it: this is the property the whole method rests on.
+        @test cover_hessian(q.f, q.x0).h_sum ≈ cover_hessian(p.f, p.x0).h_sum ./ d rtol=1e-10
+
+        @test_throws DimensionMismatch rescale(p, [1.0, 2.0])
+        @test_throws ArgumentError rescale(p, [1.0, 2.0, 0.0, 1.0])
+    end
+
+    @testset "sigma widens the coefficient dynamic range" begin
+        spread(A) = maximum(abs, A) / minimum(abs, A)
+        narrow = exact_hessian(quadratic(8; rng=MersenneTwister(2), sigma=0.0))
+        wide = exact_hessian(quadratic(8; rng=MersenneTwister(2), sigma=3.0))
+        @test spread(wide) > 1e3 * spread(narrow)
+
+        @test_throws ArgumentError quadratic(4; rank=5)
+        @test_throws ArgumentError quadratic(4; form=:bogus)
+        @test_throws ArgumentError deep_composition(4; width=0)
+        @test_throws ArgumentError random_dag(4; sharing=1.5)
     end
 
 end

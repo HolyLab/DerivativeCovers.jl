@@ -8,6 +8,9 @@ A scalar program is recorded on a [`Tape`](@ref) by running it on [`TVar`](@ref)
 without ever forming the Hessian `H`. The covers are deterministic, guaranteed, and exactly
 covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of the objective
 (`h -> sqrt(c)*h` when `f -> c*f`).
+
+The submodule [`CoverAD.Problems`](@ref) supplies parameterized families of programs, with
+reference Hessians, for measuring how loose a cover is and what makes it so.
 """
 module CoverAD
 
@@ -29,5 +32,6 @@ include("merges.jl")
 include("variance.jl")
 include("spectral.jl")
 include("metrics.jl")
+include("problems.jl")
 
 end
