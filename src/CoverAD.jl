@@ -14,7 +14,7 @@ reference Hessians, for measuring how loose a cover is and what makes it so.
 """
 module CoverAD
 
-using LinearAlgebra: norm, opnorm
+using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm, opnorm
 using Random: AbstractRNG, MersenneTwister, randn
 
 export Tape, TVar, tape_function, nnodes, value
@@ -26,6 +26,8 @@ export hvp, scaled_spectral_radius, spectral_shrink
 export cover_ratio, bound_ratio, rank1_ratio, tightness
 export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
 export inflation_shape, inflation_factors, inflate, anisotropy
+export cover_norm, stopping_index, stopping_shift, regularized_step, regularization_bias,
+       psd_shift, psd_excess, cover_cg, step_degradation
 
 include("tape.jl")
 include("overloads.jl")
@@ -35,6 +37,7 @@ include("variance.jl")
 include("spectral.jl")
 include("metrics.jl")
 include("inflation.jl")
+include("consumers.jl")
 include("problems.jl")
 
 end

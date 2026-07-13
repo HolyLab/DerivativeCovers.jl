@@ -632,4 +632,137 @@ const GATE = 1 + 1e-10
         @test_throws BoundsError inflation_shape(SpikeInflation(4), v)
     end
 
+    @testset "the convergence test is scale-invariant" begin
+        g, h = [3.0, 4.0], [1.0, 2.0]
+        @test cover_norm(g, h) ≈ sqrt(13)
+        D = Diagonal([1e3, 1e-4])
+        @test cover_norm(D * g, D * h) ≈ cover_norm(g, h)
+        @test cover_norm(2 * g, 2 * h) ≈ cover_norm(g, h)     # objective scaling f -> c*f
+        # A dead coordinate: no curvature to divide by.
+        @test cover_norm([1.0, 0.0], [0.0, 3.0]) == Inf
+        @test cover_norm([0.0, 3.0], [0.0, 3.0]) ≈ 1
+        @test_throws DimensionMismatch cover_norm([1.0], [1.0, 2.0])
+    end
+
+    @testset "an inflated cover stops the run early" begin
+        # A gradient halving each iteration, against a cover held fixed along the path.
+        grads = [[2.0^-k, 0.0] for k in 0:10]
+        covers = [ones(2) for _ in 0:10]
+        dcovers = [inflate(h, UniformInflation(), 4.0) for h in covers]
+        tol = 0.1
+        # 2^-k <= 0.1 first at k = 4, and 2^-k <= 0.4 (the inflated test) first at k = 2.
+        @test stopping_index(grads, covers, tol) == 5
+        @test stopping_index(grads, dcovers, tol) == 3
+        s = stopping_shift(grads, covers, dcovers, tol)
+        @test s.k_ref == 5 && s.k_dist == 3
+        @test s.shift == 2
+        @test s.overshoot ≈ 0.25 / tol      # the true cover-norm where the run declared success
+        @test stopping_shift(grads, covers, covers, tol).shift == 0
+        @test stopping_index(grads, covers, 1e-9) === nothing
+        @test_throws "never fires" stopping_shift(grads, covers, dcovers, 1e-9)
+    end
+
+    @testset "regularization bias" begin
+        A, g = Matrix(1.0I, 2, 2), [1.0, 1.0]
+        h, hd = [1.0, 1.0], [2.0, 1.0]
+        @test regularized_step(A, g, h, 1.0) ≈ [-0.5, -0.5]
+        @test regularized_step(A, g, hd, 1.0) ≈ [-0.2, -0.5]    # diag(5, 2) \ (-g)
+        @test regularization_bias(A, g, h, hd, 1.0) ≈ 0.3 / (0.5 * sqrt(2))
+        @test regularization_bias(A, g, h, h, 1.0) == 0
+        @test regularized_step(A, g, h, 0.0) ≈ A \ (-g)
+        @test_throws ArgumentError regularized_step(A, g, h, -1.0)
+    end
+
+    @testset "regularization bias is scale-invariant" begin
+        rng = MersenneTwister(7)
+        A = Symmetric(randn(rng, 5, 5)) |> Matrix
+        g = randn(rng, 5)
+        h = abs.(randn(rng, 5)) .+ 0.5
+        hd = inflate(h, LognormalInflation(), 8.0; rng)
+        b = regularization_bias(A, g, h, hd, 0.5)
+        # Variables: x -> D*x sends g -> D*g, A -> D*A*D, and any cover h -> D*h.
+        D = Diagonal([1e3, 1e-2, 1.0, 7.0, 1e-4])
+        @test regularization_bias(D * A * D, D * g, D * h, D * hd, 0.5) ≈ b
+        # Objective: f -> c*f sends g -> c*g, A -> c*A, h -> sqrt(c)*h.
+        c = 100.0
+        @test regularization_bias(c * A, c * g, sqrt(c) * h, sqrt(c) * hd, 0.5) ≈ b
+    end
+
+    @testset "PSD boost feels anisotropy only" begin
+        A = [1.0 0.0; 0.0 -1.0]
+        @test psd_shift(A, [1.0, 1.0]) ≈ 1
+        @test psd_shift(A, [2.0, 1.0]) ≈ 1          # scaling coordinate 1 cannot fix coordinate 2
+        @test psd_shift(Matrix(1.0I, 2, 2), [3.0, 0.5]) == 0
+
+        uni = psd_excess(A, [1.0, 1.0], [2.0, 2.0])
+        @test uni.tau_ref ≈ 1 && uni.tau_dist ≈ 0.25
+        @test uni.excess ≈ [1.0, 1.0]               # tau*Diagonal(h.^2) is unchanged by h -> c*h
+
+        spike = psd_excess(A, [1.0, 1.0], [10.0, 1.0])
+        @test spike.tau_dist ≈ 1
+        @test spike.excess ≈ [100.0, 1.0]           # the untouched coordinate is shifted 100x too hard
+
+        psd = psd_excess(Matrix(1.0I, 2, 2), [1.0, 1.0], [10.0, 1.0])
+        @test psd.tau_ref == 0 && psd.tau_dist == 0 && psd.excess ≈ [1.0, 1.0]
+
+        @test_throws "strictly positive" psd_shift(A, [0.0, 1.0])
+        @test_throws "symmetric" psd_shift([1.0 2.0; 3.0 4.0], [1.0, 1.0])
+    end
+
+    @testset "the PSD shift is the minimal one" begin
+        rng = MersenneTwister(11)
+        for _ in 1:5
+            A = Matrix(Symmetric(randn(rng, 6, 6)))
+            h = exp.(randn(rng, 6))                 # a wide range of curvature scales
+            tau = psd_shift(A, h)
+            @test tau > 0                           # a random symmetric matrix is indefinite
+            @test eigmin(Symmetric(A + tau * Diagonal(h .^ 2))) > -1e-10
+            @test eigmin(Symmetric(A + 0.99tau * Diagonal(h .^ 2))) < 0
+        end
+    end
+
+    @testset "cover-preconditioned CG" begin
+        A = Matrix(Diagonal([1.0, 4.0, 9.0]))
+        b = [1.0, 1.0, 1.0]
+        h = [1.0, 2.0, 3.0]                         # the exact cover of this A
+        exact = cover_cg(A, b, h)
+        @test exact.x ≈ A \ b
+        @test exact.iters == 1                      # the scaled system is the identity
+
+        # Uniform inflation rescales the metric without reshaping it: still one iteration.
+        @test cover_cg(A, b, inflate(h, UniformInflation(), 5.0)).iters == 1
+        # A spike leaves the scaled system with two distinct eigenvalues.
+        spiked = cover_cg(A, b, inflate(h, SpikeInflation(1), 10.0))
+        @test spiked.iters == 2
+        @test spiked.x ≈ A \ b
+
+        @test_throws "strictly positive" cover_cg(A, b, [0.0, 2.0, 3.0])
+    end
+
+    @testset "cover quality is step quality under a truncated CG" begin
+        rng = MersenneTwister(3)
+        M = randn(rng, 12, 12)
+        A = M * M' + 12I                            # symmetric positive definite
+        g = randn(rng, 12)
+        h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
+        hd = inflate(h, LognormalInflation(), 100.0; rng)
+
+        # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
+        # reach the target, and the loose cover pays for it in iterations.
+        long = step_degradation(A, g, h, hd; itermax=40)
+        @test long.error_ref < 1e-6 && long.error_dist < 1e-6
+        @test long.iters_dist > long.iters_ref
+
+        # On the usual budget of one iteration per coordinate the loose cover simply fails to
+        # deliver a step: it does not reach the target and its final iterate is far from exact.
+        budget = step_degradation(A, g, h, hd)
+        @test budget.iters_ref == long.iters_ref
+        @test budget.iters_dist === nothing
+        @test budget.error_dist > 0.1 > budget.error_ref
+
+        # Uniform inflation is invisible here too: only the shape of the metric steers CG.
+        uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); itermax=4)
+        @test uni.error_dist ≈ uni.error_ref
+    end
+
 end
