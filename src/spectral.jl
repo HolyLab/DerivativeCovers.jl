@@ -16,6 +16,9 @@ with `v`, then one reverse sweep carrying both the adjoints `vbar` and their tan
 
     vbardot_i += (∂φ_k/∂v_i) * vbardot_k + vbar_k * sum_j (∂²φ_k/∂v_i∂v_j) * dv_j.
 
+A node with an empty second-partial matrix (see [`Tape`](@ref)) has no curvature term; the sweep
+skips it rather than indexing an empty `C`.
+
 Costs about two gradients and `O(L)` memory.
 """
 function hvp(t::Tape, outidx::Int, v::AbstractVector)
@@ -42,12 +45,18 @@ function hvp(t::Tape, outidx::Int, v::AbstractVector)
         bk, ak = vbar[k], vbardot[k]
         (bk == 0 && ak == 0) && continue
         ds, C = t.ds[k], t.Cs[k]
-        for (i, p) in enumerate(ps)
-            curv = 0.0
-            for (j, q) in enumerate(ps)
-                curv += C[i, j] * dv[q]
+        if isempty(C)
+            for (i, p) in enumerate(ps)
+                vbardot[p] += ds[i] * ak
             end
-            vbardot[p] += ds[i] * ak + bk * curv
+        else
+            for (i, p) in enumerate(ps)
+                curv = 0.0
+                for (j, q) in enumerate(ps)
+                    curv += C[i, j] * dv[q]
+                end
+                vbardot[p] += ds[i] * ak + bk * curv
+            end
         end
     end
     return vbardot[1:n]

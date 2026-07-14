@@ -9,6 +9,12 @@
 # intermediate v_i with respect to the inputs. Bounding every factor in absolute value gives the
 # elementwise bound B >= |H|; a per-node rank-1 cover s_k with s_k s_k' dominating node k's
 # contribution to B then yields covers of H under either merge (see [`cover_hessian`](@ref)).
+#
+# An inner-product node (`dotnode` in tape.jl) has a block-diagonal second-partial matrix
+# (`PairedPartials`) that splits into q independent 2x2 blocks, one per parent pair; it is
+# covered by q rank-1 atoms rather than one, and the quadrature merge combines atoms rather than
+# whole nodes (see `atom_slots`). A linear n-ary node (`linearnode`) carries an empty
+# second-partial matrix and contributes no atom at all.
 
 """
     CoverResult
@@ -19,7 +25,8 @@ Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@
 - `B`: the elementwise bound `B >= abs.(H)`. A diagnostic, quadratic in `n`; the production
   path never forms it.
 - `h_sum`: the sum merge, `h = sum_k s_k`.
-- `h_quad`: the quadrature merge, `h[i] = sqrt(sum_k s_k[i]^2)`.
+- `h_quad`: the quadrature merge, `h[i] = sqrt(sum_atoms s_atom[i]^2)`, combining per [`atom_slots`](@ref)
+  atom rather than per node (see [`cover_hessian`](@ref)).
 - `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic — the
   form the production path uses, and equal to `h_sum` up to roundoff.
 - `L`: the tape length (node count), inputs included.
@@ -91,6 +98,10 @@ The elementwise bound `B = sum_k abs(vbar[k]) * sum_{i,j} abs(C^k[i,j]) * utilde
 which satisfies `B >= abs.(H)` entrywise. Diagnostic only: `B` is `n × n`, and the two
 inequalities it discards — cancellation along paths (inside each `utilde`) and cancellation
 across elementals — are exactly the looseness this bound trades for its cost.
+
+A node with an empty `C` (see [`Tape`](@ref)) contributes nothing and is skipped. A
+[`PairedPartials`](@ref) node has only `2q` nonzero entries out of `(2q)^2`, so its contribution
+is accumulated directly from those pairs rather than by scanning the dense `C`.
 """
 function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -99,6 +110,17 @@ function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
         av = abs(vbar[k])
         av == 0 && continue
         ps, C = t.parents[k], t.Cs[k]
+        isempty(C) && continue
+        if C isa PairedPartials
+            qh = C.q
+            for j in 1:qh
+                ui, uj = utilde[ps[j]], utilde[ps[qh + j]]
+                for q in 1:n, r in 1:n
+                    B[q, r] += av * (ui[q] * uj[r] + uj[q] * ui[r])
+                end
+            end
+            continue
+        end
         for i in eachindex(ps), j in eachindex(ps)
             cij = av * abs(C[i, j])
             cij == 0 && continue
@@ -143,6 +165,13 @@ with no second-order contribution get an empty `rhos[k]`. `theta[j] = sum_k rhos
 the weight each node receives as a parent, which seeds the reverse sweep of
 [`abs_reverse`](@ref).
 
+A [`PairedPartials`](@ref) node (an inner product, see [`dotnode`](@ref)) has `c = abs(vbar[k])`
+on each of its `q` off-diagonal pairs and zero elsewhere, so its `2q×2q` local cover problem
+separates into `q` independent 2×2 multiplication-node problems; `rhos[k]` collects the `q`
+per-pair splits from [`balanced_split`](@ref), slot-aligned with the node's parents. A node with
+an empty `C` (a linear n-ary node, see [`linearnode`](@ref)) contributes no second-order term
+and is skipped before the arity check below.
+
 `check` verifies the covering invariant at every node.
 """
 function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
@@ -152,7 +181,29 @@ function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
     for k in (t.ninputs + 1):N
         av = abs(vbar[k])
         ps, C = t.parents[k], t.Cs[k]
-        if length(ps) == 1
+        if C isa PairedPartials
+            c = av
+            c == 0 && continue
+            q = C.q
+            rho = zeros(2q)
+            for j in 1:q
+                z1 = abs(t.vals[ps[j]])
+                z2 = abs(t.vals[ps[q + j]])
+                a, b = balanced_split(0.0, c, 0.0, z1, z2)
+                if check
+                    rtol = 1e-9
+                    a * b >= c * (1 - rtol) ||
+                        error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
+                end
+                rho[j] = a
+                rho[q + j] = b
+                theta[ps[j]] += a
+                theta[ps[q + j]] += b
+            end
+            rhos[k] = rho
+        elseif isempty(C)
+            continue
+        elseif length(ps) == 1
             c11 = av * abs(C[1, 1])
             c11 == 0 && continue
             rho = sqrt(c11)
@@ -209,6 +260,18 @@ function abs_reverse(t::Tape, theta::AbstractVector)
 end
 
 """
+    atom_slots(C, nslots) -> atoms
+
+The groups of a node's parent slots that the quadrature merge of [`cover_hessian`](@ref)
+combines separately. A dense `C` (unary or binary) forms one atom spanning every slot. A
+[`PairedPartials`](@ref)`(q)` forms `q` atoms, one per pair `(j, q+j)`, matching the
+block-diagonal structure of its second partials — the atoms it contributes are independent
+rank-1 terms, not one combined term for the whole node.
+"""
+atom_slots(C, nslots) = (1:nslots,)
+atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
+
+"""
     cover_hessian(t::Tape, outidx::Int; check::Bool=true) -> CoverResult
     cover_hessian(f, x0::AbstractVector; check::Bool=true) -> CoverResult
 
@@ -218,10 +281,13 @@ are valid covers of the Hessian:
 
 - **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
   nonnegative slack;
-- **quadrature merge**, `h_quad[i] = sqrt(sum_k s_k[i]^2)`: valid by Cauchy–Schwarz, and the
-  minimal cover of the no-cancellation surrogate `M = sum_k s_k s_k'`.
+- **quadrature merge**, `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`: valid by Cauchy–Schwarz, and
+  the minimal cover of the no-cancellation surrogate `M = sum_atoms s_atom s_atom'`. An atom (see
+  [`atom_slots`](@ref)) is a whole node for unary and binary elementals and one parent pair for
+  an inner-product node, so an inner-product node contributes `q` separate terms to the
+  quadrature merge rather than one.
 
-Together they give the chain `abs.(H) <= B <= sum_k s_k s_k' <= h*h'` for either `h`.
+Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` for either `h`.
 
 `check` verifies the per-node cover invariants and that the absolute-value reverse sweep
 reproduces `h_sum`.
@@ -238,21 +304,24 @@ function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
     rhos, theta = local_covers(t, vbar; check)
 
     ssum = zeros(n)             # sum_k s_k
-    ssq = zeros(n)              # sum_k s_k.^2
+    ssq = zeros(n)              # sum over atoms of s_atom.^2
     sk = zeros(n)
     for k in (n + 1):N
         rho = rhos[k]
         isempty(rho) && continue
-        fill!(sk, 0.0)
-        for (i, p) in enumerate(t.parents[k])
-            up = utilde[p]
-            for q in 1:n
-                sk[q] += rho[i] * up[q]
+        ps = t.parents[k]
+        for atom in atom_slots(t.Cs[k], length(ps))
+            fill!(sk, 0.0)
+            for i in atom
+                up = utilde[ps[i]]
+                for q in 1:n
+                    sk[q] += rho[i] * up[q]
+                end
             end
-        end
-        for q in 1:n
-            ssum[q] += sk[q]
-            ssq[q] += sk[q]^2
+            for q in 1:n
+                ssum[q] += sk[q]
+                ssq[q] += sk[q]^2
+            end
         end
     end
     h_sum = ssum

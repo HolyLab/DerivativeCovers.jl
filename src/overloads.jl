@@ -2,6 +2,7 @@
 # its second partials; a program built from anything outside this set hits a MethodError.
 
 import Base: +, -, *, /, ^, exp, log, sin, cos, tanh, sqrt, abs2
+import LinearAlgebra: dot, Adjoint, Transpose
 
 # --- binary, both TVar ---
 +(x::TVar, y::TVar) = binarynode(x, y, value(x) + value(y), 1.0, 1.0, 0, 0, 0)
@@ -63,3 +64,42 @@ function sqrt(x::TVar)
     return unarynode(x, sqrt(v), 0.5 * v^(-0.5), -0.25 * v^(-1.5))
 end
 abs2(x::TVar) = unarynode(x, value(x)^2, 2 * value(x), 2)
+
+# --- inner products and matrix-vector products ---
+# A variable-times-variable product records one inner-product node per output entry; a
+# constant-coefficient product records one linear node per output entry, carrying no
+# second-order term (see `dotnode`/`linearnode` in tape.jl).
+dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar}) = dotnode(ws, xs)
+dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = linearnode(w, xs)
+dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = linearnode(x, ws)
+
+function *(W::AbstractMatrix{TVar}, x::AbstractVector{TVar})
+    axes(W, 2) == axes(x, 1) ||
+        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
+    return TVar[dot(view(W, m, :), x) for m in axes(W, 1)]
+end
+function *(W::AbstractMatrix{<:Real}, x::AbstractVector{TVar})
+    axes(W, 2) == axes(x, 1) ||
+        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
+    return TVar[linearnode(view(W, m, :), x) for m in axes(W, 1)]
+end
+function *(W::AbstractMatrix{TVar}, x::AbstractVector{<:Real})
+    axes(W, 2) == axes(x, 1) ||
+        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
+    return TVar[linearnode(x, view(W, m, :)) for m in axes(W, 1)]
+end
+
+# Disambiguate against LinearAlgebra's generic `Adjoint`/`Transpose` row-vector and `Diagonal`
+# matrix-vector products, which are `AbstractMatrix` and so tie with the three methods above:
+# an adjoint/transpose row vector times a vector is the same dot product `dot` already records,
+# and a diagonal matrix times a vector is the elementwise product the scalar `*` already records.
+*(W::Union{Adjoint{TVar,<:AbstractVector},Transpose{TVar,<:AbstractVector}},
+  x::AbstractVector{TVar}) = dot(parent(W), x)
+*(W::Union{Adjoint{TVar,<:AbstractVector},Transpose{TVar,<:AbstractVector}},
+  x::AbstractVector{<:Real}) = dot(parent(W), x)
+*(W::Union{Adjoint{<:Real,<:AbstractVector},Transpose{<:Real,<:AbstractVector}},
+  x::AbstractVector{TVar}) = dot(parent(W), x)
+
+*(W::Diagonal{TVar}, x::AbstractVector{TVar}) = W.diag .* x
+*(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = W.diag .* x
+*(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = W.diag .* x

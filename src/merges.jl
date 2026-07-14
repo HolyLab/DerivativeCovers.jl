@@ -135,6 +135,12 @@ reproduces the sum merge and one node per group reproduces the quadrature merge.
 
 Costs one adjoint sweep and one `maximum(groups)`-channel absolute-value reverse sweep, i.e.
 `O(G*L)` time and memory — independent of the input dimension, unlike the exact quadrature merge.
+
+A partition assigns whole *nodes* to groups, so an inner-product node's atoms (see
+[`atom_slots`](@ref)) always travel together within one channel. The finest-partition endpoint
+on a tape with inner-product nodes is therefore the per-node quadrature merge, bounded below by
+`h_quad` from [`cover_hessian`](@ref) rather than equal to it; validity for every partition, and
+the interpolation between the sum and quadrature extremes, are unaffected.
 """
 function cover_hybrid(t::Tape, outidx::Int, groups::AbstractVector{<:Integer}; check::Bool=true)
     vbar = adjoints(t, outidx)

@@ -11,6 +11,8 @@ include("programs.jl")
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1e-10
 
+include("primitives.jl")
+
 @testset "CoverAD.jl" begin
 
     @testset "tape mechanics" begin
