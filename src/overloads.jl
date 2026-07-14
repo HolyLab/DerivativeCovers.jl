@@ -4,6 +4,10 @@
 import Base: +, -, *, /, ^, exp, log, sin, cos, tanh, sqrt, abs2
 import LinearAlgebra: dot, Adjoint, Transpose
 
+# A TVar is a broadcast scalar: `xs ./ s` with `s::TVar` broadcasts `s` against every entry of
+# `xs` instead of falling back to Base's default `collect(s)`, which errors on a scalar TVar.
+Base.broadcastable(x::TVar) = Ref(x)
+
 # --- binary, both TVar ---
 +(x::TVar, y::TVar) = binarynode(x, y, value(x) + value(y), 1.0, 1.0, 0, 0, 0)
 -(x::TVar, y::TVar) = binarynode(x, y, value(x) - value(y), 1.0, -1.0, 0, 0, 0)
@@ -103,3 +107,13 @@ end
 *(W::Diagonal{TVar}, x::AbstractVector{TVar}) = W.diag .* x
 *(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = W.diag .* x
 *(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = W.diag .* x
+
+# A sum of TVars records as one linear n-ary node (see `linearnode`) rather than a chain of
+# n-1 binary additions: additions relay adjoints and absolute sweeps with unit weight and
+# contribute no atoms, so every cover quantity agrees with the chained form to roundoff. The
+# gain is tape length: one node instead of n-1.
+function Base.sum(xs::AbstractArray{TVar})
+    isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
+    return linearnode(ones(length(xs)), vec(xs))
+end
+Base.sum(f, xs::AbstractArray{TVar}) = sum(map(f, xs))

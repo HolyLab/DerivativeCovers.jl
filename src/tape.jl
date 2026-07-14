@@ -78,7 +78,15 @@ struct TVar
     idx::Int
 end
 
+"""
+    value(x)
+
+The numeric value carried by `x`: `x.tape.vals[x.idx]` for a [`TVar`](@ref), or `x` itself for
+a plain `Real`. The `Real` fallback lets generic code read the value of either a `TVar` or a
+plain number without a branch, detaching a quantity from the tape.
+"""
 value(x::TVar) = x.tape.vals[x.idx]
+value(x::Real) = x
 
 """
     pushnode!(t::Tape, val, parents, d, C) -> TVar

@@ -28,9 +28,11 @@ export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, R
 export inflation_shape, inflation_factors, inflate, anisotropy
 export cover_norm, stopping_index, stopping_shift, regularized_step, regularization_bias,
        psd_shift, psd_excess, cover_cg, step_degradation
+export softmax, layernorm
 
 include("tape.jl")
 include("overloads.jl")
+include("composites.jl")
 include("covers.jl")
 include("merges.jl")
 include("variance.jl")
