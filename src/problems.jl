@@ -28,7 +28,7 @@ using LinearAlgebra: Diagonal, dot
 using Random: AbstractRNG, MersenneTwister, rand, randn
 
 export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
-export quadratic, deep_composition, random_dag, rescale, logscales, families
+export quadratic, deep_composition, random_dag, mlp, rescale, logscales, families
 
 """
     CoverProblem
@@ -41,8 +41,10 @@ A scalar program together with the references needed to judge a cover of its Hes
   vector (`Float64`, `ForwardDiff.Dual`, ...).
 - `x0`: the point at which the Hessian is covered.
 - `twin`: an idiomatic-Julia implementation of the same function, or `nothing`. It is written
-  independently of `f` — using array operations `f` cannot express — so agreement between the two
-  is evidence that the scalarized program is the function it claims to be.
+  independently of `f`, by an independent route — array operations `f` cannot express (most
+  families), or an explicit scalar loop when `f` is itself written in array notation (see
+  [`mlp`](@ref)) — so agreement between the two is evidence that `f` is the function it claims to
+  be.
 - `hessian`: `x -> H`, the analytic Hessian, or `nothing` when no closed form is available. Use
   [`exact_hessian`](@ref) rather than the field.
 """
@@ -111,6 +113,15 @@ function _lincomb(c::AbstractVector{<:Real}, z)
     axes(c, 1) == axes(z, 1) ||
         throw(DimensionMismatch("coefficients and variables must match: $(axes(c)) vs $(axes(z))"))
     return _sum([c[i] * z[i] for i in eachindex(c, z)])
+end
+
+"The left-to-right chain `w[1]*z[1] + w[2]*z[2] + ... + w[n]*z[n]`, the scalar order a dot node's parents follow."
+function _rowdot(w, z, n::Integer)
+    acc = w[1] * z[1]
+    for j in 2:n
+        acc = acc + w[j] * z[j]
+    end
+    return acc
 end
 
 """
@@ -405,6 +416,118 @@ function random_dag(n::Integer; nops::Integer=4n, sharing::Real=0.5, sigma::Real
     recipe = DagRecipe(n, ops, sort!(frontier))
     name = "dag n=$n share=$(round(sharing; digits=2))"
     return CoverProblem(name, recipe, x0)
+end
+
+# ---- multilayer perceptrons -------------------------------------------------------------------
+
+"""
+    mlp(sizes; batch=4, sigma=0.0, activation=tanh, rng=MersenneTwister(1)) -> CoverProblem
+
+The squared-error loss of a feedforward network, with the **parameters** as inputs. For
+`sizes = (n0, n1, ..., nK)`, layer `l = 1:K` has a weight matrix `W_l` of size `n_l x n_{l-1}` and
+a bias vector `b_l` of length `n_l`, flattened `(W1, b1, W2, b2, ..., WK, bK)` into one vector of
+length `p = sum_l n_l*(n_{l-1}+1)`:
+
+    z = data column                    # n0, fixed
+    for l = 1:K-1
+        z = activation.(W_l*z .+ b_l)  # hidden layers
+    y = W_K*z .+ b_K                   # output layer, linear
+    f = sum_over_columns( sum(abs2, y - target) ) / 2
+
+`batch` input/target column pairs are drawn once at construction and closed over; only the
+parameters vary thereafter. `f` is written in array notation: a matvec whose `TVar` factor meets a
+constant factor (the data column feeding layer 1, or feeding layer `K` directly when `K = 1`)
+records one [`linearnode`](@ref) per row, while a matvec between two `TVar` factors (every
+hidden-to-hidden transition) records one [`dotnode`](@ref) per row. Each column's error sums as
+one linear node, and the batch total sums as another, so the tape stays short despite the array
+notation.
+
+`twin` computes the same loss by an explicit scalar loop: every row's dot product is the
+left-to-right chain `w[1]*z[1] + w[2]*z[2] + ...` in the order a dot node's parents follow, bias
+and activation are applied per scalar, and every sum (over output units, over the batch) is an
+explicit binary `+` chain. It therefore matches `f` node for node under a shared accumulation
+order, rather than taking an independent route through array operations as the other families'
+twins do.
+
+`sigma` spreads the log-magnitude of the initial weights and biases, mirroring
+[`deep_composition`](@ref)'s convention; the weights are additionally scaled by `1/sqrt(n_{l-1})`
+so a wider input layer does not by itself inflate the initial activations.
+
+No closed-form Hessian; differentiate `p.f`.
+"""
+function mlp(sizes; batch::Integer=4, sigma::Real=0.0, activation=tanh,
+             rng::AbstractRNG=MersenneTwister(1))
+    ns = collect(Int, sizes)
+    length(ns) >= 2 ||
+        throw(ArgumentError("sizes must have at least 2 entries (n0 and n1), got $(length(ns))"))
+    all(>=(1), ns) || throw(ArgumentError("layer widths must be positive, got $ns"))
+    K = length(ns) - 1
+
+    offsets = Vector{UnitRange{Int}}(undef, 2K)
+    pos = 1
+    for l in 1:K
+        nl, nlm1 = ns[l + 1], ns[l]
+        offsets[2l - 1] = pos:(pos + nl * nlm1 - 1)
+        pos += nl * nlm1
+        offsets[2l] = pos:(pos + nl - 1)
+        pos += nl
+    end
+    p = pos - 1
+
+    x0 = Vector{Float64}(undef, p)
+    for l in 1:K
+        nl, nlm1 = ns[l + 1], ns[l]
+        x0[offsets[2l - 1]] = vec(_coeffs(rng, nl, nlm1; sigma) ./ sqrt(nlm1))
+        x0[offsets[2l]] = _coeffs(rng, nl; sigma)
+    end
+
+    X = randn(rng, ns[1], batch)
+    Y = randn(rng, ns[end], batch)
+
+    function f(params)
+        length(params) == p ||
+            throw(DimensionMismatch("mlp expects $p parameters, got $(length(params))"))
+        Base.require_one_based_indexing(params)
+        terms = map(1:batch) do bcol
+            z = view(X, :, bcol)
+            for l in 1:(K - 1)
+                nl, nlm1 = ns[l + 1], ns[l]
+                Wl = reshape(view(params, offsets[2l - 1]), nl, nlm1)
+                bl = view(params, offsets[2l])
+                z = activation.(Wl * z .+ bl)
+            end
+            nK, nKm1 = ns[K + 1], ns[K]
+            WK = reshape(view(params, offsets[2K - 1]), nK, nKm1)
+            bK = view(params, offsets[2K])
+            y = WK * z .+ bK
+            sum(abs2, y .- view(Y, :, bcol))
+        end
+        return sum(terms) / 2
+    end
+
+    function twin(params)
+        length(params) == p ||
+            throw(DimensionMismatch("mlp expects $p parameters, got $(length(params))"))
+        Base.require_one_based_indexing(params)
+        terms = map(1:batch) do bcol
+            z = [X[i, bcol] for i in 1:ns[1]]
+            for l in 1:(K - 1)
+                nl, nlm1 = ns[l + 1], ns[l]
+                Wl = reshape(view(params, offsets[2l - 1]), nl, nlm1)
+                bl = view(params, offsets[2l])
+                z = [activation(_rowdot(view(Wl, i, :), z, nlm1) + bl[i]) for i in 1:nl]
+            end
+            nK, nKm1 = ns[K + 1], ns[K]
+            WK = reshape(view(params, offsets[2K - 1]), nK, nKm1)
+            bK = view(params, offsets[2K])
+            y = [_rowdot(view(WK, i, :), z, nKm1) + bK[i] for i in 1:nK]
+            _sum([abs2(y[i] - Y[i, bcol]) for i in 1:nK])
+        end
+        return _sum(terms) / 2
+    end
+
+    name = "mlp $(join(ns, '-')) b=$batch"
+    return CoverProblem(name, f, x0; twin)
 end
 
 # ---- transformations and sweeps --------------------------------------------------------------
