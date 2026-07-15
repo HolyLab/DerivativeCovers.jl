@@ -37,6 +37,56 @@ include("mlp.jl")
         @test_throws MethodError tape_function(x -> abs(x[1]), x0)
     end
 
+    # A program that is one elemental applied straight to the inputs has unit absolute
+    # sensitivities, so its elementwise bound `B` is exactly `abs.(H)`. Both partials of each
+    # elemental are therefore pinned against ForwardDiff: the first by `grad`, the second by `B`.
+    @testset "elemental partials — $name" for (name, f, x0) in [
+        ("exp", x -> exp(x[1]), [0.7]),
+        ("log", x -> log(x[1]), [1.7]),
+        ("sin", x -> sin(x[1]), [0.6]),
+        ("cos", x -> cos(x[1]), [0.6]),
+        ("tan", x -> tan(x[1]), [0.6]),
+        ("atan", x -> atan(x[1]), [0.7]),
+        ("tanh", x -> tanh(x[1]), [0.4]),
+        ("sqrt", x -> sqrt(x[1]), [2.3]),
+        ("inv", x -> inv(x[1]), [2.0]),
+        ("abs2", x -> abs2(x[1]), [-1.3]),
+        ("reciprocal", x -> 3.0 / x[1], [2.0]),
+        ("constant power", x -> x[1]^2.5, [1.4]),
+        ("variable base", x -> x[1]^x[2], [1.7, 2.3]),
+        ("variable exponent", x -> 2.0^x[1], [1.3]),
+        ("rational base", x -> (3 // 2)^x[1], [1.3]),
+        ("product", x -> x[1] * x[2], [2.0, -3.0]),
+        ("quotient", x -> x[1] / x[2], [2.0, -3.0]),
+    ]
+        res = cover_hessian(f, x0)
+        @test res.grad ≈ ForwardDiff.gradient(f, x0)
+        @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
+    end
+
+    @testset "identity elementals leave the tape unchanged" begin
+        x0 = [2.0, -3.0]
+        res = cover_hessian(x -> x[1] * x[2], x0)
+        for f in (x -> (+x[1]) * x[2], x -> x[1]' * x[2])
+            t, _ = tape_function(f, x0)
+            @test nnodes(t) == 3                       # two inputs, one product node
+            @test cover_hessian(f, x0).h_sum == res.h_sum
+        end
+    end
+
+    @testset "a TVar scales an array of constants" begin
+        c = [2.0, -0.5, 3.0]
+        x0 = [1.3]
+        for f in (x -> sum(x[1] * c), x -> sum(c * x[1]))
+            @test cover_hessian(f, x0).grad ≈ ForwardDiff.gradient(f, x0)
+        end
+    end
+
+    @testset "a variable exponent needs a positive base" begin
+        @test_throws "requires a positive base" cover_hessian(x -> x[1]^x[2], [-1.7, 2.0])
+        @test_throws "requires a positive base" cover_hessian(x -> (-2.0)^x[1], [1.3])
+    end
+
     @testset "gradient matches ForwardDiff — $name" for (name, f, x0) in PROBLEMS
         res = cover_hessian(f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
