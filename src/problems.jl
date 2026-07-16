@@ -24,11 +24,11 @@ the units of the *inputs*.
 """
 module Problems
 
-using LinearAlgebra: Diagonal, dot
+using LinearAlgebra: Diagonal, dot, norm
 using Random: AbstractRNG, MersenneTwister, rand, randn
 
 export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
-export quadratic, deep_composition, random_dag, mlp, rescale, logscales, families
+export quadratic, deep_composition, random_dag, mlp, cancellation, rescale, logscales, families
 
 """
     CoverProblem
@@ -528,6 +528,123 @@ function mlp(sizes; batch::Integer=4, sigma::Real=0.0, activation=tanh,
 
     name = "mlp $(join(ns, '-')) b=$batch"
     return CoverProblem(name, f, x0; twin)
+end
+
+# ---- cancellation pairs ------------------------------------------------------------------------
+
+"""
+    cancellation(n; m=n, delta=1e-3, aligned=false, support=1:n, sigma=0.0, rng=MersenneTwister(1)) -> CoverProblem
+
+An adversarial pair of programs built from `m` quartets of squared linear forms whose signed sum
+cancels exactly, riding on a `delta`-weighted rank-1 quadratic:
+
+    acc = (delta/2) * (q'x)^2
+    for j in 1:m
+        acc += 0.5*(a_j'xS)^2 + 0.5*(b_j'xS)^2 + s*(c_j'xS)^2 + s*(d_j'xS)^2
+    end
+
+where `xS = x[support]`, `c_j = (a_j+b_j)/sqrt(2)`, `d_j = (a_j-b_j)/sqrt(2)`, and `a_j`, `b_j`
+are drawn orthogonal to `x0[support]`. At `s = -0.5` (`aligned = false`, the default) the rotation
+identity `c_j c_j' + d_j d_j' = a_j a_j' + b_j b_j'` makes every quartet's contribution to the
+Hessian cancel exactly; at `s = 0.5` (`aligned = true`) the same identity makes it add. The two
+variants differ *only* in the sign of the two constants multiplying the `c_j` and `d_j` squares:
+every node of the tape up to that sign carries the same value in both, because every quartet
+linear form vanishes at `x0` (orthogonality to `x0[support]`), so `f`, its gradient, and the
+magnitude of every elemental partial and adjoint coincide between the two variants — only the
+*curvature* they carry differs.
+
+Closed forms (the Hessian is constant in `x`):
+
+    H_cancel  = delta * q*q'
+    H_aligned = delta * q*q' + sum_j 2*(a_j*a_j' + b_j*b_j')   (scattered onto `support`)
+
+The minimal cover of `H_cancel` is `hstar = sqrt(delta) .* abs.(q) = sqrt.(diag(H_cancel))` (a
+rank-1 `|H|`, since `H_cancel` is itself rank 1). The quadrature merge of the cancel variant
+attains `sqrt.(diag(H_aligned))` exactly — the sign flip that cancels the Hessian does not touch
+the elementwise bound `B`, which sees only magnitudes — so its looseness against `hstar` is
+`sqrt.(kappa)` with `kappa_i = diag(H_aligned)_i / diag(H_cancel)_i`, the per-coordinate
+cancellation index.
+
+`m` sets the number of quartets and hence the size of `kappa` on the support (more quartets, more
+cancellation, larger `kappa`); `delta` sets the scale of the surviving rank-1 term relative to the
+quartets; `support` restricts the quartets to a coordinate subset, leaving `off-support`
+coordinates untouched by any cancellation; `sigma` widens the log-magnitude spread of the quartet
+coefficients and of `q`. Two calls that agree in `n`, `m`, `delta`, `support`, `sigma`, and `rng`
+state draw the same `x0`, `q`, and quartets regardless of `aligned`, so a cancel/aligned pair built
+from fresh, identically seeded rngs shares every random draw and differs only in the program's
+two constants.
+"""
+function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=false,
+                      support=1:n, sigma::Real=0.0, rng::AbstractRNG=MersenneTwister(1))
+    n >= 2 || throw(ArgumentError("n must be at least 2, got $n"))
+    m >= 1 || throw(ArgumentError("m must be positive, got $m"))
+    delta > 0 || throw(ArgumentError("delta must be positive, got $delta"))
+    supp = collect(Int, support)
+    all(i -> 1 <= i <= n, supp) ||
+        throw(ArgumentError("support must be a subset of 1:$n, got $support"))
+    allunique(supp) || throw(ArgumentError("support entries must be unique, got $support"))
+    length(supp) >= 2 ||
+        throw(ArgumentError("support must have at least 2 entries, got $(length(supp))"))
+
+    x0 = randn(rng, n)
+    q = ifelse.(rand(rng, n) .< 0.5, -1.0, 1.0) .* exp.(sigma .* randn(rng, n))
+
+    x0S = view(x0, supp)
+    nx2 = dot(x0S, x0S)
+
+    function draw_orth()
+        for _ in 1:100
+            v = _coeffs(rng, length(supp); sigma)
+            nv = norm(v)
+            vperp = v .- (dot(v, x0S) / nx2) .* x0S
+            norm(vperp) >= 1e-8 * nv && return vperp
+        end
+        error("failed to draw a quartet vector orthogonal to x0[support] after 100 attempts")
+    end
+
+    as_, bs_, cs_, ds_ = [Vector{Float64}[] for _ in 1:4]
+    for _ in 1:m
+        a = draw_orth()
+        b = draw_orth()
+        push!(as_, a)
+        push!(bs_, b)
+        push!(cs_, (a .+ b) ./ sqrt(2))
+        push!(ds_, (a .- b) ./ sqrt(2))
+    end
+
+    s = aligned ? 0.5 : -0.5
+
+    function f(x)
+        xS = view(x, supp)
+        acc = (delta / 2) * _lincomb(q, x)^2
+        for j in 1:m
+            acc = acc + 0.5 * _lincomb(as_[j], xS)^2 + 0.5 * _lincomb(bs_[j], xS)^2 +
+                  s * _lincomb(cs_[j], xS)^2 + s * _lincomb(ds_[j], xS)^2
+        end
+        return acc
+    end
+
+    function twin(x)
+        xS = view(x, supp)
+        val = (delta / 2) * dot(q, x)^2
+        if aligned
+            for j in 1:m
+                val += dot(as_[j], xS)^2 + dot(bs_[j], xS)^2
+            end
+        end
+        return val
+    end
+
+    H = delta .* (q * q')
+    if aligned
+        for j in 1:m
+            H[supp, supp] .+= 2 .* (as_[j] * as_[j]' .+ bs_[j] * bs_[j]')
+        end
+    end
+
+    name = (aligned ? "aligned" : "cancel") * " n=$n m=$m delta=$delta"
+    length(supp) < n && (name *= " S=$(length(supp))")
+    return CoverProblem(name, f, x0; twin, hessian=_ -> H)
 end
 
 # ---- transformations and sweeps --------------------------------------------------------------

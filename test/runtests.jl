@@ -14,6 +14,7 @@ const GATE = 1 + 1e-10
 include("primitives.jl")
 include("arrayops.jl")
 include("mlp.jl")
+include("cancellation.jl")
 
 @testset "CoverAD.jl" begin
 
