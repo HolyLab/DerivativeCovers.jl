@@ -30,6 +30,8 @@ export cover_norm, stopping_index, stopping_shift, regularized_step, regularizat
        psd_shift, psd_excess, cover_cg, step_degradation
 export softmax, layernorm
 export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
+export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
+       jacobian_ratio, jacobian_representability
 
 include("tape.jl")
 include("overloads.jl")
@@ -42,6 +44,7 @@ include("metrics.jl")
 include("inflation.jl")
 include("consumers.jl")
 include("nls.jl")
+include("jacobian.jl")
 include("problems.jl")
 
 end
