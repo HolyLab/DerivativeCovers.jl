@@ -29,6 +29,7 @@ export inflation_shape, inflation_factors, inflate, anisotropy
 export cover_norm, stopping_index, stopping_shift, regularized_step, regularization_bias,
        psd_shift, psd_excess, cover_cg, step_degradation
 export softmax, layernorm
+export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
 
 include("tape.jl")
 include("overloads.jl")
@@ -40,6 +41,7 @@ include("spectral.jl")
 include("metrics.jl")
 include("inflation.jl")
 include("consumers.jl")
+include("nls.jl")
 include("problems.jl")
 
 end

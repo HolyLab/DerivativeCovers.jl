@@ -15,6 +15,7 @@ include("primitives.jl")
 include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
+include("nls.jl")
 
 @testset "CoverAD.jl" begin
 
