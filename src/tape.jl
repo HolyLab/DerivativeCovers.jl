@@ -175,19 +175,38 @@ function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
 end
 
 """
-    tape_function(f, x0::AbstractVector) -> (tape, outidx)
+    tape_function(f, x0::AbstractVector) -> (tape, outidx)      # scalar output
+    tape_function(f, x0::AbstractVector) -> (tape, outidxs)     # vector output
 
-Record the scalar program `f` evaluated at `x0`. `f` must accept a vector of [`TVar`](@ref)s
-and return a single `TVar`, using only the elementals overloaded for `TVar`. Returns the
-[`Tape`](@ref) and the index of the output node.
+Record the program `f` evaluated at `x0`. `f` must accept a vector of [`TVar`](@ref)s and use only
+the elementals overloaded for `TVar`. Returns the [`Tape`](@ref) and, depending on what `f`
+returns:
+
+  - a single `TVar` output: the `Int` index `outidx` of the output node;
+  - an `AbstractVector` of `TVar`s: the `Vector{Int}` of output-node indices `outidxs`, one per
+    entry. Entries may be input nodes or repeat a node (a duplicated output), and both are kept as
+    given — the indices, not the values, define the outputs.
 """
 function tape_function(f, x0::AbstractVector)
     t = Tape(x0)
     xs = [TVar(t, i) for i in 1:t.ninputs]
-    out = f(xs)
-    out isa TVar ||
-        throw(ArgumentError("program output is not a TVar (got a $(typeof(out))); it must depend on the inputs"))
+    return _tape_output(t, f(xs))
+end
+
+function _tape_output(t::Tape, out::TVar)
     out.tape === t ||
         throw(ArgumentError("program output was recorded on a different tape than its inputs"))
     return t, out.idx
 end
+
+function _tape_output(t::Tape, out::AbstractVector)
+    isempty(out) && throw(ArgumentError("program returned no outputs"))
+    all(v -> v isa TVar, out) ||
+        throw(ArgumentError("program output vector must contain only TVars; got element types $(unique(map(typeof, out)))"))
+    all(v -> v.tape === t, out) ||
+        throw(ArgumentError("some program outputs were recorded on a different tape than the inputs"))
+    return t, [v.idx for v in out]
+end
+
+_tape_output(t::Tape, out) =
+    throw(ArgumentError("program output is not a TVar or a vector of TVars (got a $(typeof(out))); it must depend on the inputs"))

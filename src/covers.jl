@@ -62,6 +62,37 @@ function adjoints(t::Tape, outidx::Int)
 end
 
 """
+    adjoints(t::Tape, outidxs::AbstractVector{<:Integer}) -> Vbar
+
+Vector-mode reverse-mode adjoints for several outputs at once: `Vbar[k, j] = ∂v_{outidxs[k]}/∂v_j`,
+every output `k` against every node `j`, all propagated in one traversal. The `m × n` Jacobian of
+the outputs with respect to the inputs is `Vbar[:, 1:t.ninputs]`.
+
+Each output owns a row seeded independently, so a repeated entry in `outidxs` yields identical rows
+and an input-node entry a unit row. Costs `O(m*L)` time and memory: a diagnostic path, like
+[`sensitivities`](@ref), for the exact signed Jacobian; the production cover merges seed
+[`abs_reverse`](@ref) at the outputs instead and stay `O(L)`/`O(G*L)`.
+"""
+function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
+    m, N = length(outidxs), nnodes(t)
+    Vbar = zeros(m, N)
+    for k in 1:m
+        Vbar[k, outidxs[k]] += 1.0
+    end
+    # Tape order is topological, so N:-1:1 fully accumulates each Vbar[:, j] before j feeds parents.
+    for j in N:-1:1
+        for (i, p) in enumerate(t.parents[j])
+            d = t.ds[j][i]
+            d == 0 && continue
+            for k in 1:m
+                Vbar[k, p] += d * Vbar[k, j]
+            end
+        end
+    end
+    return Vbar
+end
+
+"""
     sensitivities(t::Tape) -> utilde
 
 Forward absolute sensitivities: `utilde[k][a] >= abs(∂v_k/∂x_a)`, obtained by propagating
