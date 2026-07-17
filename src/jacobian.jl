@@ -157,6 +157,345 @@ function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer}, ngro
 end
 
 """
+    abs_forward(t::Tape, theta::AbstractVector) -> s
+
+One forward sweep in absolute-value arithmetic, the transpose of [`abs_reverse`](@ref):
+`s[k] = theta[k] + sum_i abs(∂φ_k/∂v_{p_i}) * s[p_i]` over the parents `p_i` of node `k`, in tape
+order. Seeding `theta[j] = 1` at a single input `j` gives, at every node, the absolute sensitivity
+of that node to input `j` — the `j`-th column of the surrogate `Ũ` read at the output nodes — and
+the sweep is linear in the seeds, so any weighted combination of inputs costs the same one `O(L)`
+traversal.
+"""
+function abs_forward(t::Tape, theta::AbstractVector)
+    length(theta) == nnodes(t) ||
+        throw(DimensionMismatch("theta has length $(length(theta)), expected $(nnodes(t)) (one per node)"))
+    s = collect(float.(theta))
+    for k in (t.ninputs + 1):nnodes(t)
+        acc = s[k]
+        for (i, p) in enumerate(t.parents[k])
+            a = abs(t.ds[k][i])
+            a == 0 && continue
+            acc += a * s[p]
+        end
+        s[k] = acc
+    end
+    return s
+end
+
+"""
+    marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector) -> a
+    marginal_weights(Utilde::AbstractMatrix, b::AbstractVector) -> a
+
+The output weights `a_k = ∑_j Ũ_kj / b_j` — the row marginal of the surrogate weighted by the
+current input cover `b`. Each term of the sum already certifies its own entry (`a_k b_j ≥ Ũ_kj`),
+so `(a, b)` is a valid cover of the surrogate for *any* positive `b`.
+
+This is the covariant output-weighting rule: under an output rescaling `r → diag(c)*r` it picks up
+exactly `diag(c)`, and under an input rescaling `x → diag(d)*x` (with `b → diag(d)⁻¹*b` alongside)
+it is exactly invariant — each term `Ũ_kj/b_j` carries the units of `r_k` alone. The bare row
+marginal `∑_j Ũ_kj` lacks the second property, and the value rule `a_k = |r_k|` degenerates
+wherever residuals vanish.
+
+The tape method costs one `O(L)` [`abs_forward`](@ref) sweep seeded `1/b_j` at the inputs, never
+forming `Ũ`. A zero `b_j` is accepted only for a dead input (one no output depends on): it
+contributes nothing to any marginal. A zero `b_j` on a live input is an error — no output
+weighting can restore validity there.
+"""
+function marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector)
+    length(b) == t.ninputs ||
+        throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
+    all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
+    N = nnodes(t)
+    theta = zeros(N)
+    anydead = false
+    for j in 1:t.ninputs
+        if b[j] > 0
+            theta[j] = 1.0 / b[j]
+        else
+            anydead = true
+        end
+    end
+    if anydead
+        # A zero b[j] is only coverable when input j is dead: check reachability with an
+        # indicator sweep before silently dropping its contribution.
+        ind = zeros(N)
+        for j in 1:t.ninputs
+            b[j] == 0 && (ind[j] = 1.0)
+        end
+        reach = abs_forward(t, ind)
+        for k in outidxs
+            reach[k] == 0 ||
+                throw(ArgumentError("b is zero on an input that reaches output node $k; no output weighting can cover it"))
+        end
+    end
+    s = abs_forward(t, theta)
+    return s[outidxs]
+end
+
+function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
+    Base.require_one_based_indexing(Utilde, b)
+    m, n = size(Utilde)
+    length(b) == n ||
+        throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
+    all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
+    a = zeros(m)
+    for j in 1:n, k in 1:m
+        Ukj = Utilde[k, j]
+        Ukj == 0 && continue
+        b[j] > 0 ||
+            throw(ArgumentError("b is zero on live input $j (Utilde[$k, $j] = $Ukj); no output weighting can cover it"))
+        a[k] += Ukj / b[j]
+    end
+    return a
+end
+
+"""
+    balance_cover(t::Tape, outidxs; merge=:sum, arule=:marginal, a0=nothing,
+                  maxiter=1000, tol=1e-10, check=true)
+    balance_cover(r, x0::AbstractVector; kwargs...)
+    balance_cover(Utilde::AbstractMatrix; merge=:sum, arule=:marginal, a0=nothing,
+                  maxiter=1000, tol=1e-10)
+
+Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
+with the `merge` b-step `b_j = ∑_k Ũ_kj/a_k` (`:sum`; `:quad` and `:max` combine the same terms in
+quadrature or by maximum). Returns `(; a, b, iters, delta)` — the pair (whose `b` is the chosen
+merge for the returned `a`, so it is a valid cover of the surrogate for any `arule`), the number
+of alternation rounds, and the final gauge-invariant change bound
+`delta = max_{kj} |log((a_k b_j)_new / (a_k b_j)_old)|`. Throws when `delta ≤ tol` is not reached
+within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → diag(c)*r` maps the
+fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
+untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
+
+- `arule = :marginal` alternates `a = ` [`marginal_weights`](@ref)`(…, b)` with the `merge`
+  b-step. Every iterate is a valid cover — each half-step is valid for any positive other side —
+  so the alternation trades only tightness, never validity. With `merge = :sum` this is exactly
+  Sinkhorn matrix scaling of `Ũ` (the b-step normalizes the columns of `R_kj = Ũ_kj/(a_k b_j)`,
+  the a-step its rows), and it inherits Sinkhorn's convergence condition: the sparsity pattern of
+  `Ũ` must have **total support** (every nonzero entry on some positive diagonal). Dense patterns
+  qualify; a pattern with a nonzero entry on no positive diagonal (e.g. triangular) makes the
+  iteration drift without bound — every iterate still covers, but the excess grows by a constant
+  per round and the run ends in the non-convergence error.
+- `arule = :geomean` sets `a_k` to the geometric mean of `Ũ_kj/b_j` over the nonzero entries of
+  row `k`, alternating with the same rule on the b-side. In log space this is coordinate descent
+  on the additive two-way fit `log Ũ_kj ≈ log a_k + log b_j` (row and column effects), so it
+  converges for **every** sparsity pattern; the intermediate iterates undershoot validity, which
+  the final `merge` b-step restores.
+
+For `m ≠ n` the marginal alternation's two normalizations disagree by the factor `m/n`, a pure
+gauge drift that is geometric in the round count; each round therefore renormalizes by the power
+of two nearest `a`'s geometric mean, which is exact in floating point and leaves every product
+`a_k b_j` bit-identical.
+
+The tape form with `merge = :sum, arule = :marginal` (the default) runs both steps as `O(L)`
+sweeps ([`abs_forward`](@ref) seeded `1/b_j` at the inputs, [`abs_reverse`](@ref) seeded `1/a_k`
+at the output nodes) without ever forming `Ũ` — the production path. Every other combination
+needs per-output separation, so the tape form forms the surrogate once (`O(mL)`, diagnostic tier)
+and balances it explicitly. The matrix form accepts any nonnegative magnitude matrix (a surrogate
+`Ũ`, or `abs.(J)`).
+
+`check` verifies the returned pair covers the surrogate (`O(mL)`; matrix form checks against
+`Utilde` directly). A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a
+zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
+"""
+function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbol=:sum,
+                       arule::Symbol=:marginal, a0=nothing, maxiter::Integer=1000,
+                       tol::Real=1e-10, check::Bool=true)
+    m, N = length(outidxs), nnodes(t)
+    if merge !== :sum || arule !== :marginal
+        # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
+        # explicit surrogate instead.
+        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, tol)
+    end
+    a = _balance_start(a0, m)
+
+    bstep = a -> begin
+        theta = zeros(N)
+        anydead = false
+        for k in 1:m
+            if a[k] > 0
+                theta[outidxs[k]] += 1.0 / a[k]
+            else
+                anydead = true
+            end
+        end
+        if anydead
+            # A zero a[k] is only coverable when output k is dead: check with an indicator sweep.
+            ind = zeros(N)
+            for k in 1:m
+                a[k] == 0 && (ind[outidxs[k]] = 1.0)
+            end
+            reach = abs_reverse(t, ind)
+            for j in 1:t.ninputs
+                reach[j] == 0 ||
+                    throw(ArgumentError("a is zero on an output that input $j reaches; no input cover can cover it"))
+            end
+        end
+        abs_reverse(t, theta)[1:t.ninputs]
+    end
+    astep = b -> marginal_weights(t, outidxs, b)
+
+    a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol,
+                                  "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern")
+    if check
+        Utilde = jacobian_surrogate(t, outidxs)
+        r = jacobian_ratio(Utilde, a, b)
+        r <= 1 + 1e-10 ||
+            error("balanced pair does not cover the surrogate: worst ratio $r")
+    end
+    return (; a, b, iters, delta)
+end
+
+function balance_cover(r, x0::AbstractVector; kwargs...)
+    t, outidxs = tape_function(r, x0)
+    outidxs isa AbstractVector ||
+        throw(ArgumentError("balance_cover needs a vector-valued program; got a scalar output"))
+    return balance_cover(t, outidxs; kwargs...)
+end
+
+function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol=:marginal,
+                       a0=nothing, maxiter::Integer=1000, tol::Real=1e-10)
+    Base.require_one_based_indexing(Utilde)
+    all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
+    merge in (:sum, :quad, :max) ||
+        throw(ArgumentError("merge must be :sum, :quad, or :max; got $(repr(merge))"))
+    m, n = size(Utilde)
+    a = _balance_start(a0, m)
+    bstep = a -> _merge_bstep(Utilde, a, merge)
+
+    if arule === :marginal
+        astep = b -> marginal_weights(Utilde, b)
+        a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol,
+                                      "; the marginal alternation requires the sparsity pattern to have total support — arule=:geomean converges for every pattern")
+    elseif arule === :geomean
+        a, iters, delta = _geomean_fit(Utilde, a, maxiter, tol)
+        b = bstep(a)
+    else
+        throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
+    end
+
+    r = jacobian_ratio(Utilde, a, b)
+    r <= 1 + 1e-10 || error("balanced pair does not cover the matrix: worst ratio $r")
+    return (; a, b, iters, delta)
+end
+
+function _merge_bstep(U, a, merge)
+    m, n = size(U)
+    b = zeros(n)
+    for j in 1:n, k in 1:m
+        Ukj = U[k, j]
+        Ukj == 0 && continue
+        a[k] > 0 ||
+            throw(ArgumentError("a is zero on live output $k (Utilde[$k, $j] = $Ukj); no input cover can cover it"))
+        tkj = Ukj / a[k]
+        if merge === :sum
+            b[j] += tkj
+        elseif merge === :quad
+            b[j] += tkj^2
+        else
+            b[j] = max(b[j], tkj)
+        end
+    end
+    merge === :quad && (b .= sqrt.(b))
+    return b
+end
+
+# Alternating geometric-mean fit of log U_kj ≈ log a_k + log b_j over the nonzero entries:
+# coordinate descent on the two-way least-squares objective, convergent for every pattern.
+function _geomean_fit(U, a, maxiter, tol)
+    m, n = size(U)
+    gstep = (weights, dim) -> begin
+        out = zeros(size(U, dim))
+        cnt = zeros(Int, size(U, dim))
+        for j in 1:n, k in 1:m
+            U[k, j] == 0 && continue
+            i = dim == 1 ? k : j
+            w = dim == 1 ? weights[j] : weights[k]
+            out[i] += log(U[k, j] / w)
+            cnt[i] += 1
+        end
+        [cnt[i] > 0 ? exp(out[i] / cnt[i]) : 0.0 for i in eachindex(out)]
+    end
+    b = gstep(a, 2)
+    _regauge!(a, b)
+    delta = Inf
+    for iters in 1:maxiter
+        aprev, bprev = a, b
+        a = gstep(b, 1)
+        b = gstep(a, 2)
+        _regauge!(a, b)
+        ulo, uhi = _logchange_extrema(a, aprev)
+        wlo, whi = _logchange_extrema(b, bprev)
+        delta = max(uhi + whi, -(ulo + wlo))
+        delta <= tol && return a, iters, delta
+    end
+    error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > tol = $tol")
+end
+
+function _balance_start(a0, m)
+    a0 === nothing && return ones(m)
+    length(a0) == m ||
+        throw(DimensionMismatch("a0 has length $(length(a0)), expected $m (one per output)"))
+    all(>(0), a0) || throw(ArgumentError("starting weights a0 must be strictly positive"))
+    return collect(float.(a0))
+end
+
+# The alternation loop shared by the tape and matrix forms. Each round runs the a-step from the
+# current b and the b-step from the new a, then renormalizes the gauge by the power of two
+# nearest a's geometric mean (exact in floating point, so every product a_k*b_j is untouched).
+# Convergence is judged on the products: with u = log.(a ./ a_prev) and w = log.(b ./ b_prev)
+# (zero coordinates excluded — their zeros persist), the change of product (k, j) is u_k + w_j,
+# whose extremes are attained at the extremes of u and w. delta bounds |u_k + w_j| exactly and is
+# gauge-invariant, since a uniform shift of u cancels against the opposite shift of w.
+function _balance(bstep, astep, a, maxiter, tol, hint="")
+    maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
+    b = bstep(a)
+    _regauge!(a, b)
+    delta = Inf
+    for iters in 1:maxiter
+        aprev, bprev = a, b
+        a = astep(b)
+        b = bstep(a)
+        _regauge!(a, b)
+        ulo, uhi = _logchange_extrema(a, aprev)
+        wlo, whi = _logchange_extrema(b, bprev)
+        delta = max(uhi + whi, -(ulo + wlo))
+        delta <= tol && return a, b, iters, delta
+    end
+    error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > tol = $tol$hint")
+end
+
+function _regauge!(a, b)
+    lsum = 0.0
+    nnz = 0
+    for x in a
+        x > 0 || continue
+        lsum += log2(x)
+        nnz += 1
+    end
+    nnz == 0 && return
+    gamma = exp2(round(lsum / nnz))
+    a ./= gamma
+    b .*= gamma
+    return
+end
+
+function _logchange_extrema(v, vprev)
+    lo, hi = Inf, -Inf
+    for i in eachindex(v, vprev)
+        x, xp = v[i], vprev[i]
+        if x > 0 && xp > 0
+            l = log(x / xp)
+            lo = min(lo, l)
+            hi = max(hi, l)
+        elseif (x > 0) != (xp > 0)
+            return -Inf, Inf                  # a coordinate appeared or vanished: not converged
+        end
+    end
+    lo <= hi || return 0.0, 0.0               # all-zero vector: nothing changed
+    return lo, hi
+end
+
+"""
     jacobian_ratio(J, a, b) -> r
 
 Worst-case ratio `max_kj abs(J[k,j]) / (a[k]*b[j])` over the nonzero entries of `J`. `(a, b)` is a

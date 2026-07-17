@@ -133,4 +133,183 @@
         @test_throws "vector-valued program" cover_jacobian(xs -> xs[1] * xs[2], [1.0, 2.0])
     end
 
+    @testset "abs_forward is the transpose of the reverse sweep" begin
+        r = xs -> [tanh(y) for y in W * xs]
+        x0 = [0.3, -0.2, 0.5]
+        t, outidxs = tape_function(r, x0)
+        U = jacobian_surrogate(t, outidxs)
+        # Seeding e_j at input j and reading the outputs gives column j of the surrogate.
+        for j in 1:3
+            theta = zeros(nnodes(t))
+            theta[j] = 1.0
+            @test abs_forward(t, theta)[outidxs] ≈ U[:, j]
+        end
+        # Linearity in the seeds: a weighted input seed gives the same weighted column combination.
+        wts = [0.7, 2.0, 0.1]
+        theta = zeros(nnodes(t))
+        theta[1:3] = wts
+        @test abs_forward(t, theta)[outidxs] ≈ U * wts
+        @test_throws DimensionMismatch abs_forward(t, zeros(nnodes(t) - 1))
+    end
+
+    @testset "marginal_weights: covariant a-rule, valid for any positive b" begin
+        r = xs -> [xs[1] * xs[2], sin(xs[3]) + xs[1], exp(xs[2]), xs[2] * xs[3]]
+        x0 = [0.6, -0.4, 0.9]
+        t, outidxs = tape_function(r, x0)
+        U = jacobian_surrogate(t, outidxs)
+        J = ForwardDiff.jacobian(r, x0)
+        for b in ([1.0, 1.0, 1.0], [0.7, 2.0, 0.1], [1e-3, 1e2, 5.0])
+            a = marginal_weights(t, outidxs, b)
+            @test a ≈ marginal_weights(U, b)                       # tape path = matrix path
+            @test a ≈ vec(sum(U ./ b'; dims=2))
+            @test jacobian_ratio(J, a, b) <= GATE                  # every (marginal a, b) covers
+            @test jacobian_ratio(U, a, b) <= GATE
+        end
+        @test_throws DimensionMismatch marginal_weights(t, outidxs, [1.0, 2.0])
+        @test_throws "nonnegative" marginal_weights(t, outidxs, [1.0, -1.0, 1.0])
+
+        # A zero b is accepted only on a dead input.
+        rdead = xs -> [xs[1]^2, 2.0 * xs[1]]                       # xs[2] unused
+        td, od = tape_function(rdead, [0.7, 1.3])
+        a = marginal_weights(td, od, [1.0, 0.0])
+        @test a ≈ marginal_weights(jacobian_surrogate(td, od), [1.0, 0.0])
+        @test_throws "no output weighting" marginal_weights(td, od, [0.0, 1.0])
+        @test_throws "no output weighting" marginal_weights(U, [0.0, 1.0, 1.0])
+    end
+
+    @testset "balance_cover: valid at every iterate, stationary at the fixed point" begin
+        # The marginal (Sinkhorn) alternation converges only on total-support patterns, so both
+        # maps here have fully dense surrogates.
+        maps = [("nonlinear rows", xs -> [tanh(y) - t5[k] for (k, y) in enumerate(W * xs)], [0.3, -0.2, 0.5]),
+                ("dense scalarized", xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
+                                            exp(xs[1]) + xs[2] * xs[3]], [0.6, -0.4, 0.9])]
+        @testset "$name" for (name, r, x0) in maps
+            t, outidxs = tape_function(r, x0)
+            U = jacobian_surrogate(t, outidxs)
+            J = ForwardDiff.jacobian(r, x0)
+
+            bal = balance_cover(t, outidxs)
+            @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+            @test jacobian_ratio(U, bal.a, bal.b) <= GATE
+            @test bal.delta <= 1e-10
+
+            # The tape path is the matrix path applied to the surrogate.
+            balm = balance_cover(U)
+            @test bal.a ≈ balm.a rtol=1e-8
+            @test bal.b ≈ balm.b rtol=1e-8
+
+            # Every iterate of the alternation is a valid cover: replay it from the pieces.
+            a = ones(length(outidxs))
+            b = vec(sum(U ./ a; dims=1))
+            for _ in 1:5
+                a = marginal_weights(t, outidxs, b)
+                @test jacobian_ratio(U, a, b) <= GATE              # after the a-step
+                b = vec(sum(U ./ a; dims=1))
+                @test jacobian_ratio(U, a, b) <= GATE              # after the b-step
+            end
+
+            # Stationarity: one more full round changes every product by at most ~tol.
+            a2 = marginal_weights(t, outidxs, bal.b)
+            b2 = vec(sum(U ./ a2; dims=1))
+            @test a2 .* b2' ≈ bal.a .* bal.b' rtol=1e-8
+
+            # :quad, :max, and the geomean a-rule reach their own fixed points and stay valid.
+            # (Fixed points of different rules are not comparable entrywise; tightness
+            # comparisons live in the measurement scripts.)
+            for kwargs in ((; merge=:quad), (; merge=:max), (; arule=:geomean),
+                           (; merge=:max, arule=:geomean))
+                balv = balance_cover(t, outidxs; kwargs...)
+                @test jacobian_ratio(U, balv.a, balv.b) <= GATE
+                @test jacobian_ratio(J, balv.a, balv.b) <= GATE
+            end
+        end
+    end
+
+    @testset "balance_cover: support-deficient patterns" begin
+        # Ũ has support (a positive diagonal) but not total support: entry (3,3) lies on no
+        # positive diagonal, so the Sinkhorn alternation drifts without bound while every
+        # iterate still covers. The geomean a-rule is the convergent alternative.
+        r = xs -> [xs[1] * xs[2], sin(xs[3]), exp(xs[1]) + xs[3]]
+        x0 = [0.6, -0.4, 0.9]
+        t, outidxs = tape_function(r, x0)
+        U = jacobian_surrogate(t, outidxs)
+        J = ForwardDiff.jacobian(r, x0)
+        @test_throws "total support" balance_cover(t, outidxs; maxiter=50)
+        @test_throws "total support" balance_cover(U; maxiter=50)
+        for kwargs in ((; arule=:geomean), (; arule=:geomean, merge=:max))
+            bal = balance_cover(t, outidxs; kwargs...)
+            @test jacobian_ratio(U, bal.a, bal.b) <= GATE
+            @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+            @test bal.delta <= 1e-10
+        end
+        # The two-way log fit is exact in one round on a complete (dense) pattern.
+        rng = MersenneTwister(9)
+        Ud = exp.(randn(rng, 4, 3))
+        bald = balance_cover(Ud; arule=:geomean)
+        @test bald.iters <= 2
+    end
+
+    @testset "balance_cover: rank-1 exactness and the Sinkhorn fixed point" begin
+        rng = MersenneTwister(7)
+        u, v = exp.(randn(rng, 6)), exp.(randn(rng, 4))
+        U = u * v'
+        # The max-merge fixed point recovers a rank-1 magnitude matrix exactly.
+        balx = balance_cover(U; merge=:max)
+        @test balx.a .* balx.b' ≈ U
+        # The sum-merge fixed point is the Sinkhorn scaling: every row and column of the ratio
+        # matrix R = U ./ (a .* b') sums to 1 after its own half-step; on rank-1 the uniform
+        # excess is exactly m.
+        bals = balance_cover(U)
+        @test maximum((bals.a .* bals.b') ./ U) ≈ 6 rtol=1e-8
+        @test minimum((bals.a .* bals.b') ./ U) ≈ 6 rtol=1e-8
+        R = U ./ (bals.a .* bals.b')
+        @test vec(sum(R; dims=1)) ≈ ones(4) rtol=1e-8              # b-step ran last
+
+        # Zero rows and columns persist as exact zero weights.
+        Uz = [1.0 0.0 2.0; 0.0 0.0 0.0; 3.0 0.0 1.0]
+        balz = balance_cover(Uz)
+        @test balz.a[2] == 0
+        @test balz.b[2] == 0
+        @test jacobian_ratio(Uz, balz.a, balz.b) <= GATE
+
+        @test_throws "did not converge" balance_cover(exp.(randn(rng, 3, 5)); maxiter=1)
+        @test_throws "strictly positive" balance_cover(U; a0=zeros(6))
+        @test_throws "nonnegative" balance_cover([1.0 -1.0; 1.0 1.0])
+        @test_throws "vector-valued program" balance_cover(xs -> xs[1] * xs[2], [1.0, 2.0])
+    end
+
+    @testset "balanced cover covariance, bit-exact for power-of-two factors" begin
+        rbase = xs -> [xs[1] * xs[2], sin(xs[3]) + xs[1], exp(xs[2]), xs[2] * xs[3]]
+        x0 = [0.6, -0.4, 0.9]
+
+        # Input rescaling x → d .* x: a is untouched and b picks up exactly 1 ./ d. The wrapper
+        # is applied on both sides so the two tapes have identical shape.
+        d = [0.25, 4.0, 2.0]
+        e = ones(3)
+        te, oe = tape_function(xs -> rbase(xs ./ e), x0)
+        td, od = tape_function(xs -> rbase(xs ./ d), d .* x0)
+        bale = balance_cover(te, oe)
+        bald = balance_cover(td, od)
+        @test bald.a == bale.a
+        @test bald.b == bale.b ./ d
+        @test bald.iters == bale.iters
+
+        # Output rescaling r → c .* r with the start transformed alongside (a0 = c): every
+        # product a_k*b_j picks up exactly c_k. The default start `ones` is not c-equivariant,
+        # so a finite run from it matches only to the convergence tolerance.
+        c = [2.0, 0.5, 8.0, 0.25]
+        t1, o1 = tape_function(xs -> ones(4) .* rbase(xs), x0)
+        tc, oc = tape_function(xs -> c .* rbase(xs), x0)
+        bal1 = balance_cover(t1, o1)
+        balc = balance_cover(tc, oc; a0=c)
+        @test balc.a .* balc.b' == (c .* bal1.a) .* bal1.b'
+        balc0 = balance_cover(tc, oc)
+        @test balc0.a .* balc0.b' ≈ (c .* bal1.a) .* bal1.b' rtol=1e-8
+
+        # The marginal rule alone is exactly d-invariant and c-equivariant.
+        b = [0.7, 2.0, 0.1]
+        @test marginal_weights(td, od, b ./ d) == marginal_weights(te, oe, b)
+        @test marginal_weights(tc, oc, b) == c .* marginal_weights(t1, o1, b)
+    end
+
 end

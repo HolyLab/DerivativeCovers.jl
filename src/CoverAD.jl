@@ -32,6 +32,7 @@ export softmax, layernorm
 export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
 export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
        jacobian_ratio, jacobian_representability
+export abs_forward, marginal_weights, balance_cover
 
 include("tape.jl")
 include("overloads.jl")
