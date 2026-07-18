@@ -17,7 +17,11 @@ with `v`, then one reverse sweep carrying both the adjoints `vbar` and their tan
     vbardot_i += (∂φ_k/∂v_i) * vbardot_k + vbar_k * sum_j (∂²φ_k/∂v_i∂v_j) * dv_j.
 
 A node with an empty second-partial matrix (see [`Tape`](@ref)) has no curvature term; the sweep
-skips it rather than indexing an empty `C`.
+skips it rather than indexing an empty `C`. A declared sub-map output ([`submapnode`](@ref))
+carries only a *bound* on its second partials, so an exact product is impossible: `hvp` throws
+on any tape containing one, unconditionally, rather than letting success depend on whether the
+node's adjoint happens to vanish. The tape method of [`scaled_spectral_radius`](@ref) inherits
+this restriction; its dense method does not.
 
 Costs about two gradients and `O(L)` memory.
 """
@@ -26,6 +30,9 @@ function hvp(t::Tape, outidx::Int, v::AbstractVector)
     length(v) == n ||
         throw(DimensionMismatch("v has length $(length(v)), expected $n (one per input)"))
     Base.require_one_based_indexing(v)
+    kdecl = findfirst(C -> C isa CoveredPartials, t.Cs)
+    kdecl === nothing ||
+        throw(ArgumentError("hvp is unavailable: node $kdecl is a declared sub-map output (see submapnode) whose exact second partials are not recorded"))
 
     dv = zeros(N)
     copyto!(view(dv, 1:n), v)

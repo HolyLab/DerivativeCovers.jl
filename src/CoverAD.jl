@@ -34,6 +34,7 @@ export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
        jacobian_ratio, jacobian_representability, jacobian_minimax
 export abs_forward, marginal_weights, balance_cover
 export jvp, vjp, equilibrate, scaled_singular_value, jacobian_shrink
+export submapnode, submap, declare_submap, compose_jacobian_cover, compose_hessian_cover
 
 include("tape.jl")
 include("overloads.jl")
@@ -48,6 +49,7 @@ include("consumers.jl")
 include("nls.jl")
 include("jacobian.jl")
 include("equilibrate.jl")
+include("compose.jl")
 include("problems.jl")
 
 end

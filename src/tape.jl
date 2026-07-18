@@ -17,6 +17,20 @@ Base.size(P::PairedPartials) = (2P.q, 2P.q)
 Base.getindex(P::PairedPartials, i::Int, j::Int) = abs(i - j) == P.q ? 1.0 : 0.0
 
 """
+    CoveredPartials(s::Vector{Float64})
+
+Declared bound on the second partials of a sub-map output node (see [`submapnode`](@ref)):
+`abs(C[i, j]) <= s[i]*s[j]`, with the true `C` not recorded. `s` is nonnegative and slot-aligned
+with the node's parents. Cover constructions consume second partials only through bounds on
+`abs.(C)`, so the declaration substitutes for the recorded matrix everywhere except
+[`hvp`](@ref), which needs the signed entries and fails fast. Deliberately not an
+`AbstractMatrix`: it has no entries to index, only a bound.
+"""
+struct CoveredPartials
+    s::Vector{Float64}
+end
+
+"""
     Tape
 
 A Wengert list recorded while a scalar program runs on [`TVar`](@ref) inputs.
@@ -31,7 +45,10 @@ in one of three forms:
     `∂²y/∂w_j∂x_j = 1`;
   - an empty `Matrix{Float64}(undef, 0, 0)`, for a node whose first partials are constant in the
     inputs (the input nodes themselves, and linear n-ary nodes such as [`linearnode`](@ref)):
-    it contributes no second-order term to any cover.
+    it contributes no second-order term to any cover;
+  - a [`CoveredPartials`](@ref), for a declared sub-map output (see [`submapnode`](@ref)): the
+    true second partials are not recorded, only the declared rank-1 bound
+    `abs(C[i, j]) <= s[i]*s[j]`.
 
 The first `ninputs` nodes are the program's inputs; they carry no parents and empty partials.
 Nodes are appended as the program executes, so they are in topological order: every parent index
@@ -41,7 +58,7 @@ struct Tape
     vals::Vector{Float64}
     parents::Vector{Vector{Int}}
     ds::Vector{Vector{Float64}}
-    Cs::Vector{Union{Matrix{Float64},PairedPartials}}
+    Cs::Vector{Union{Matrix{Float64},PairedPartials,CoveredPartials}}
     ninputs::Int
 end
 
@@ -56,7 +73,7 @@ function Tape(x0::AbstractVector)
     return Tape(Float64[float(x) for x in x0],
                 [Int[] for _ in 1:n],
                 [Float64[] for _ in 1:n],
-                Union{Matrix{Float64},PairedPartials}[Matrix{Float64}(undef, 0, 0) for _ in 1:n],
+                Union{Matrix{Float64},PairedPartials,CoveredPartials}[Matrix{Float64}(undef, 0, 0) for _ in 1:n],
                 n)
 end
 
@@ -172,6 +189,56 @@ function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
         ds[n] = float(coeffs[j])
     end
     return pushnode!(t, val, parents, ds, Matrix{Float64}(undef, 0, 0))
+end
+
+"""
+    submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real}, J::AbstractMatrix{<:Real},
+               S::Union{Nothing,AbstractMatrix{<:Real}}=nothing) -> Vector{TVar}
+
+Record a declared sub-map call `y = F(v)` as one node per output, without retracing `F`'s
+internals: node `k` carries the value `y[k]`, the arguments `xs` as parents, the exact signed
+Jacobian row `J[k, :]` (`J[k, i] = ∂F_k/∂v_i` at the parent values) as its first partials, and
+the declared curvature cover `S[k, :]` as a [`CoveredPartials`](@ref):
+`abs(∂²F_k/∂v_i∂v_j) <= S[k, i]*S[k, j]`. `S = nothing`, or an all-zero row of `S`, declares
+that output linear in the arguments (an empty second-partial matrix).
+
+Gradients and every first-order sweep through the call are exact. Hessian covers are valid
+conditional on the declaration, which is the caller's assertion — nothing on the tape can verify
+it — and exact Hessian-vector products are unavailable, so [`hvp`](@ref) throws on any tape
+containing a declared call. For the covers to stay scale-covariant the declaration must
+transform as `y -> C*y`, `J -> C*J*inv(D)`, `S -> sqrt.(C)*S*inv(D)` under a rescaling
+`v -> D*v` of the arguments and a rescaling `y -> C*y` of the sub-map outputs (a symmetric
+cover scales as the square root of its output's scale); [`declare_submap`](@ref) builds
+declarations with both properties. The covers are then invariant to the output gauge `C`, which
+cancels between each output's adjoint and its declared curvature.
+"""
+function submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
+                    J::AbstractMatrix{<:Real},
+                    S::Union{Nothing,AbstractMatrix{<:Real}}=nothing)
+    Base.require_one_based_indexing(xs, y, J)
+    isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
+    isempty(y) && throw(ArgumentError("cannot record a sub-map call with no outputs"))
+    q, p = length(y), length(xs)
+    size(J) == (q, p) ||
+        throw(DimensionMismatch("J is $(size(J)); expected ($q, $p) (outputs × arguments)"))
+    if S !== nothing
+        Base.require_one_based_indexing(S)
+        size(S) == (q, p) ||
+            throw(DimensionMismatch("S is $(size(S)); expected ($q, $p) (outputs × arguments)"))
+        all(>=(0), S) || throw(ArgumentError("curvature covers S must be nonnegative"))
+    end
+    t = xs[1].tape
+    all(x -> x.tape === t, xs) ||
+        throw(ArgumentError("cannot combine TVars from different tapes"))
+    parents = [x.idx for x in xs]     # shared by all q nodes; parent lists are never mutated
+    return [begin
+                C = if S === nothing || all(iszero, view(S, k, :))
+                    Matrix{Float64}(undef, 0, 0)
+                else
+                    CoveredPartials([float(S[k, i]) for i in 1:p])
+                end
+                pushnode!(t, float(y[k]), parents, [float(J[k, i]) for i in 1:p], C)
+            end for k in 1:q]
 end
 
 """

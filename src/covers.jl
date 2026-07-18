@@ -132,7 +132,10 @@ across elementals — are exactly the looseness this bound trades for its cost.
 
 A node with an empty `C` (see [`Tape`](@ref)) contributes nothing and is skipped. A
 [`PairedPartials`](@ref) node has only `2q` nonzero entries out of `(2q)^2`, so its contribution
-is accumulated directly from those pairs rather than by scanning the dense `C`.
+is accumulated directly from those pairs rather than by scanning the dense `C`. A
+[`CoveredPartials`](@ref) node contributes its declared bound `s[i]*s[j] >= abs(C[i, j])`, so
+`B >= abs.(H)` remains valid conditional on the declaration; the bound factorizes, so the
+contribution is the rank-1 term `w*w'` with `w = sum_i s[i]*utilde[ps[i]]`.
 """
 function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -141,6 +144,21 @@ function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
         av = abs(vbar[k])
         av == 0 && continue
         ps, C = t.parents[k], t.Cs[k]
+        if C isa CoveredPartials
+            w = zeros(n)
+            for (i, p) in enumerate(ps)
+                si = C.s[i]
+                si == 0 && continue
+                up = utilde[p]
+                for q in 1:n
+                    w[q] += si * up[q]
+                end
+            end
+            for q in 1:n, r in 1:n
+                B[q, r] += av * w[q] * w[r]
+            end
+            continue
+        end
         isempty(C) && continue
         if C isa PairedPartials
             qh = C.q
@@ -203,7 +221,13 @@ per-pair splits from [`balanced_split`](@ref), slot-aligned with the node's pare
 an empty `C` (a linear n-ary node, see [`linearnode`](@ref)) contributes no second-order term
 and is skipped before the arity check below.
 
-`check` verifies the covering invariant at every node.
+A [`CoveredPartials`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings
+its own rank-1 cover: `rhos[k] = sqrt(abs(vbar[k])) * s` satisfies the covering invariant
+against the *declared* bound `s[i]*s[j] >= abs(C[i, j])` by construction, so the arity
+restriction below does not apply to it. There is no recorded `C` to check the declaration
+against, so `check` cannot audit these nodes — validity is conditional on the declaration.
+
+`check` verifies the covering invariant at every recorded node.
 """
 function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
     N = nnodes(t)
@@ -232,6 +256,13 @@ function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
                 theta[ps[q + j]] += b
             end
             rhos[k] = rho
+        elseif C isa CoveredPartials
+            av == 0 && continue
+            rho = sqrt(av) .* C.s
+            rhos[k] = rho
+            for (i, p) in enumerate(ps)
+                theta[p] += rho[i]
+            end
         elseif isempty(C)
             continue
         elseif length(ps) == 1

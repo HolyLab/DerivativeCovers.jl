@@ -1,0 +1,127 @@
+# Function-level composition of covers, and the recursive route to a sub-map declaration.
+#
+# Covers compose on magnitudes: (a2*b2')*(a1*b1') = (b2⋅a1) * a2*b1', so a pipeline's cover
+# follows from its stages' covers with no joint tape. The tape-level counterpart is `submapnode`
+# (tape.jl): recorded nodes carrying a sub-map's exact Jacobian rows and declared curvature
+# covers, so the outer program's sweeps run over a tape whose length is independent of the
+# sub-map's internal node count. `declare_submap` builds such a declaration by running the
+# existing cover machinery on the sub-map's own scratch tape.
+
+"""
+    compose_jacobian_cover(a2, b2, a1, b1) -> (; a, b)
+
+Cover of a product of covered factors: if `abs.(J2) <= a2*b2'` (`m × q`) and
+`abs.(J1) <= a1*b1'` (`q × n`), then `abs.(J2*J1) <= (b2⋅a1) * a2*b1'`, so the returned pair
+`a = sqrt(b2⋅a1)*a2`, `b = sqrt(b2⋅a1)*b1` covers `J2*J1` — the Jacobian of a composition
+`F2 ∘ F1` when each factor is covered at the matching point. The inner product `b2⋅a1` is
+invariant under rescalings of the input, middle, and output spaces (`b2` and `a1` carry inverse
+middle-space units), and its square root is split onto both sides so the rule commutes with a
+rescaling of either factor.
+
+Equality holds entrywise for sign-definite rank-1 factors covered exactly; in general the rule
+pays the same signed-cancellation looseness as any magnitude-level bound on a product.
+"""
+function compose_jacobian_cover(a2::AbstractVector, b2::AbstractVector,
+                                a1::AbstractVector, b1::AbstractVector)
+    axes(b2, 1) == axes(a1, 1) ||
+        throw(DimensionMismatch("b2 and a1 must share the middle space: $(axes(b2)) vs $(axes(a1))"))
+    for (name, v) in (("a2", a2), ("b2", b2), ("a1", a1), ("b1", b1))
+        all(>=(0), v) || throw(ArgumentError("cover vectors must be nonnegative; $name is not"))
+    end
+    c = sqrt(dot(b2, a1))
+    return (; a = c .* a2, b = c .* b1)
+end
+
+"""
+    compose_hessian_cover(hg, gamma, a, b, S=nothing) -> (; h_sum, h_quad)
+
+Symmetric covers of the Hessian of a composite `f = g ∘ F` at `x`, with `y = F(x)`, from covers
+of the pieces:
+
+- `hg`: symmetric cover of `∇²g(y)` (`abs.(∇²g) <= hg*hg'`), one entry per output of `F`;
+- `gamma`: entrywise bound `gamma[k] >= abs(∂g/∂y_k)` at `y` (exact gradient magnitudes qualify);
+- `(a, b)`: Jacobian cover of `F` at `x` (`abs.(J_F) <= a*b'`);
+- `S`: curvature covers with `abs.(∇²F_k) <= S[k, :]*S[k, :]'` (as [`declare_submap`](@ref)
+  returns); `nothing` declares `F` linear.
+
+The chain rule `∇²f = J_F'*∇²g*J_F + Σ_k (∂g/∂y_k)*∇²F_k` bounds entrywise as
+`abs.(∇²f) <= (a⋅hg)² * b*b' + Σ_k gamma[k] * S[k,:]*S[k,:]'` — a sum of rank-1 magnitude atoms
+`u_0 = (a⋅hg)*b` and `u_k = sqrt(gamma[k])*S[k,:]`. Both merges are returned: the sum merge
+`h_sum = Σ_α u_α` (cross terms are nonnegative slack) and the quadrature merge
+`h_quad[i] = sqrt(Σ_α u_α[i]²)` (Cauchy–Schwarz), with `h_quad <= h_sum` coordinatewise.
+
+For `g = 0.5*norm(r)^2` this generic rule gives `norm(a, 1)*b` for the Gauss–Newton term —
+weaker than the `norm(a, 2)*b` of [`gn_ab`](@ref), which exploits the repeated `J` in `J'J` —
+so NLS consumers should prefer the specialized object.
+"""
+function compose_hessian_cover(hg::AbstractVector, gamma::AbstractVector, a::AbstractVector,
+                               b::AbstractVector, S::Union{Nothing,AbstractMatrix}=nothing)
+    axes(hg, 1) == axes(gamma, 1) == axes(a, 1) ||
+        throw(DimensionMismatch("hg, gamma, and a must share the output space: " *
+                                "$(axes(hg)) vs $(axes(gamma)) vs $(axes(a))"))
+    for (name, v) in (("hg", hg), ("gamma", gamma), ("a", a), ("b", b))
+        all(>=(0), v) || throw(ArgumentError("cover vectors must be nonnegative; $name is not"))
+    end
+    h_sum = dot(a, hg) .* b
+    hsq = h_sum .^ 2
+    if S !== nothing
+        axes(S) == (axes(a, 1), axes(b, 1)) ||
+            throw(DimensionMismatch("S is $(axes(S)); expected ($(axes(a, 1)), $(axes(b, 1))) (outputs × inputs)"))
+        all(>=(0), S) || throw(ArgumentError("curvature covers S must be nonnegative"))
+        for k in axes(S, 1)
+            g = sqrt(gamma[k])
+            g == 0 && continue
+            for j in axes(S, 2)
+                u = g * S[k, j]
+                h_sum[j] += u
+                hsq[j] += u^2
+            end
+        end
+    end
+    return (; h_sum, h_quad = sqrt.(hsq))
+end
+
+"""
+    declare_submap(F, x0::AbstractVector) -> (; y, J, S)
+
+The declaration [`submapnode`](@ref) consumes, distilled from `F`'s own scratch tape at `x0`:
+exact values `y = F(x0)`, the exact signed Jacobian `J` from per-output reverse sweeps, and
+curvature covers `S` whose row `k` is the sum-merge cover of `∇²F_k`, so
+`abs.(∇²F_k) <= S[k, :]*S[k, :]'` by [`cover_hessian`](@ref)'s guarantee. `F` may return a
+single `TVar` (declared as one output) or a vector of them; a linear output gets an exactly
+zero row of `S`.
+
+Costs `O(q*L_F)` time — `q` reverse sweeps over `F`'s tape — once per declaration; the scratch
+tape is discarded afterwards. The declaration transforms covariantly under rescalings of `F`'s
+arguments and outputs because each ingredient inherits the covariance of the underlying sweeps,
+including the zero-parent-value fallback exception of the local tie-break.
+"""
+function declare_submap(F, x0::AbstractVector)
+    t, out = tape_function(F, x0)
+    outidxs = out isa Integer ? [out] : out
+    q, n = length(outidxs), t.ninputs
+    y = t.vals[outidxs]
+    J = adjoints(t, outidxs)[:, 1:n]
+    S = Matrix{Float64}(undef, q, n)
+    for k in 1:q
+        vbar = adjoints(t, outidxs[k])
+        _, theta = local_covers(t, vbar)
+        S[k, :] = abs_reverse(t, theta)[1:n]
+    end
+    return (; y, J, S)
+end
+
+"""
+    submap(F, xs::AbstractVector{TVar}) -> Vector{TVar}
+
+Record `F` as a single declared call on the tape of `xs`: evaluate [`declare_submap`](@ref) at
+the parent values and embed the result via [`submapnode`](@ref). The recording tape gains one
+node per output of `F` — independent of how many operations `F` performs internally — at the
+price that exact Hessian-vector products ([`hvp`](@ref)) become unavailable on that tape. A
+scalar-valued `F` yields a one-element vector.
+"""
+function submap(F, xs::AbstractVector{TVar})
+    isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
+    d = declare_submap(F, [value(x) for x in xs])
+    return submapnode(xs, d.y, d.J, d.S)
+end
