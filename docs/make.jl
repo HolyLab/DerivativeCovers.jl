@@ -1,14 +1,14 @@
-using CoverAD
+using DerivativeCovers
 using Documenter
 
-DocMeta.setdocmeta!(CoverAD, :DocTestSetup, :(using CoverAD); recursive=true)
+DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); recursive=true)
 
 makedocs(;
-    modules=[CoverAD],
+    modules=[DerivativeCovers],
     authors="Tim Holy <tim.holy@gmail.com> and contributors",
-    sitename="CoverAD.jl",
+    sitename="DerivativeCovers.jl",
     format=Documenter.HTML(;
-        canonical="https://HolyLab.github.io/CoverAD.jl",
+        canonical="https://HolyLab.github.io/DerivativeCovers.jl",
         edit_link="main",
         assets=String[],
     ),
@@ -18,6 +18,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo="github.com/HolyLab/CoverAD.jl",
+    repo="github.com/HolyLab/DerivativeCovers.jl",
     devbranch="main",
 )

@@ -165,7 +165,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test cover_ratio(Hw, resw.h_quad) <= GATE
         # A constant-W matvec records only linear nodes: no PairedPartials atom on the tape.
         t, _ = tape_function(f_constW, z0)
-        @test !any(C -> C isa CoverAD.PairedPartials, t.Cs)
+        @test !any(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
         # H = A'A exactly (each residual is linear in z), so the minimal cover is the row norms.
         @test Hw ≈ Aconst' * Aconst
     end

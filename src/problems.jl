@@ -1,5 +1,5 @@
 """
-    CoverAD.Problems
+    DerivativeCovers.Problems
 
 Parameterized families of scalar programs for studying cover quality.
 

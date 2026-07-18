@@ -1,5 +1,5 @@
-using CoverAD
-using CoverAD.Problems
+using DerivativeCovers
+using DerivativeCovers.Problems
 using ForwardDiff
 using LinearAlgebra
 using Random
@@ -22,7 +22,7 @@ include("jacobianconverse.jl")
 include("equilibrate.jl")
 include("compose.jl")
 
-@testset "CoverAD.jl" begin
+@testset "DerivativeCovers.jl" begin
 
     @testset "tape mechanics" begin
         f = x -> x[1] * x[2] + exp(x[3])
@@ -553,7 +553,7 @@ include("compose.jl")
             v[1:r.ninputs] = x0
             ds = Float64[]
             for (k, (op, ps, cs)) in enumerate(r.ops)
-                v[r.ninputs + k] = CoverAD.Problems._apply(op, v, ps, cs)
+                v[r.ninputs + k] = DerivativeCovers.Problems._apply(op, v, ps, cs)
                 op === :tanh && push!(ds, 1 - tanh(v[ps[1]])^2)
             end
             return ds

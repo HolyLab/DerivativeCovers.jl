@@ -1,5 +1,5 @@
 """
-    CoverAD
+    DerivativeCovers
 
 Rank-1 covers of a program's Hessian at about twice the cost of a gradient.
 
@@ -9,10 +9,10 @@ without ever forming the Hessian `H`. The covers are deterministic, guaranteed, 
 covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of the objective
 (`h -> sqrt(c)*h` when `f -> c*f`).
 
-The submodule [`CoverAD.Problems`](@ref) supplies parameterized families of programs, with
+The submodule [`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs, with
 reference Hessians, for measuring how loose a cover is and what makes it so.
 """
-module CoverAD
+module DerivativeCovers
 
 using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm, opnorm
 using Random: AbstractRNG, MersenneTwister, randn

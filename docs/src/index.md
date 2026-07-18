@@ -1,14 +1,14 @@
 ```@meta
-CurrentModule = CoverAD
+CurrentModule = DerivativeCovers
 ```
 
-# CoverAD
+# DerivativeCovers
 
-Documentation for [CoverAD](https://github.com/HolyLab/CoverAD.jl).
+Documentation for [DerivativeCovers](https://github.com/HolyLab/DerivativeCovers.jl).
 
 ```@index
 ```
 
 ```@autodocs
-Modules = [CoverAD]
+Modules = [DerivativeCovers]
 ```
