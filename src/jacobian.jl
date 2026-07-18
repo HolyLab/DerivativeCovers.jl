@@ -251,10 +251,10 @@ end
 
 """
     balance_cover(t::Tape, outidxs; merge=:sum, arule=:marginal, a0=nothing,
-                  maxiter=1000, tol=1e-10, check=true)
+                  maxiter=nothing, tol=1e-10, check=true)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; merge=:sum, arule=:marginal, a0=nothing,
-                  maxiter=1000, tol=1e-10)
+                  maxiter=nothing, tol=1e-10)
 
 Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
 with the `merge` b-step `b_j = ∑_k Ũ_kj/a_k` (`:sum`; `:quad` and `:max` combine the same terms in
@@ -266,6 +266,9 @@ within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → 
 fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
 untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
 
+`maxiter = nothing` (the default) selects a per-rule budget: `1000` rounds for the marginal
+alternation, `10000` for the slower `:geomean` fit; pass an explicit count to override.
+
 - `arule = :marginal` alternates `a = ` [`marginal_weights`](@ref)`(…, b)` with the `merge`
   b-step. Every iterate is a valid cover — each half-step is valid for any positive other side —
   so the alternation trades only tightness, never validity. With `merge = :sum` this is exactly
@@ -274,12 +277,18 @@ untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
   `Ũ` must have **total support** (every nonzero entry on some positive diagonal). Dense patterns
   qualify; a pattern with a nonzero entry on no positive diagonal (e.g. triangular) makes the
   iteration drift without bound — every iterate still covers, but the excess grows by a constant
-  per round and the run ends in the non-convergence error.
+  per round and the run ends in the non-convergence error. The `merge = :max` b-step is
+  non-smooth and can instead settle into a **limit cycle**: the per-round product change plateaus
+  at a positive constant that no larger `maxiter` reduces (independent of total support). This is
+  detected and reported as a stall, distinct from the drift error; `arule = :geomean` is the
+  convergent alternative in both cases.
 - `arule = :geomean` sets `a_k` to the geometric mean of `Ũ_kj/b_j` over the nonzero entries of
   row `k`, alternating with the same rule on the b-side. In log space this is coordinate descent
   on the additive two-way fit `log Ũ_kj ≈ log a_k + log b_j` (row and column effects), so it
   converges for **every** sparsity pattern; the intermediate iterates undershoot validity, which
-  the final `merge` b-step restores.
+  the final `merge` b-step restores. Convergence is linear and can be slow on ill-conditioned
+  supports (chains, wide bands): some sparse patterns need `10^4`–`10^5` rounds, so raise
+  `maxiter` when the non-convergence error reports a delta still well above `tol`.
 
 For `m ≠ n` the marginal alternation's two normalizations disagree by the factor `m/n`, a pure
 gauge drift that is geometric in the round count; each round therefore renormalizes by the power
@@ -298,9 +307,10 @@ and balances it explicitly. The matrix form accepts any nonnegative magnitude ma
 zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
 """
 function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbol=:sum,
-                       arule::Symbol=:marginal, a0=nothing, maxiter::Integer=1000,
+                       arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
                        tol::Real=1e-10, check::Bool=true)
     m, N = length(outidxs), nnodes(t)
+    maxiter = _resolve_maxiter(maxiter, arule)
     if merge !== :sum || arule !== :marginal
         # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
         # explicit surrogate instead.
@@ -334,8 +344,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbo
     end
     astep = b -> marginal_weights(t, outidxs, b)
 
-    a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol,
-                                  "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern")
+    a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol, _marginal_hint(:sum))
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         r = jacobian_ratio(Utilde, a, b)
@@ -353,19 +362,19 @@ function balance_cover(r, x0::AbstractVector; kwargs...)
 end
 
 function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol=:marginal,
-                       a0=nothing, maxiter::Integer=1000, tol::Real=1e-10)
+                       a0=nothing, maxiter::Union{Nothing,Integer}=nothing, tol::Real=1e-10)
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     merge in (:sum, :quad, :max) ||
         throw(ArgumentError("merge must be :sum, :quad, or :max; got $(repr(merge))"))
+    maxiter = _resolve_maxiter(maxiter, arule)
     m, n = size(Utilde)
     a = _balance_start(a0, m)
     bstep = a -> _merge_bstep(Utilde, a, merge)
 
     if arule === :marginal
         astep = b -> marginal_weights(Utilde, b)
-        a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol,
-                                      "; the marginal alternation requires the sparsity pattern to have total support — arule=:geomean converges for every pattern")
+        a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol, _marginal_hint(merge))
     elseif arule === :geomean
         a, iters, delta = _geomean_fit(Utilde, a, maxiter, tol)
         b = bstep(a)
@@ -399,6 +408,17 @@ function _merge_bstep(U, a, merge)
     return b
 end
 
+# Per-rule default iteration budget: the marginal alternation converges in a few hundred rounds
+# when it converges at all, while the geomean fit is linearly convergent and can need many more.
+_resolve_maxiter(maxiter, arule::Symbol) =
+    maxiter === nothing ? (arule === :geomean ? 10_000 : 1_000) : maxiter
+
+# Non-convergence hint for the marginal alternation, specific to how each merge can fail.
+_marginal_hint(merge::Symbol) =
+    merge === :max ?
+        "; the max merge's marginal alternation can enter a limit cycle — arule=:geomean converges for every pattern" :
+        "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern"
+
 # Alternating geometric-mean fit of log U_kj ≈ log a_k + log b_j over the nonzero entries:
 # coordinate descent on the two-way least-squares objective, convergent for every pattern.
 function _geomean_fit(U, a, maxiter, tol)
@@ -428,7 +448,10 @@ function _geomean_fit(U, a, maxiter, tol)
         delta = max(uhi + whi, -(ulo + wlo))
         delta <= tol && return a, iters, delta
     end
-    error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > tol = $tol")
+    error("balance_cover(arule=:geomean) did not converge in $maxiter rounds: product still " *
+          "changing by delta = $delta > tol = $tol. The geometric-mean fit converges for every " *
+          "pattern but slowly on ill-conditioned supports; raise maxiter (some sparse patterns " *
+          "need 1e4–1e5 rounds).")
 end
 
 function _balance_start(a0, m)
@@ -451,6 +474,13 @@ function _balance(bstep, astep, a, maxiter, tol, hint="")
     b = bstep(a)
     _regauge!(a, b)
     delta = Inf
+    # Limit-cycle guard: the max-merge marginal alternation is non-smooth and can settle into a
+    # cycle whose per-round product change plateaus at a positive constant — no larger maxiter
+    # helps. When delta goes flat (unchanged to `stall_flat` over `stall_window` rounds) while
+    # still above tol, the run is cycling, not converging; report the stall and point at geomean.
+    # A genuinely converging alternation shrinks delta geometrically, so it never reads flat.
+    stall_window, stall_flat = 128, 1e-6
+    last_checked = Inf
     for iters in 1:maxiter
         aprev, bprev = a, b
         a = astep(b)
@@ -460,6 +490,14 @@ function _balance(bstep, astep, a, maxiter, tol, hint="")
         wlo, whi = _logchange_extrema(b, bprev)
         delta = max(uhi + whi, -(ulo + wlo))
         delta <= tol && return a, b, iters, delta
+        if iters % stall_window == 0
+            if delta > tol && abs(delta - last_checked) <= stall_flat * delta
+                error("balance_cover stalled after $iters rounds: the product change " *
+                      "delta = $delta has plateaued above tol = $tol — a limit cycle, not slow " *
+                      "convergence$hint")
+            end
+            last_checked = delta
+        end
     end
     error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > tol = $tol$hint")
 end

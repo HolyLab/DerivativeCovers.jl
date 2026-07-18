@@ -312,4 +312,62 @@
         @test marginal_weights(tc, oc, b) == c .* marginal_weights(t1, o1, b)
     end
 
+    @testset "balance_cover: max-merge limit cycle fails fast to geomean" begin
+        # This support pattern has total support — the sum-merge Sinkhorn alternation converges —
+        # but the non-smooth max-merge b-step drives the marginal alternation into a limit cycle:
+        # the per-round product change plateaus at a positive constant no larger maxiter reduces.
+        # It is detected as a stall (well under maxiter) and reported as a limit cycle, and the
+        # geomean rule is the convergent escape.
+        Ucyc = [0.0 0.5 0.0 0.0
+                2.0 0.5 0.0 0.0
+                0.0 0.0 0.25 4.0
+                0.0 0.0 0.5 2.0
+                0.5 0.0 1.0 0.5]
+
+        @test balance_cover(Ucyc).iters < 1000               # :sum/marginal (Sinkhorn) converges
+
+        stall = try
+            balance_cover(Ucyc; merge=:max, maxiter=100_000)
+            nothing
+        catch e
+            e
+        end
+        @test stall isa ErrorException
+        @test occursin("limit cycle", stall.msg)
+        @test occursin("geomean", stall.msg)
+        # Detected as a stall, not by exhausting the (large) budget.
+        @test occursin("stalled", stall.msg)
+
+        bal = balance_cover(Ucyc; merge=:max, arule=:geomean)
+        @test jacobian_ratio(Ucyc, bal.a, bal.b) <= GATE
+    end
+
+    @testset "balance_cover: geomean round budget on slow supports" begin
+        # A tridiagonal staircase makes the two-way log fit ill-conditioned: geomean converges
+        # (it converges for every pattern) but needs more than the marginal rule's 1000-round
+        # budget, so the geomean default budget is larger. A tiny explicit budget must fail with a
+        # message that names maxiter as the lever.
+        L = 20
+        Uslow = zeros(L, L)
+        for k in 1:L
+            Uslow[k, k] = 1.0
+            k < L && (Uslow[k, k + 1] = 2.0)
+            k > 1 && (Uslow[k, k - 1] = 0.5)
+        end
+
+        bal = balance_cover(Uslow; merge=:max, arule=:geomean)
+        @test jacobian_ratio(Uslow, bal.a, bal.b) <= GATE
+        @test bal.iters > 1000                                # exceeds the marginal budget
+
+        undersized = try
+            balance_cover(Uslow; merge=:max, arule=:geomean, maxiter=10)
+            nothing
+        catch e
+            e
+        end
+        @test undersized isa ErrorException
+        @test occursin("maxiter", undersized.msg)
+        @test occursin("geomean", undersized.msg)
+    end
+
 end
