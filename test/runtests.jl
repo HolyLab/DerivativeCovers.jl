@@ -19,6 +19,7 @@ include("nls.jl")
 include("vectoroutput.jl")
 include("jacobian.jl")
 include("jacobianconverse.jl")
+include("equilibrate.jl")
 
 @testset "CoverAD.jl" begin
 
