@@ -18,6 +18,7 @@ include("cancellation.jl")
 include("nls.jl")
 include("vectoroutput.jl")
 include("jacobian.jl")
+include("jacobianconverse.jl")
 
 @testset "CoverAD.jl" begin
 

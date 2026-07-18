@@ -129,6 +129,73 @@
         @test_throws "nonnegative" jacobian_representability([1.0 -2.0; 3.0 4.0])
     end
 
+    @testset "jacobian_minimax is the exact minimax rank-1 cover" begin
+        rng = MersenneTwister(5)
+
+        # Reference: the optimal excess is the max over bipartite support cycles of the
+        # alternating geometric mean, enumerable outright at these sizes.
+        function brute_minimax(M)
+            m, n = size(M)
+            best = 0.0
+            for r in 2:min(m, n)
+                for rows in Iterators.product(fill(1:m, r)...),
+                    cols in Iterators.product(fill(1:n, r)...)
+
+                    (allunique(rows) && allunique(cols)) || continue
+                    all(M[rows[i], cols[i]] > 0 for i in 1:r) || continue
+                    all(M[rows[i], cols[mod1(i + 1, r)]] > 0 for i in 1:r) || continue
+                    v = sum(log(M[rows[i], cols[i]]) - log(M[rows[i], cols[mod1(i + 1, r)]])
+                            for i in 1:r) / r
+                    best = max(best, v)
+                end
+            end
+            return exp(best)
+        end
+
+        for trial in 1:12
+            m, n = rand(rng, 2:4), rand(rng, 2:4)
+            M = exp.(3 .* randn(rng, m, n))
+            trial > 6 && (M .*= rand(rng, m, n) .< 0.7)
+            mm = jacobian_minimax(M)
+            # Valid, attains the enumerated optimum, and is never beaten by the 2×2 bound.
+            @test jacobian_ratio(M, mm.a, mm.b) <= GATE
+            @test mm.excess ≈ brute_minimax(M) rtol = 1e-8
+            @test mm.excess >= jacobian_representability(M) / GATE
+        end
+
+        # Rank-1 magnitudes are covered exactly; a tree-support pattern too (no cycles at all).
+        u, v = exp.(randn(rng, 4)), exp.(randn(rng, 5))
+        @test jacobian_minimax(u * v').excess ≈ 1
+        T = [2.0 5.0 0.0; 0.0 3.0 7.0]
+        mmT = jacobian_minimax(T)
+        @test mmT.excess ≈ 1
+        @test jacobian_ratio(T, mmT.a, mmT.b) <= GATE
+
+        # On the 2×2 block matrix the 2-cycle bound is the whole story.
+        eps = 0.01
+        B = [1.0 1.0 eps eps; 1.0 1.0 eps eps; eps eps 1.0 1.0; eps eps 1.0 1.0]
+        @test jacobian_minimax(B).excess ≈ 1 / eps rtol = 1e-8
+
+        # A 3-cycle can dominate every 2-cycle: all 2×2 defects of C are mild, the 6-cycle is not.
+        C = [1.0 1e3 0.0; 0.0 1.0 1e3; 1e3 0.0 1.0]
+        @test jacobian_representability(C) ≈ 1        # no row pair shares two columns
+        @test jacobian_minimax(C).excess ≈ 1e3 rtol = 1e-8
+
+        # Zero rows and columns get exact zeros; the excess ignores them.
+        Z = [0.0 0.0 0.0; 0.0 2.0 4.0; 0.0 4.0 2.0]
+        mmZ = jacobian_minimax(Z)
+        @test mmZ.a[1] == 0 && mmZ.b[1] == 0
+        @test mmZ.excess ≈ 2.0 rtol = 1e-8
+
+        # Diagonal rescaling moves the pair covariantly and leaves the excess invariant.
+        M = exp.(2 .* randn(rng, 5, 4))
+        C2, D2 = exp2.(rand(rng, -10:10, 5)), exp2.(rand(rng, -10:10, 4))
+        @test jacobian_minimax(C2 .* M .* D2').excess ≈ jacobian_minimax(M).excess rtol = 1e-9
+
+        @test_throws "nonnegative" jacobian_minimax([1.0 -2.0; 3.0 4.0])
+        @test_throws "tol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; tol=0)
+    end
+
     @testset "cover_jacobian rejects a scalar program" begin
         @test_throws "vector-valued program" cover_jacobian(xs -> xs[1] * xs[2], [1.0, 2.0])
     end

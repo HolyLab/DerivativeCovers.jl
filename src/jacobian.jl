@@ -555,6 +555,90 @@ function jacobian_ratio(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
 end
 
 """
+    jacobian_minimax(M; tol=1e-12) -> (; a, b, excess)
+
+The exact minimax rank-1 cover of the nonnegative matrix `M`: a pair `a_k * b_j ≥ M_kj` whose
+worst-case excess `max_kj (a_k*b_j)/M_kj` over the nonzero entries of `M` is the smallest any
+rank-1 cover can achieve. The optimal value is classical (tropical spectral theory / max-balancing):
+it equals the maximum over bipartite cycles of the support — rows `k_1, …, k_r` and columns
+`j_1, …, j_r`, all entries `(k_i, j_i)` and `(k_i, j_{i+1})` nonzero — of the alternating
+geometric mean
+
+    [ (M_{k_1 j_1} ⋯ M_{k_r j_r}) / (M_{k_1 j_2} ⋯ M_{k_r j_1}) ]^{1/r} .
+
+The `r = 2` cycles give [`jacobian_representability`](@ref); longer cycles can dominate, so this
+is the exact form of the floor that function only bounds. Every unit cancels around a cycle
+(each row and column appears once in the numerator and once in the denominator), so `excess` is
+dimensionless and the pair is equivariant under `M → diag(c)*M*diag(d)` modulo the gauge
+`(a, b) → (γa, γ⁻¹b)`.
+
+Computed by bisection on the log-space excess with Bellman–Ford feasibility (difference
+constraints `log M_kj ≤ log a_k + log b_j ≤ log M_kj + E`), `O(nnz·(m+n))` per probe;
+deterministic, no solver. `tol` is the absolute log-space bisection width — `excess` is exact to
+a relative `tol` and the returned pair attains it. A zero row of `M` gets `a_k = 0`, a zero
+column `b_j = 0`; both are exact. Unlike [`balance_cover`](@ref) this minimizes the worst-case
+excess itself, so it is the tightness yardstick — but the optimum is generally non-unique off
+the critical cycles, so prefer `balance_cover`'s rules when covariance-by-uniqueness matters.
+"""
+function jacobian_minimax(M::AbstractMatrix; tol::Real=1e-12)
+    Base.require_one_based_indexing(M)
+    all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
+    tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    m, n = size(M)
+    ks, js, cs = Int[], Int[], Float64[]
+    for j in 1:n, k in 1:m
+        M[k, j] > 0 && (push!(ks, k); push!(js, j); push!(cs, log(M[k, j])))
+    end
+    isempty(cs) && return (; a=zeros(m), b=zeros(n), excess=1.0)
+
+    lo, hi = 0.0, maximum(cs) - minimum(cs)
+    feasible, pot = _minimax_feasible(m, n, ks, js, cs, hi)
+    feasible || error("Bellman–Ford infeasible at the row-span upper bound; this cannot happen")
+    while hi - lo > tol
+        mid = lo + (hi - lo) / 2
+        f, p = _minimax_feasible(m, n, ks, js, cs, mid)
+        f ? (hi = mid; pot = p) : (lo = mid)
+    end
+
+    a, b = exp.(pot[1:m]), exp.(.-pot[(m + 1):(m + n)])
+    liverow, livecol = falses(m), falses(n)
+    for (k, j) in zip(ks, js)
+        liverow[k] = livecol[j] = true
+    end
+    a[.!liverow] .= 0.0
+    b[.!livecol] .= 0.0
+    _regauge!(a, b)
+    excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
+    excess >= 1 - 1e-10 || error("minimax pair does not cover M: worst ratio $(1 / excess)")
+    return (; a, b, excess)
+end
+
+# Difference-constraint feasibility for the minimax excess E: potentials pot = (u; y) with
+# u_k - y_j ∈ [c_kj, c_kj + E] on the support exist iff the constraint digraph — arc u_k → y_j of
+# weight -c_kj and arc y_j → u_k of weight c_kj + E per support entry — has no negative cycle.
+# Multi-source Bellman–Ford from all-zero potentials: a pass with no relaxation certifies
+# feasibility (and yields valid potentials); relaxation still occurring after m+n passes
+# certifies a negative cycle.
+function _minimax_feasible(m, n, ks, js, cs, E)
+    pot = zeros(m + n)
+    for _ in 1:(m + n)
+        changed = false
+        for (k, j, c) in zip(ks, js, cs)
+            if pot[k] - c < pot[m + j]
+                pot[m + j] = pot[k] - c
+                changed = true
+            end
+            if pot[m + j] + c + E < pot[k]
+                pot[k] = pot[m + j] + c + E
+                changed = true
+            end
+        end
+        changed || return true, pot
+    end
+    return false, pot
+end
+
+"""
     jacobian_representability(M) -> excess
 
 A rigorous lower bound on the worst-case excess `max_kj (a[k]*b[j]) / M[k,j]` of *any* rank-1 cover
@@ -565,7 +649,9 @@ independent of the merge and surrogate. It is `√(max 2×2 defect)`, where a 2�
 rank-1 `M` gives exactly `1`; block structure (partially separable Jacobians) drives it up.
 
 Computed in `O(m²n)` from row-pair differences of `log M` over shared-support columns — a
-diagnostic. Pass `abs.(J)` or a surrogate `Ũ` as `M`.
+diagnostic. Pass `abs.(J)` or a surrogate `Ũ` as `M`. This is the 2-cycle restriction of the
+exact forced excess: longer support cycles can dominate it, and [`jacobian_minimax`](@ref)
+computes the exact value together with a pair attaining it.
 """
 function jacobian_representability(M::AbstractMatrix)
     m, n = size(M)

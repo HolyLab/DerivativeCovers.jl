@@ -29,6 +29,7 @@ using Random: AbstractRNG, MersenneTwister, rand, randn
 
 export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
 export quadratic, deep_composition, random_dag, mlp, cancellation, rescale, logscales, families
+export JacobianProblem, noutputs, exact_jacobian, has_exact_jacobian, jacobian_cancellation
 
 """
     CoverProblem
@@ -645,6 +646,206 @@ function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=
     name = (aligned ? "aligned" : "cancel") * " n=$n m=$m delta=$delta"
     length(supp) < n && (name *= " S=$(length(supp))")
     return CoverProblem(name, f, x0; twin, hessian=_ -> H)
+end
+
+# ---- vector-output cancellation pairs --------------------------------------------------------
+
+"""
+    JacobianProblem
+
+A vector-valued program together with the references needed to judge an asymmetric cover of its
+Jacobian — the vector-output counterpart of [`CoverProblem`](@ref).
+
+- `name`: a short identifier, unique within a family sweep.
+- `r`: the program, mapping an input vector to an output vector. Built only from the elementals
+  overloaded for [`TVar`](@ref), so `r(x)` records a tape when `x` is a vector of `TVar`s and
+  evaluates normally on any other numeric vector.
+- `x0`: the point at which the Jacobian is covered.
+- `nout`: the number of outputs of `r`.
+- `twin`: an independent idiomatic-Julia implementation of the same map, or `nothing`.
+- `jacobian`: `x -> J`, the analytic `nout × n` Jacobian, or `nothing` when no closed form is
+  available. Use [`exact_jacobian`](@ref) rather than the field.
+"""
+struct JacobianProblem{F,G,J}
+    name::String
+    r::F
+    x0::Vector{Float64}
+    nout::Int
+    twin::G
+    jacobian::J
+end
+
+JacobianProblem(name::AbstractString, r, x0::AbstractVector, nout::Integer;
+                twin=nothing, jacobian=nothing) =
+    JacobianProblem(String(name), r, Vector{Float64}(x0), Int(nout), twin, jacobian)
+
+nvars(p::JacobianProblem) = length(p.x0)
+has_twin(p::JacobianProblem) = p.twin !== nothing
+
+"""
+    noutputs(p::JacobianProblem)
+
+Number of outputs of `p.r`.
+"""
+noutputs(p::JacobianProblem) = p.nout
+
+"""
+    has_exact_jacobian(p::JacobianProblem)
+
+Whether `p` carries an analytic Jacobian. When it does not, a reference Jacobian must come from
+elsewhere (`ForwardDiff.jacobian(p.r, p.x0)`).
+"""
+has_exact_jacobian(p::JacobianProblem) = p.jacobian !== nothing
+
+"""
+    exact_jacobian(p::JacobianProblem, x=p.x0) -> J
+
+The analytic Jacobian of `p` at `x`. Errors when `p` has none; test with
+[`has_exact_jacobian`](@ref) first.
+"""
+function exact_jacobian(p::JacobianProblem, x::AbstractVector=p.x0)
+    has_exact_jacobian(p) ||
+        throw(ArgumentError("problem \"$(p.name)\" has no analytic Jacobian; differentiate `p.r` instead"))
+    return p.jacobian(x)
+end
+
+"""
+    jacobian_cancellation(n; nout=4, m=n, delta=1e-3, aligned=false, support=1:n, sigma=0.0,
+                          rng=MersenneTwister(1)) -> JacobianProblem
+
+An adversarial pair of vector-valued programs built from `m` quartets of *linear* forms whose
+signed sum cancels exactly, riding on a `delta`-weighted rank-1 Jacobian and fanned out to
+`nout` outputs:
+
+    T = sum_i [ 0.5*(a_i'xS) + 0.5*(b_i'xS) + s*(c_i'xS) + s*(d_i'xS) ]
+    r_k = delta * q[k] * (p'x) + q[k] * T
+
+where `xS = x[support]` and `c_i .+ d_i == a_i .+ b_i` entrywise (an unequal split
+`c_i = t_i .* (a_i .+ b_i)`, `t_i` entrywise in (0, 1), so all four forms are distinct and none
+is a scalar multiple of another). At `s = -0.5` (`aligned = false`, the default) each quartet's
+contribution to every Jacobian entry cancels exactly; at `s = 0.5` (`aligned = true`) it adds.
+The two variants differ *only* in the sign of the constant multiplying the `c_i` and `d_i`
+forms: every quartet form vanishes at `x0` (orthogonality, arranged by the draw) and within each
+support column all four forms share one sign, so node values and the magnitude of every
+elemental partial coincide between the two variants — the surrogate `Ũ` and every merge built
+from it are identical, and only the *signed* Jacobian differs.
+
+Closed forms (the Jacobian is constant in `x`; `ghat = sum_i (a_i .+ b_i)` scattered onto
+`support`, `g = abs.(ghat)`):
+
+    J_cancel  = delta .* q * p'
+    J_aligned = q * (delta .* p .+ ghat)'
+    Utilde    = abs.(q) * (delta .* abs.(p) .+ g)'     (both variants)
+
+The sign alignment makes `Utilde == abs.(J_aligned)` exactly, and both `Utilde` and the two
+Jacobians are rank 1, so the minimal cover of each is exact and analytic. The per-entry
+cancellation index is constant across outputs: `kappa_j = 1 + g_j / (delta * abs(p_j))` on the
+support, `1` off it — more quartets or smaller `delta`, larger `kappa`; `support` restricts the
+cancellation to a column subset, making the `kappa` profile anisotropic.
+
+`sigma` widens the log-magnitude spread of the quartet coefficients *and* of the output scales
+`q`, whose spread sets the sum/max merge gap `sum(abs, q)/maximum(abs, q)` — the effective
+output multiplicity, `nout` at `sigma = 0` and approaching 1 as one output dominates. Two calls
+that agree in everything but `aligned` share every random draw and differ only in the program's
+one constant.
+"""
+function jacobian_cancellation(n::Integer; nout::Integer=4, m::Integer=n, delta::Real=1e-3,
+                               aligned::Bool=false, support=1:n, sigma::Real=0.0,
+                               rng::AbstractRNG=MersenneTwister(1))
+    n >= 2 || throw(ArgumentError("n must be at least 2, got $n"))
+    nout >= 1 || throw(ArgumentError("nout must be positive, got $nout"))
+    m >= 1 || throw(ArgumentError("m must be positive, got $m"))
+    delta > 0 || throw(ArgumentError("delta must be positive, got $delta"))
+    supp = collect(Int, support)
+    all(i -> 1 <= i <= n, supp) ||
+        throw(ArgumentError("support must be a subset of 1:$n, got $support"))
+    allunique(supp) || throw(ArgumentError("support entries must be unique, got $support"))
+    length(supp) >= 2 ||
+        throw(ArgumentError("support must have at least 2 entries, got $(length(supp))"))
+
+    x0 = randn(rng, n)
+    ns = length(supp)
+    x0S = x0[supp]
+    all(!iszero, x0S) || error("x0 vanishes on a support coordinate; cannot balance the draw")
+
+    # One sign per support column; all quartet forms carry it, which is what aligns the paths.
+    s = ifelse.(rand(rng, ns) .< 0.5, -1.0, 1.0)
+    w = s .* x0S
+    if all(>(0), w) || all(<(0), w)
+        # Balancing sum(alpha .* w) = 0 with alpha > 0 needs w of mixed sign; flip the weakest.
+        i = argmin(abs.(w))
+        s[i] = -s[i]
+        w[i] = -w[i]
+    end
+
+    q = ifelse.(rand(rng, nout) .< 0.5, -1.0, 1.0) .* exp.(sigma .* randn(rng, nout))
+    pmag = (abs.(randn(rng, n)) .+ 0.2) .* exp.(sigma .* randn(rng, n))
+    psign = ifelse.(rand(rng, n) .< 0.5, -1.0, 1.0)
+    pvec = psign .* pmag
+    pvec[supp] .= s .* pmag[supp]         # on the support, sign(p_j) must match the forms
+
+    # Positive magnitudes with sum(alpha .* w) = 0: draw freely, then rescale the negative-w
+    # part so the two half-sums balance exactly. Strictly positive by construction.
+    function draw_balanced()
+        alpha = (abs.(randn(rng, ns)) .+ 0.1) .* exp.(sigma .* randn(rng, ns))
+        Sp, Sm = w .> 0, w .< 0
+        gamma = sum(alpha[Sp] .* w[Sp]) / -sum(alpha[Sm] .* w[Sm])
+        alpha[Sm] .*= gamma
+        return alpha
+    end
+
+    as_, bs_, cs_, ds_ = [Vector{Float64}[] for _ in 1:4]
+    for _ in 1:m
+        a = s .* draw_balanced()
+        b = s .* draw_balanced()
+        ab = a .+ b
+        # Entrywise split c = t .* ab, d = (1 .- t) .* ab with c'x0S = 0: since ab'x0S = 0
+        # already, any t with sum((t .- 1/2) .* ab .* x0S) = 0 works; project a free draw and
+        # shrink it into (0.05, 0.95) so both halves keep the column sign.
+        mvec = ab .* x0S
+        u = rand(rng, ns) .* 0.5 .- 0.25
+        u .-= (sum(u .* mvec) / sum(abs2, mvec)) .* mvec
+        rho = maximum(abs, u)
+        rho > 0.45 && (u .*= 0.45 / rho)
+        t = 0.5 .+ u
+        push!(as_, a)
+        push!(bs_, b)
+        push!(cs_, t .* ab)
+        push!(ds_, (1 .- t) .* ab)
+    end
+
+    sgn = aligned ? 0.5 : -0.5
+
+    function r(x)
+        xS = view(x, supp)
+        px = _lincomb(pvec, x)
+        T = 0.5 * _lincomb(as_[1], xS) + 0.5 * _lincomb(bs_[1], xS) +
+            sgn * _lincomb(cs_[1], xS) + sgn * _lincomb(ds_[1], xS)
+        for i in 2:m
+            T = T + 0.5 * _lincomb(as_[i], xS) + 0.5 * _lincomb(bs_[i], xS) +
+                sgn * _lincomb(cs_[i], xS) + sgn * _lincomb(ds_[i], xS)
+        end
+        return [delta * q[k] * px + q[k] * T for k in 1:nout]
+    end
+
+    ghat = zeros(n)
+    for i in 1:m
+        ghat[supp] .+= as_[i] .+ bs_[i]
+    end
+
+    function twin(x)
+        px = dot(pvec, x)
+        aligned || return (delta * px) .* q
+        return (delta * px + dot(ghat, x)) .* q
+    end
+
+    # Both closed forms share the delta-term literally, so off-support entries (ghat = 0) are
+    # bit-identical between the pair and the cancellation index there is exactly 1.
+    J = aligned ? delta .* q * pvec' .+ q * ghat' : delta .* q * pvec'
+
+    name = (aligned ? "aligned" : "cancel") * " jac n=$n nout=$nout m=$m delta=$delta"
+    length(supp) < n && (name *= " S=$(length(supp))")
+    return JacobianProblem(name, r, x0, nout; twin, jacobian=_ -> J)
 end
 
 # ---- transformations and sweeps --------------------------------------------------------------
