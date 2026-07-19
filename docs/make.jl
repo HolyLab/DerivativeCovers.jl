@@ -4,7 +4,7 @@ using Documenter
 DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); recursive=true)
 
 makedocs(;
-    modules=[DerivativeCovers],
+    modules=[DerivativeCovers, DerivativeCovers.Problems],
     authors="Tim Holy <tim.holy@gmail.com> and contributors",
     sitename="DerivativeCovers.jl",
     format=Documenter.HTML(;
@@ -14,6 +14,7 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Problem families" => "problems.md",
     ],
 )
 

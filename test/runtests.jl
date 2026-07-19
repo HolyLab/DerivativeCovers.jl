@@ -591,10 +591,18 @@ include("compose.jl")
     end
 
     @testset "sigma widens the coefficient dynamic range" begin
-        spread(A) = maximum(abs, A) / minimum(abs, A)
-        narrow = exact_hessian(quadratic(8; rng=MersenneTwister(2), sigma=0.0))
-        wide = exact_hessian(quadratic(8; rng=MersenneTwister(2), sigma=3.0))
-        @test spread(wide) > 1e3 * spread(narrow)
+        # `sigma` is defined as the standard deviation of the coefficients' log-magnitudes, so
+        # read the dynamic range the same way. A `maximum(abs) / minimum(abs)` ratio instead
+        # tracks the single smallest entry, a near-cancellation artifact that swings by orders
+        # of magnitude between draws and says little about the bulk.
+        function logspread(A)
+            l = log.(abs.(vec(A)))
+            m = sum(l) / length(l)
+            return sqrt(sum(abs2, l .- m) / length(l))
+        end
+        narrow = exact_hessian(quadratic(32; rng=MersenneTwister(2), sigma=0.0))
+        wide = exact_hessian(quadratic(32; rng=MersenneTwister(2), sigma=3.0))
+        @test logspread(wide) > 1.5 * logspread(narrow)
 
         @test_throws ArgumentError quadratic(4; rank=5)
         @test_throws ArgumentError quadratic(4; form=:bogus)
@@ -806,7 +814,7 @@ include("compose.jl")
         A = M * M' + 12I                            # symmetric positive definite
         g = randn(rng, 12)
         h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
-        hd = inflate(h, LognormalInflation(), 100.0; rng)
+        hd = inflate(h, LognormalInflation(), 1e4; rng)
 
         # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
         # reach the target, and the loose cover pays for it in iterations.
@@ -815,11 +823,13 @@ include("compose.jl")
         @test long.iters_dist > long.iters_ref
 
         # On the usual budget of one iteration per coordinate the loose cover simply fails to
-        # deliver a step: it does not reach the target and its final iterate is far from exact.
+        # deliver a step: it does not reach the target, and its final iterate is orders of
+        # magnitude further from exact than the reference run's. The gap between the two runs is
+        # the property; where each lands in absolute terms depends on the draw.
         budget = step_degradation(A, g, h, hd)
         @test budget.iters_ref == long.iters_ref
         @test budget.iters_dist === nothing
-        @test budget.error_dist > 0.1 > budget.error_ref
+        @test budget.error_dist > 1e3 * budget.error_ref
 
         # Uniform inflation is invisible here too: only the shape of the metric steers CG.
         uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); itermax=4)
