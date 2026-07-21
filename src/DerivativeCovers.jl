@@ -16,6 +16,8 @@ module DerivativeCovers
 
 using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm, opnorm
 using Random: AbstractRNG, MersenneTwister, randn
+using MatrixCovers: SupportComponents, ncomponents, rowcomponent, colcomponent
+import MatrixCovers: support_components, gramcover, gramcover!
 
 export Tape, TVar, tape_function, nnodes, value
 export CoverResult, cover_hessian, adjoints, sensitivities, hessian_bound,
@@ -33,6 +35,8 @@ export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
 export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
        jacobian_ratio, jacobian_representability, jacobian_minimax
 export abs_forward, marginal_weights, balance_cover
+export support_components, gramcover, gramcover!
+export SupportComponents, ncomponents, rowcomponent, colcomponent
 export jvp, vjp, equilibrate, scaled_singular_value, jacobian_shrink
 export submapnode, submap, declare_submap, compose_jacobian_cover, compose_hessian_cover
 
@@ -47,7 +51,9 @@ include("metrics.jl")
 include("inflation.jl")
 include("consumers.jl")
 include("nls.jl")
+include("support.jl")
 include("jacobian.jl")
+include("gram.jl")
 include("equilibrate.jl")
 include("compose.jl")
 include("problems.jl")
