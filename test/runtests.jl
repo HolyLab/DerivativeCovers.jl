@@ -23,6 +23,7 @@ include("gram.jl")
 include("jacobianconverse.jl")
 include("equilibrate.jl")
 include("compose.jl")
+include("paired.jl")
 
 @testset "DerivativeCovers.jl" begin
 
