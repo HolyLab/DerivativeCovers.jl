@@ -35,7 +35,7 @@ jobs:
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       # MatrixCovers is not registered; clone it into the project's manifest.
       - name: Develop MatrixCovers
         run: julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
@@ -59,7 +59,7 @@ jobs:
       - uses: julia-actions/setup-julia@v3
         with:
           version: '1'
-      - uses: julia-actions/cache@v2
+      - uses: julia-actions/cache@v3
       # MatrixCovers is not registered. The docs environment resolves
       # DerivativeCovers, so both must enter its manifest in a single call.
       - name: Develop MatrixCovers
