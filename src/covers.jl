@@ -27,8 +27,9 @@ Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@
 - `h_sum`: the sum merge, `h = sum_k s_k`.
 - `h_quad`: the quadrature merge, `h[i] = sqrt(sum_atoms s_atom[i]^2)`, combining per [`atom_slots`](@ref)
   atom rather than per node (see [`cover_hessian`](@ref)).
-- `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic — the
-  form the production path uses, and equal to `h_sum` up to roundoff.
+- `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic
+  ([`abs_reverse`](@ref)), equal to `h_sum` up to roundoff. The production form is
+  [`paired_reverse`](@ref), which fuses this sweep with the adjoint sweep.
 - `L`: the tape length (node count), inputs included.
 """
 struct CoverResult
@@ -234,69 +235,78 @@ function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
     rhos = [Float64[] for _ in 1:N]
     theta = zeros(N)
     for k in (t.ninputs + 1):N
-        av = abs(vbar[k])
-        ps, C = t.parents[k], t.Cs[k]
-        if C isa PairedPartials
-            c = av
-            c == 0 && continue
-            q = C.q
-            rho = zeros(2q)
-            for j in 1:q
-                z1 = abs(t.vals[ps[j]])
-                z2 = abs(t.vals[ps[q + j]])
-                a, b = balanced_split(0.0, c, 0.0, z1, z2)
-                if check
-                    rtol = 1e-9
-                    a * b >= c * (1 - rtol) ||
-                        error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
-                end
-                rho[j] = a
-                rho[q + j] = b
-                theta[ps[j]] += a
-                theta[ps[q + j]] += b
-            end
-            rhos[k] = rho
-        elseif C isa CoveredPartials
-            av == 0 && continue
-            rho = sqrt(av) .* C.s
-            rhos[k] = rho
-            for (i, p) in enumerate(ps)
-                theta[p] += rho[i]
-            end
-        elseif isempty(C)
-            continue
-        elseif length(ps) == 1
-            c11 = av * abs(C[1, 1])
-            c11 == 0 && continue
-            rho = sqrt(c11)
-            rhos[k] = [rho]
-            theta[ps[1]] += rho
-        elseif length(ps) == 2
-            c11 = av * abs(C[1, 1])
-            c12 = av * abs(C[1, 2])
-            c22 = av * abs(C[2, 2])
-            (c11 == 0 && c12 == 0 && c22 == 0) && continue
-            if c12^2 <= c11 * c22
-                rho1, rho2 = sqrt(c11), sqrt(c22)
-            else
-                z1 = abs(t.vals[ps[1]])
-                z2 = abs(t.vals[ps[2]])
-                rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
-            end
-            if check
-                rtol = 1e-9
-                (rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-                 rho1 * rho2 >= c12 * (1 - rtol)) ||
-                    error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
-            end
-            rhos[k] = [rho1, rho2]
-            theta[ps[1]] += rho1
-            theta[ps[2]] += rho2
-        else
-            error("node $k has $(length(ps)) parents; only unary and binary elementals are supported")
+        rho = local_cover_slots(t, k, abs(vbar[k]); check)
+        rho === nothing && continue
+        rhos[k] = rho
+        for (i, p) in enumerate(t.parents[k])
+            theta[p] += rho[i]
         end
     end
     return rhos, theta
+end
+
+"""
+    local_cover_slots(t::Tape, k::Int, av; check::Bool=true) -> Union{Nothing,Vector{Float64}}
+
+The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
+`rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
+`nothing` when the node contributes no second-order term (`av == 0`, or an empty `C`). This is
+the per-node kernel shared by [`local_covers`](@ref), which accumulates the results into
+`(rhos, theta)`, and [`paired_reverse`](@ref), which deposits them directly into the absolute
+adjoint channel; see [`local_covers`](@ref) for the constructions per node type. `check`
+verifies the covering invariant on recorded nodes.
+"""
+function local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true)
+    ps, C = t.parents[k], t.Cs[k]
+    if C isa PairedPartials
+        c = av
+        c == 0 && return nothing
+        q = C.q
+        rho = zeros(2q)
+        for j in 1:q
+            z1 = abs(t.vals[ps[j]])
+            z2 = abs(t.vals[ps[q + j]])
+            a, b = balanced_split(0.0, c, 0.0, z1, z2)
+            if check
+                rtol = 1e-9
+                a * b >= c * (1 - rtol) ||
+                    error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
+            end
+            rho[j] = a
+            rho[q + j] = b
+        end
+        return rho
+    elseif C isa CoveredPartials
+        av == 0 && return nothing
+        return sqrt(av) .* C.s
+    elseif isempty(C)
+        return nothing
+    elseif length(ps) == 1
+        c11 = av * abs(C[1, 1])
+        c11 == 0 && return nothing
+        return [sqrt(c11)]
+    elseif length(ps) == 2
+        c11 = av * abs(C[1, 1])
+        c12 = av * abs(C[1, 2])
+        c22 = av * abs(C[2, 2])
+        (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
+        if c12^2 <= c11 * c22
+            rho1, rho2 = sqrt(c11), sqrt(c22)
+        else
+            z1 = abs(t.vals[ps[1]])
+            z2 = abs(t.vals[ps[2]])
+            rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
+        end
+        if check
+            rtol = 1e-9
+            (rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
+             rho1 * rho2 >= c12 * (1 - rtol)) ||
+                error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
+        end
+        return [rho1, rho2]
+    else
+        error("node $k has $(length(ps)) parents; only unary and binary elementals are supported")
+    end
 end
 
 """
@@ -319,6 +329,50 @@ function abs_reverse(t::Tape, theta::AbstractVector)
         end
     end
     return abar
+end
+
+"""
+    paired_reverse(t::Tape, outidx::Int; check::Bool=true) -> (; grad, h)
+
+The exact gradient and the sum-merge cover of [`cover_hessian`](@ref), from a single reverse
+sweep carrying a paired adjoint `(vbar[k], abar[k])` per node:
+
+    vbar[p_i] += d_i * vbar[k]                       # signed channel: reverse-mode AD
+    abar[p_i] += abs(d_i) * abar[k] + rho_k[i]       # absolute channel: the cover
+
+with `rho_k` from [`local_cover_slots`](@ref). Both channels of node `k` are final when the
+sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
+on the tape and are processed first. That makes `rho_k` — which needs the finished `vbar[k]` —
+computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:ninputs]` up to
+roundoff.
+
+Each node's update consumes only its own partials, its parents' values, and its paired adjoint,
+so the sweep has the shape of a reverse-mode rule set with a widened cotangent — the form a
+compiled AD backend can implement, yielding cover and gradient together at gradient cost.
+`check` verifies the per-node covering invariants, as in [`local_covers`](@ref).
+"""
+function paired_reverse(t::Tape, outidx::Int; check::Bool=true)
+    n, N = t.ninputs, nnodes(t)
+    vbar = zeros(N)
+    abar = zeros(N)
+    vbar[outidx] = 1.0
+    for k in N:-1:1
+        vk, ak = vbar[k], abar[k]
+        ps = t.parents[k]
+        rho = local_cover_slots(t, k, abs(vk); check)
+        if rho !== nothing
+            for (i, p) in enumerate(ps)
+                abar[p] += rho[i]
+            end
+        end
+        (vk == 0 && ak == 0) && continue
+        ds = t.ds[k]
+        for (i, p) in enumerate(ps)
+            vbar[p] += ds[i] * vk
+            abar[p] += abs(ds[i]) * ak
+        end
+    end
+    return (; grad = vbar[1:n], h = abar[1:n])
 end
 
 """
@@ -351,12 +405,15 @@ are valid covers of the Hessian:
 
 Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` for either `h`.
 
-`check` verifies the per-node cover invariants and that the absolute-value reverse sweep
-reproduces `h_sum`.
+`check` verifies the per-node cover invariants, that the absolute-value reverse sweep
+reproduces `h_sum`, and that the fused sweep [`paired_reverse`](@ref) reproduces both the
+gradient and `h_sum`.
 
 The returned `B`, `h_quad`, and the forward absolute sensitivities behind them cost `O(n*L)`;
-they are diagnostics. `h_sum_rev` is computed on the production path — one forward pass, one
-adjoint sweep, and one absolute-value reverse sweep, about twice the cost of a gradient.
+they are diagnostics. The production path is [`paired_reverse`](@ref) — one forward pass and
+one paired reverse sweep, about twice the cost of a gradient — which returns `grad` and
+`h_sum` alone; this function additionally builds the constructive two-sweep form
+(`adjoints`, `local_covers`, `abs_reverse`) that defines them.
 """
 function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
     n, N = t.ninputs, nnodes(t)
@@ -395,6 +452,15 @@ function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
             denom = max(abs(h_sum[q]), 1.0)
             abs(h_sum[q] - h_sum_rev[q]) <= 1e-12 * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
+        end
+        pr = paired_reverse(t, outidx; check=false)  # invariants already checked in local_covers
+        for q in 1:n
+            gdenom = max(abs(vbar[q]), 1.0)
+            abs(vbar[q] - pr.grad[q]) <= 1e-12 * gdenom ||
+                error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
+            hdenom = max(abs(h_sum[q]), 1.0)
+            abs(h_sum[q] - pr.h[q]) <= 1e-12 * hdenom ||
+                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h[q])")
         end
     end
 
