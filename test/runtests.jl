@@ -11,6 +11,7 @@ include("programs.jl")
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1e-10
 
+include("constants.jl")
 include("primitives.jl")
 include("arrayops.jl")
 include("mlp.jl")
