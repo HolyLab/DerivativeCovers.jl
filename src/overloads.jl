@@ -43,6 +43,20 @@ function /(c::Real, x::TVar)
     return unarynode(x, c / w, -c / w^2, 2c / w^3)
 end
 
+# --- numeric literals obtained from the element type ---
+# `one(eltype(x))` and friends are the generic-code idiom for a typed literal. A TVar is a
+# reference to a node on a specific tape, and these forms have no tape in hand (the type-level
+# ones cannot, the instance ones need not), so they return plain `Real` constants, which is what
+# the tape calls a constant: it folds into a node on first contact with a TVar through the
+# arithmetic above. This departs from the usual `one(::Type{T})::T` contract, unavoidably for a
+# tape-attached tracer.
+Base.zero(::Type{TVar}) = 0.0
+Base.one(::Type{TVar}) = 1.0
+Base.oneunit(::Type{TVar}) = 1.0
+Base.zero(::TVar) = 0.0
+Base.one(::TVar) = 1.0
+Base.oneunit(::TVar) = 1.0
+
 # --- power with a constant exponent ---
 function ^(x::TVar, p::Real)
     v = value(x)
