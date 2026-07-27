@@ -82,7 +82,7 @@ function compose_hessian_cover(hg::AbstractVector, gamma::AbstractVector, a::Abs
 end
 
 """
-    declare_submap(F, x0::AbstractVector) -> (; y, J, S)
+    declare_submap(F, x0::AbstractVector; rule=ValueSplit()) -> (; y, J, S)
 
 The declaration [`submapnode`](@ref) consumes, distilled from `F`'s own scratch tape at `x0`:
 exact values `y = F(x0)`, the exact signed Jacobian `J` from per-output reverse sweeps, and
@@ -95,8 +95,15 @@ Costs `O(q*L_F)` time — `q` reverse sweeps over `F`'s tape — once per declar
 tape is discarded afterwards. The declaration transforms covariantly under rescalings of `F`'s
 arguments and outputs because each ingredient inherits the covariance of the underlying sweeps,
 including the zero-parent-value fallback exception of the local tie-break.
+
+`rule` selects the [`SplitRule`](@ref) behind the rows of `S`. The scratch tape's inputs are
+`F`'s arguments, so a [`SensitivitySplit`](@ref) here measures sensitivities relative to those
+arguments and its weights are expressed in their units. This rule and the recording tape's own
+cover rule are independent: the recording tape consumes `S` as a fixed bound, so its covers
+remain valid whatever rule stands behind the declaration, but the exact-minimizer property of
+[`SensitivitySplit`](@ref) holds within each tape separately, not across the boundary.
 """
-function declare_submap(F, x0::AbstractVector)
+function declare_submap(F, x0::AbstractVector; rule::SplitRule=ValueSplit())
     t, out = tape_function(F, x0)
     outidxs = out isa Integer ? [out] : out
     q, n = length(outidxs), t.ninputs
@@ -105,23 +112,24 @@ function declare_submap(F, x0::AbstractVector)
     S = Matrix{Float64}(undef, q, n)
     for k in 1:q
         vbar = adjoints(t, outidxs[k])
-        _, theta = local_covers(t, vbar)
+        _, theta = local_covers(t, vbar; rule)
         S[k, :] = abs_reverse(t, theta)[1:n]
     end
     return (; y, J, S)
 end
 
 """
-    submap(F, xs::AbstractVector{TVar}) -> Vector{TVar}
+    submap(F, xs::AbstractVector{TVar}; rule=ValueSplit()) -> Vector{TVar}
 
 Record `F` as a single declared call on the tape of `xs`: evaluate [`declare_submap`](@ref) at
 the parent values and embed the result via [`submapnode`](@ref). The recording tape gains one
 node per output of `F` — independent of how many operations `F` performs internally — at the
 price that exact Hessian-vector products ([`hvp`](@ref)) become unavailable on that tape. A
-scalar-valued `F` yields a one-element vector.
+scalar-valued `F` yields a one-element vector. `rule` is passed to [`declare_submap`](@ref)
+and governs only the declaration's curvature covers.
 """
-function submap(F, xs::AbstractVector{TVar})
+function submap(F, xs::AbstractVector{TVar}; rule::SplitRule=ValueSplit())
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
-    d = declare_submap(F, [value(x) for x in xs])
+    d = declare_submap(F, [value(x) for x in xs]; rule)
     return submapnode(xs, d.y, d.J, d.S)
 end
