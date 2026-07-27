@@ -190,6 +190,52 @@ include("paired.jl")
         rho1, rho2 = balanced_split(0.0, 1.0, 0.0, 2.0, 8.0)
         @test rho1 / rho2 ≈ 8.0 / 2.0
         @test rho1 * rho2 ≈ 1.0
+
+        # The split lands on the feasible segment [sqrt(c11), c12/sqrt(c22)], so the cover is
+        # exactly tight on the off-diagonal however extreme the entries and values.
+        rng = MersenneTwister(11)
+        for _ in 1:10_000
+            c11 = rand(rng) < 0.25 ? 0.0 : exp(12 * randn(rng))
+            c22 = rand(rng) < 0.25 ? 0.0 : exp(12 * randn(rng))
+            c12 = exp(12 * randn(rng))
+            c12^2 > c11 * c22 || continue
+            z1 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
+            z2 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
+            rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
+            @test isfinite(rho1) && isfinite(rho2)
+            @test rho1 >= sqrt(c11) * (1 - 1e-12)
+            @test rho2 >= sqrt(c22) * (1 - 1e-12)
+            @test rho1 * rho2 ≈ c12 rtol=1e-12
+        end
+
+        # Continuity where the off-diagonal constraint takes over from the diagonal ones: at
+        # c12^2 == c11*c22 the segment collapses to the diagonal cover (sqrt(c11), sqrt(c22)).
+        for eps in (1e-2, 1e-4, 1e-8)
+            rho1, rho2 = balanced_split(1.0, 10.0 * (1 + eps), 100.0, 1.0, 1.0)
+            @test rho1 ≈ 1.0 rtol=2eps
+            @test rho2 ≈ 10.0 rtol=2eps
+        end
+
+        # Continuity as a parent value vanishes: the equalizing target diverges, but the
+        # segment endpoint it is clamped to does not.
+        for z1 in (1e-3, 1e-6, 1e-12, 0.0)
+            rho1, rho2 = balanced_split(1.0, 1.0, 1e-2, z1, 1.0)
+            @test rho1 ≈ 10.0
+            @test rho2 ≈ 0.1
+        end
+
+        # A value ratio extreme enough to overflow or underflow the equalizing target still
+        # lands on the endpoint it was heading for, rather than reverting to the interior.
+        for (z1, z2) in ((1.0, 1e300), (1e-300, 1e300), (1e-300, 1.0), (1.0, Inf))
+            rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
+            @test rho1 ≈ 10.0
+            @test rho2 ≈ 1.0
+        end
+        for (z1, z2) in ((1e300, 1.0), (1e300, 1e-300), (1.0, 1e-300), (Inf, 1.0))
+            rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
+            @test rho1 ≈ 1.0
+            @test rho2 ≈ 10.0
+        end
     end
 
     @testset "node levels and partitions" begin

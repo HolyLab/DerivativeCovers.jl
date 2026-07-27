@@ -186,24 +186,76 @@ end
 """
     balanced_split(c11, c12, c22, z1, z2) -> (rho1, rho2)
 
-Rank-1 cover of an off-diagonal-active 2×2 block `[c11 c12; c12 c22]` (`c12^2 > c11*c22`),
-returning `rho1 >= sqrt(c11)`, `rho2 >= sqrt(c22)`, `rho1*rho2 >= c12`.
+Rank-1 cover of an off-diagonal-active 2×2 block `[c11 c12; c12 c22]`, which requires
+`c12^2 > c11*c22`. Returns `rho1 >= sqrt(c11)` and `rho2 >= sqrt(c22)` with
+`rho1*rho2 == c12`: the cover is exactly tight on the off-diagonal, so no cover of the block is
+smaller in both entries.
 
-The constraints leave a one-parameter family; the parent value magnitudes `z1`, `z2` break the
-tie as scale references, making `rho_i` carry the units of `sqrt(f)/[v_{p_i}]`. Because
-intermediate values do not change when the inputs are rescaled, this keeps the cover
-scale-covariant. When a parent value vanishes, the fallback preserves validity but not the
-scale-covariance argument.
+Those constraints leave a one-parameter family. The parent value magnitudes `z1`, `z2` pick a
+member, giving `rho_i` the units of `sqrt(f)/[v_{p_i}]` and making the cover scale-covariant.
+The result is continuous in all five arguments except where a vanishing parent value meets a
+degenerate block; see the extended help.
+
+# Extended help
+
+The three constraints confine `rho1` to the segment `[sqrt(c11), c12/sqrt(c22)]` — nonempty
+precisely because `c12^2 > c11*c22` — and fix `rho2 = c12/rho1`. Every returned cover lies on
+this segment, which is what makes it entrywise unimprovable: a competitor smaller in both
+entries would have `rho1*rho2 < c12`.
+
+The position along the segment is the point that equalizes the value-weighted scales,
+`rho1*z1 == rho2*z2`, clamped to the segment when that point falls outside. Covariance follows:
+under a rescaling `v_i -> d_i*v_i` of the intermediate variables, `c_ij -> c_ij/(d_i*d_j)` and
+`z_i -> d_i*z_i`, so both endpoints and the equalizing point scale as `1/d_1`; `clamp` is
+positively homogeneous, so `rho_1 -> rho_1/d_1` and `rho_2 -> rho_2/d_2`.
+
+Clamping is also what keeps the result continuous as a parent value vanishes: the equalizing
+point runs off to an endpoint, and the endpoint absorbs it. The `z1 == 0` and `z2 == 0` arms
+therefore take the limits of that point — the upper endpoint and the lower endpoint
+respectively — rather than a separate fallback formula.
+
+That reasoning needs the endpoint being approached to be a positive finite scale, and it is
+not when the corresponding diagonal entry vanishes: `c22 == 0` puts the upper endpoint at
+infinity, `c11 == 0` puts the lower endpoint at zero. Nor is there any limit to take when both
+values vanish at once, since the equalizing point then depends on the ratio `z2/z1` alone. In
+those cases the geometric mean of the endpoints is used, which is covariant and
+permutation-equivariant; when it too is degenerate the balanced `sqrt(c12)` is returned.
+
+So the result is continuous except at three families of inputs, where it is the ratio `z2/z1`
+that carries the information and the ratio is unavailable:
+
+  - `z1 == 0` with `c22 == 0`,
+  - `z2 == 0` with `c11 == 0`,
+  - `z1 == z2 == 0`, for any block.
+
+A multiplication node with a vanishing operand has `c11 == c22 == 0` and meets all three at
+once. Among the elementals of `overloads.jl` it is the only source of the first and third:
+`c22 == 0` otherwise requires `x^y` at `x == 1`, and `^` rejects a nonpositive base, so it
+never presents a vanishing `z1`. The second is also reached by `x^y` at a zero exponent, where
+`c11 == 0` and `z2 == 0` while `c22 > 0`.
 """
 function balanced_split(c11, c12, c22, z1, z2)
-    if z1 > 0 && z2 > 0
-        rho1 = max(sqrt(c12 * z2 / z1), sqrt(c11))
-        rho2 = max(sqrt(c22), c12 / rho1)
+    lo = sqrt(c11)
+    hi = c22 > 0 ? c12 / sqrt(c22) : oftype(lo, Inf)
+    target = if z1 > 0 && z2 > 0
+        sqrt(c12 * z2 / z1)
+    elseif z2 > 0
+        hi
+    elseif z1 > 0
+        lo
     else
-        rho1 = max(sqrt(c12), sqrt(c11))
-        rho2 = max(c12 / rho1, sqrt(c22))
+        oftype(lo, NaN)
     end
-    return rho1, rho2
+    # Clamp before validating: an infinite or zero target is the correct limit whenever the
+    # segment bounds it on that side, so only a target the bounds fail to resolve — NaN, or one
+    # running off an unbounded end — falls through to the endpoint-based choices. Those are
+    # clamped in turn, since neither is confined to the segment on its own.
+    rho1 = clamp(target, lo, hi)
+    if !(isfinite(rho1) && rho1 > 0)
+        g = sqrt(lo * hi)
+        rho1 = clamp((isfinite(g) && g > 0) ? g : sqrt(c12), lo, hi)
+    end
+    return rho1, c12 / rho1
 end
 
 """
