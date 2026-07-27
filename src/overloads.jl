@@ -75,10 +75,17 @@ Base.oneunit(x::TVar) = TVar(1.0)
 Base.convert(::Type{TVar}, c::Real) = TVar(c)
 
 # --- power with a constant exponent ---
+# A leading factor of zero makes the whole term vanish identically: `x^0` is constant and `x^1`
+# is linear, so the derivatives those factors multiply are zero at every `v`. Applying the factor
+# before the power keeps that true at `v == 0`, where the power itself is singular and the product
+# would otherwise be `0 * Inf`. A nonzero factor leaves a genuine singularity singular, as
+# `sqrt` and `inv` are at zero.
 function ^(x::TVar, p::Real)
     isconstant(x) && return TVar(value(x)^p)
     v = value(x)
-    return unarynode(x, v^p, p * v^(p - 1), p * (p - 1) * v^(p - 2))
+    d = iszero(p) ? zero(v) : p * v^(p - 1)
+    C = iszero(p) || isone(p) ? zero(v) : p * (p - 1) * v^(p - 2)
+    return unarynode(x, v^p, d, C)
 end
 # Disambiguate from Base's `x^n` integer-literal path.
 ^(x::TVar, p::Integer) = invoke(^, Tuple{TVar,Real}, x, p)

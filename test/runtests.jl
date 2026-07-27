@@ -98,6 +98,20 @@ include("paired.jl")
         @test_throws "requires a positive base" cover_hessian(x -> (-2.0)^x[1], [1.3])
     end
 
+    @testset "constant powers at the origin" begin
+        # `x^0` is constant and `x^1` linear, so the derivatives their vanishing leading factors
+        # multiply are zero at the origin, where the power those factors multiply is singular.
+        x0 = [0.0, 1.3]
+        for p in (0, 1, 2, 3)
+            f = x -> x[1]^p + x[1] * x[2]
+            res = cover_hessian(f, x0)
+            @test res.grad ≈ ForwardDiff.gradient(f, x0)
+            @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
+        end
+        # A nonzero factor leaves a genuine singularity singular.
+        @test !all(isfinite, cover_hessian(x -> x[1]^0.5 + x[1] * x[2], x0; check=false).h_sum)
+    end
+
     @testset "gradient matches ForwardDiff — $name" for (name, f, x0) in PROBLEMS
         res = cover_hessian(f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
