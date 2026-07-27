@@ -310,6 +310,19 @@ include("paired.jl")
         @test_throws DimensionMismatch cover_hessian(fmul, x0; rule=SensitivitySplit([1.0]))
         @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, 0.0]))
         @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, Inf]))
+
+        # Both channels of the variance pair are seeded from the same splits, so the rule
+        # carries through: the hard channel reproduces the sum merge under the same rule.
+        vc = cover_variance(fmul, xp; rule=SensitivitySplit())
+        @test vc.h_sum == [1.0, 1.0]
+        @test all(>=(1 - 1e-12), vc.severity)
+        @test cover_variance(fmul, xp).h_sum == [2.0, 0.5]
+
+        # A declaration's curvature covers follow the rule; its sensitivities are relative to
+        # the sub-map's own arguments.
+        Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
+        @test declare_submap(Fsub, xp; rule=SensitivitySplit()).S == [1.0 1.0]
+        @test declare_submap(Fsub, xp).S == [2.0 0.5]
     end
 
     @testset "node levels and partitions" begin

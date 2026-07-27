@@ -113,8 +113,8 @@ function dependency_severity(h_sum::AbstractVector, h_var::AbstractVector)
 end
 
 """
-    cover_variance(t::Tape, outidx::Int; check::Bool=true) -> VarianceCover
-    cover_variance(f, x0::AbstractVector; check::Bool=true) -> VarianceCover
+    cover_variance(t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit()) -> VarianceCover
+    cover_variance(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> VarianceCover
 
 The hard sum-merge cover and the variance-channel estimate of the quadrature merge, for the taped
 program with output node `outidx` or for the scalar program `f` at `x0`, together with their
@@ -125,19 +125,20 @@ costs one adjoint sweep and one two-channel reverse sweep — `O(L)` time and me
 of the input dimension — so the estimate is available wherever the sum merge is, unlike the exact
 quadrature merge.
 
-`check` verifies the per-node cover invariants.
+`rule` selects the [`SplitRule`](@ref) behind the per-node covers; both channels are seeded from
+the same splits. `check` verifies the per-node cover invariants.
 """
-function cover_variance(t::Tape, outidx::Int; check::Bool=true)
+function cover_variance(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
     n = t.ninputs
     vbar = adjoints(t, outidx)
-    rhos, theta = local_covers(t, vbar; check)
+    rhos, theta = local_covers(t, vbar; check, rule)
     abar, w = dependency_sweep(t, theta, variance_seeds(t, rhos))
     h_sum = abar[1:n]
     h_var = sqrt.(w[1:n])
     return VarianceCover(vbar[1:n], h_sum, h_var, dependency_severity(h_sum, h_var))
 end
 
-function cover_variance(f, x0::AbstractVector; check::Bool=true)
+function cover_variance(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit())
     t, outidx = tape_function(f, x0)
-    return cover_variance(t, outidx; check)
+    return cover_variance(t, outidx; check, rule)
 end
