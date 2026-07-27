@@ -63,6 +63,8 @@ function nls_loss_tape(r, x0::AbstractVector)
     isempty(rs) && throw(ArgumentError("residual map returned no residuals"))
     all(v -> v isa TVar, rs) ||
         throw(ArgumentError("residual map must return TVars; got element types $(unique(typeof.(rs)))"))
+    any(isconstant, rs) &&
+        throw(ArgumentError("residuals $(findall(isconstant, rs)) are constants; they do not depend on the parameters"))
     all(v -> v.tape === t, rs) ||
         throw(ArgumentError("residuals were recorded on a different tape than the inputs"))
     residx = [v.idx for v in rs]
