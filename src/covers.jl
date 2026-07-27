@@ -339,14 +339,24 @@ SensitivitySplit() = SensitivitySplit(nothing)
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
+# Lazy elementwise absolute value of the tape's value vector: ValueSplit's scale references
+# as an O(1) view, so neither a cover sweep nor a single three-argument local_cover_slots
+# call pays an O(L) copy for them.
+struct AbsValues <: AbstractVector{Float64}
+    vals::Vector{Float64}
+end
+Base.size(a::AbsValues) = size(a.vals)
+Base.IndexStyle(::Type{AbsValues}) = IndexLinear()
+Base.getindex(a::AbsValues, i::Int) = abs(a.vals[i])
+
 """
     split_scales(rule::SplitRule, t::Tape) -> scales
 
-The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): `abs.(t.vals)`
-for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input weights for
-[`SensitivitySplit`](@ref). Computed once per cover sweep and shared by every node.
+The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): a lazy view of
+`abs.(t.vals)` for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input
+weights for [`SensitivitySplit`](@ref). Obtained once per cover sweep and shared by every node.
 """
-split_scales(::ValueSplit, t::Tape) = map(abs, t.vals)
+split_scales(::ValueSplit, t::Tape) = AbsValues(t.vals)
 
 function split_scales(rule::SensitivitySplit, t::Tape)
     theta = zeros(nnodes(t))
