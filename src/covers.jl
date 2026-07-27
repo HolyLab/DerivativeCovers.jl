@@ -191,10 +191,12 @@ Rank-1 cover of an off-diagonal-active 2×2 block `[c11 c12; c12 c22]`, which re
 `rho1*rho2 == c12`: the cover is exactly tight on the off-diagonal, so no cover of the block is
 smaller in both entries.
 
-Those constraints leave a one-parameter family. The parent value magnitudes `z1`, `z2` pick a
-member, giving `rho_i` the units of `sqrt(f)/[v_{p_i}]` and making the cover scale-covariant.
-The result is continuous in all five arguments except where a vanishing parent value meets a
-degenerate block; see the extended help.
+Those constraints leave a one-parameter family. The scale references `z1`, `z2` — one per
+parent, supplied by a [`SplitRule`](@ref): the parent value magnitudes under
+[`ValueSplit`](@ref), the weighted absolute sensitivities under [`SensitivitySplit`](@ref) —
+pick a member, giving `rho_i` the units of `sqrt(f)/[v_{p_i}]` and making the cover
+scale-covariant. The result is continuous in all five arguments except where a vanishing
+scale reference meets a degenerate block; see the extended help.
 
 # Extended help
 
@@ -233,6 +235,10 @@ once. Among the elementals of `overloads.jl` it is the only source of the first 
 `c22 == 0` otherwise requires `x^y` at `x == 1`, and `^` rejects a nonpositive base, so it
 never presents a vanishing `z1`. The second is also reached by `x^y` at a zero exponent, where
 `c11 == 0` and `z2 == 0` while `c22 > 0`.
+
+These zero-reference arms concern the value channel: under [`SensitivitySplit`](@ref) a zero
+scale certifies a dead slot and [`local_cover_slots`](@ref) resolves it before this function
+is reached, so this function only ever receives positive references from that rule.
 """
 function balanced_split(c11, c12, c22, z1, z2)
     lo = sqrt(c11)
@@ -259,6 +265,106 @@ function balanced_split(c11, c12, c22, z1, z2)
 end
 
 """
+    SplitRule
+
+Supertype of the policies that choose among the valid rank-1 covers of a single node. An
+off-diagonal-active 2×2 block confines its cover to a one-parameter family (see
+[`balanced_split`](@ref)), and no function of the block can select within it; a `SplitRule`
+supplies the scale reference for each parent slot that makes the selection. Concrete rules:
+[`ValueSplit`](@ref) (the default) and [`SensitivitySplit`](@ref).
+
+The rule enters every cover construction through [`local_cover_slots`](@ref); pass it via the
+`rule` keyword of [`cover_hessian`](@ref), [`paired_reverse`](@ref), [`local_covers`](@ref), or
+[`cover_hybrid`](@ref). Every rule yields valid covers everywhere — the rules differ in which
+member of the family they pick, hence in tightness and in continuity with respect to the
+evaluation point.
+"""
+abstract type SplitRule end
+
+"""
+    ValueSplit()
+
+The [`SplitRule`](@ref) whose scale references are the parent value magnitudes
+`abs(v_{p_i})`: the split equalizes `rho1*abs(v_{p_1}) == rho2*abs(v_{p_2})`, clamped to the
+feasible segment. This is the default rule.
+
+The value channel is empty at a parent whose value is exactly zero, and the fallbacks for
+that case are documented in [`balanced_split`](@ref)'s extended help. A multiplication node
+whose operands both vanish is the canonical failure: one ulp of input perturbation turns the
+exact zeros into roundoff residue, and the split is then decided by the ratio of two
+roundoff-sized values — the cover stays valid but is discontinuous in the evaluation point.
+[`SensitivitySplit`](@ref) has no such seam there.
+"""
+struct ValueSplit <: SplitRule end
+
+"""
+    SensitivitySplit(w=nothing)
+
+The [`SplitRule`](@ref) whose scale references are input-weighted absolute sensitivities:
+`sigma_j` is the [`abs_forward`](@ref) sweep seeded with the weights `w` at the inputs, so
+`sigma_j >= sum_a w[a] * abs(∂v_j/∂x_a)` with equality when no path cancellation occurs.
+`w = nothing` means unit weights; otherwise `w` must hold one strictly positive finite entry
+per input.
+
+The split equalizes `rho1*sigma_1 == rho2*sigma_2`, clamped to the feasible segment. This is
+the exact minimizer of the weighted sum-merge objective `sum_a w[a]*h_sum[a]` over all
+per-node splits: the sum merge is linear in the per-node weights, so the objective decouples
+into one term `rho1*sigma_1 + rho2*sigma_2` per node, minimized on the feasible segment by
+exactly this clamped equalization. `w` is therefore the statement of *which* cover the rule
+optimizes — the weighted sum of the input bounds — not a tuning knob.
+
+A zero scale is a certificate here, not a gap: `sigma_j == 0` implies every path from the
+inputs to `v_j` carries a zero derivative product, so the total gradient of `v_j` vanishes
+identically and every Hessian contribution through that slot is exactly zero. Such a *dead*
+slot receives no cover weight and the surviving slot covers only its own diagonal; see
+[`local_cover_slots`](@ref). This certificate is what requires `w > 0`: a zero weight could
+zero the scale of a live slot and mark it dead falsely.
+
+Covariance: under a rescaling of the intermediate variables the sigmas transform exactly as
+the values do, so the covariance argument of [`balanced_split`](@ref) applies unchanged.
+Under an input rescaling `x -> D*x` the covers remain exactly covariant when the weights are
+rescaled alongside, `w -> D*w`; with `w` held fixed (the unit default included) the *choice*
+of split — never its validity — depends on the units the inputs are expressed in.
+
+Cost: one extra `O(L)` forward sweep per cover.
+"""
+struct SensitivitySplit{W} <: SplitRule
+    w::W
+end
+SensitivitySplit() = SensitivitySplit(nothing)
+
+# Whether a zero scale reference from this rule certifies that the slot's total gradient
+# vanishes identically, so the slot's Hessian contributions are zero and it needs no cover.
+# A zero *value* certifies nothing of the sort.
+certifies_dead(::ValueSplit) = false
+certifies_dead(::SensitivitySplit) = true
+
+"""
+    split_scales(rule::SplitRule, t::Tape) -> scales
+
+The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): `abs.(t.vals)`
+for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input weights for
+[`SensitivitySplit`](@ref). Computed once per cover sweep and shared by every node.
+"""
+split_scales(::ValueSplit, t::Tape) = map(abs, t.vals)
+
+function split_scales(rule::SensitivitySplit, t::Tape)
+    theta = zeros(nnodes(t))
+    w = rule.w
+    if w === nothing
+        fill!(view(theta, 1:t.ninputs), 1.0)
+    else
+        Base.require_one_based_indexing(w)
+        length(w) == t.ninputs ||
+            throw(DimensionMismatch("SensitivitySplit weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
+        all(wi -> isfinite(wi) && wi > 0, w) ||
+            throw(ArgumentError("SensitivitySplit weights must be strictly positive and finite: a zero weight could zero a live slot's scale and falsely certify it dead"))
+        copyto!(view(theta, 1:t.ninputs), w)
+    end
+    return abs_forward(t, theta)
+end
+
+"""
     local_covers(t::Tape, vbar; check::Bool=true) -> (rhos, theta)
 
 Per-node rank-1 covers. For node `k`, `rhos[k][i] >= 0` satisfies
@@ -280,14 +386,17 @@ against the *declared* bound `s[i]*s[j] >= abs(C[i, j])` by construction, so the
 restriction below does not apply to it. There is no recorded `C` to check the declaration
 against, so `check` cannot audit these nodes — validity is conditional on the declaration.
 
+`rule` selects the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks.
 `check` verifies the covering invariant at every recorded node.
 """
-function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true)
+function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true,
+                      rule::SplitRule=ValueSplit())
     N = nnodes(t)
+    scales = split_scales(rule, t)
     rhos = [Float64[] for _ in 1:N]
     theta = zeros(N)
     for k in (t.ninputs + 1):N
-        rho = local_cover_slots(t, k, abs(vbar[k]); check)
+        rho = local_cover_slots(rule, t, k, abs(vbar[k]), scales; check)
         rho === nothing && continue
         rhos[k] = rho
         for (i, p) in enumerate(t.parents[k])
@@ -299,6 +408,7 @@ end
 
 """
     local_cover_slots(t::Tape, k::Int, av; check::Bool=true) -> Union{Nothing,Vector{Float64}}
+    local_cover_slots(rule::SplitRule, t::Tape, k::Int, av, scales; check::Bool=true)
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
 `rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
@@ -307,8 +417,21 @@ the per-node kernel shared by [`local_covers`](@ref), which accumulates the resu
 `(rhos, theta)`, and [`paired_reverse`](@ref), which deposits them directly into the absolute
 adjoint channel; see [`local_covers`](@ref) for the constructions per node type. `check`
 verifies the covering invariant on recorded nodes.
+
+The first form uses [`ValueSplit`](@ref). The second takes any [`SplitRule`](@ref) together
+with `scales = split_scales(rule, t)`, computed once by the caller and shared across nodes.
+
+Under a rule for which a zero scale certifies a dead slot ([`SensitivitySplit`](@ref)), a slot
+with `scales[p_i] == 0` gets `rho[i] = 0` and its partner covers only its own diagonal. The
+covering invariant deliberately does not hold slotwise there: every entry it would cover is
+multiplied by a total gradient that vanishes identically, so the bound
+`B <= sum_k s_k s_k'` of [`cover_hessian`](@ref) is unaffected.
 """
-function local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true)
+local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true) =
+    local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
+
+function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
+                           scales::AbstractVector; check::Bool=true)
     ps, C = t.parents[k], t.Cs[k]
     if C isa PairedPartials
         c = av
@@ -316,9 +439,12 @@ function local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true)
         q = C.q
         rho = zeros(2q)
         for j in 1:q
-            z1 = abs(t.vals[ps[j]])
-            z2 = abs(t.vals[ps[q + j]])
-            a, b = balanced_split(0.0, c, 0.0, z1, z2)
+            s1 = scales[ps[j]]
+            s2 = scales[ps[q + j]]
+            if certifies_dead(rule) && (s1 == 0 || s2 == 0)
+                continue   # dead pair: both slots stay zero; see the docstring
+            end
+            a, b = balanced_split(0.0, c, 0.0, s1, s2)
             if check
                 rtol = 1e-9
                 a * b >= c * (1 - rtol) ||
@@ -342,12 +468,17 @@ function local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true)
         c12 = av * abs(C[1, 2])
         c22 = av * abs(C[2, 2])
         (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
+        s1, s2 = scales[ps[1]], scales[ps[2]]
+        if certifies_dead(rule) && (s1 == 0 || s2 == 0)
+            # A dead slot needs no cover and gets none; its partner covers only its own
+            # diagonal. The off-diagonal invariant is deliberately not enforced here — the
+            # entries it would cover vanish identically (see the docstring).
+            return [s1 == 0 ? 0.0 : sqrt(c11), s2 == 0 ? 0.0 : sqrt(c22)]
+        end
         if c12^2 <= c11 * c22
             rho1, rho2 = sqrt(c11), sqrt(c22)
         else
-            z1 = abs(t.vals[ps[1]])
-            z2 = abs(t.vals[ps[2]])
-            rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
+            rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
         end
         if check
             rtol = 1e-9
@@ -398,20 +529,23 @@ on the tape and are processed first. That makes `rho_k` — which needs the fini
 computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:ninputs]` up to
 roundoff.
 
-Each node's update consumes only its own partials, its parents' values, and its paired adjoint,
-so the sweep has the shape of a reverse-mode rule set with a widened cotangent — the form a
-compiled AD backend can implement, yielding cover and gradient together at gradient cost.
-`check` verifies the per-node covering invariants, as in [`local_covers`](@ref).
+Each node's update consumes only its own partials, its paired adjoint, and the forward-carried
+scale references of its parents (their values under [`ValueSplit`](@ref), one extra absolute
+forward sweep under [`SensitivitySplit`](@ref)), so the sweep has the shape of a reverse-mode
+rule set with a widened cotangent — the form a compiled AD backend can implement, yielding
+cover and gradient together at gradient cost. `rule` selects the [`SplitRule`](@ref); `check`
+verifies the per-node covering invariants, as in [`local_covers`](@ref).
 """
-function paired_reverse(t::Tape, outidx::Int; check::Bool=true)
+function paired_reverse(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
     n, N = t.ninputs, nnodes(t)
+    scales = split_scales(rule, t)
     vbar = zeros(N)
     abar = zeros(N)
     vbar[outidx] = 1.0
     for k in N:-1:1
         vk, ak = vbar[k], abar[k]
         ps = t.parents[k]
-        rho = local_cover_slots(t, k, abs(vk); check)
+        rho = local_cover_slots(rule, t, k, abs(vk), scales; check)
         if rho !== nothing
             for (i, p) in enumerate(ps)
                 abar[p] += rho[i]
@@ -440,11 +574,12 @@ atom_slots(C, nslots) = (1:nslots,)
 atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
-    cover_hessian(t::Tape, outidx::Int; check::Bool=true) -> CoverResult
-    cover_hessian(f, x0::AbstractVector; check::Bool=true) -> CoverResult
+    cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit()) -> CoverResult
+    cover_hessian(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> CoverResult
 
 Rank-1 covers of the Hessian of the taped program with output node `outidx`, or of the scalar
-program `f` at `x0`. Both merges of the per-node covers `s_k = sum_{i in P_k} rho_k[i] * utilde_i`
+program `f` at `x0`. `rule` selects the [`SplitRule`](@ref) that breaks the tie at
+off-diagonal-active blocks; every rule yields valid covers. Both merges of the per-node covers `s_k = sum_{i in P_k} rho_k[i] * utilde_i`
 are valid covers of the Hessian:
 
 - **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
@@ -467,12 +602,12 @@ one paired reverse sweep, about twice the cost of a gradient — which returns `
 `h_sum` alone; this function additionally builds the constructive two-sweep form
 (`adjoints`, `local_covers`, `abs_reverse`) that defines them.
 """
-function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
+function cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
     n, N = t.ninputs, nnodes(t)
     vbar = adjoints(t, outidx)
     utilde = sensitivities(t)
     B = hessian_bound(t, vbar, utilde)
-    rhos, theta = local_covers(t, vbar; check)
+    rhos, theta = local_covers(t, vbar; check, rule)
 
     ssum = zeros(n)             # sum_k s_k
     ssq = zeros(n)              # sum over atoms of s_atom.^2
@@ -505,7 +640,7 @@ function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
             abs(h_sum[q] - h_sum_rev[q]) <= 1e-12 * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
-        pr = paired_reverse(t, outidx; check=false)  # invariants already checked in local_covers
+        pr = paired_reverse(t, outidx; check=false, rule)  # invariants already checked in local_covers
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)
             abs(vbar[q] - pr.grad[q]) <= 1e-12 * gdenom ||
@@ -519,7 +654,7 @@ function cover_hessian(t::Tape, outidx::Int; check::Bool=true)
     return CoverResult(vbar[1:n], B, h_sum, h_quad, h_sum_rev, N)
 end
 
-function cover_hessian(f, x0::AbstractVector; check::Bool=true)
+function cover_hessian(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit())
     t, outidx = tape_function(f, x0)
-    return cover_hessian(t, outidx; check)
+    return cover_hessian(t, outidx; check, rule)
 end

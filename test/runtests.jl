@@ -238,6 +238,80 @@ include("paired.jl")
         end
     end
 
+    @testset "split rules" begin
+        # Passing ValueSplit explicitly is the default, bitwise.
+        @testset "ValueSplit is the default — $name" for (name, f, x0) in PROBLEMS
+            res = cover_hessian(f, x0)
+            resv = cover_hessian(f, x0; rule=ValueSplit())
+            @test resv.h_sum == res.h_sum
+            @test resv.h_quad == res.h_quad
+        end
+
+        # SensitivitySplit satisfies the same covering chain on the whole battery.
+        @testset "SensitivitySplit covering chain — $name" for (name, f, x0) in PROBLEMS
+            H = ForwardDiff.hessian(f, x0)
+            res = cover_hessian(f, x0; rule=SensitivitySplit())
+            for h in (res.h_sum, res.h_quad)
+                @test all(>=(0), h)
+                @test rank1_ratio(res.B, h) <= GATE
+                @test cover_ratio(H, h) <= GATE
+            end
+            @test res.h_sum_rev ≈ res.h_sum rtol=1e-12
+            # The one-group hybrid reproduces the sum merge under any rule.
+            @test cover_hybrid(f, x0, 1; rule=SensitivitySplit()) ≈ res.h_sum rtol=1e-12
+        end
+
+        # A multiplication node with both operands exactly zero: the value channel is empty
+        # (both scale references vanish), so ValueSplit's split at a nearby point is decided
+        # by the ratio of the two now-tiny values, while the sensitivity channel sees
+        # sigma = 1 on both sides at every point. The perturbations are dyadic, so the
+        # parent values at the displaced point are exact and the value ratio is exactly 4.
+        fmul = x -> (x[1] - 1) * (x[2] - 1)
+        x0 = [1.0, 1.0]
+        xp = [1.0 + 2.0^-40, 1.0 + 2.0^-38]
+        @test cover_hessian(fmul, x0; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(fmul, xp; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(fmul, x0; rule=ValueSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(fmul, xp; rule=ValueSplit()).h_sum == [2.0, 0.5]
+
+        # Dead channel: sigma == 0 certifies that the slot's total gradient vanishes, so the
+        # multiplication node deposits nothing there and its partner covers only its own
+        # (zero) diagonal; the whole cover on that side comes from the x[1]^2 node.
+        fdead = x -> x[1]^2 * x[2]
+        xd = [0.0, 3.0]
+        Hd = ForwardDiff.hessian(fdead, xd)
+        resd = cover_hessian(fdead, xd; rule=SensitivitySplit())
+        @test resd.h_sum ≈ [sqrt(6), 0.0]
+        @test cover_ratio(Hd, resd.h_sum) <= GATE
+        # Approaching the dead point, the response of h is bounded by the sqrt(sigma1*sigma2)
+        # envelope — a square-root cusp, not a jump.
+        rese = cover_hessian(fdead, [2.0^-20, 3.0]; rule=SensitivitySplit())
+        @test maximum(abs, rese.h_sum .- resd.h_sum) <= 2.0^-8
+
+        # A dead inner-product pair: the (x[1]^2, x[3]) pair contributes nothing at x[1] == 0,
+        # the (x[2], x[4]) pair splits 1:1, and the x[1]^2 node covers the (1,1) entry.
+        fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
+        xdot = [0.0, 1.0, 2.0, 3.0]
+        resdot = cover_hessian(fdot, xdot; rule=SensitivitySplit())
+        @test resdot.h_sum ≈ [2.0, 1.0, 0.0, 1.0]
+        @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
+
+        # Input covariance holds when the weights are rescaled alongside the inputs.
+        w = [0.5, 4.0, 1.0, 2.0, 0.25]
+        d = [1e-6, 1e3, 1.0, 1e-2, 1e4]
+        res = cover_hessian(quad_matvec(AQ), XQ; rule=SensitivitySplit(w))
+        resd2 = cover_hessian(xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+                              rule=SensitivitySplit(d .* w))
+        @test resd2.h_sum ≈ res.h_sum ./ d rtol=1e-12
+        @test resd2.h_quad ≈ res.h_quad ./ d rtol=1e-12
+
+        # Weights must be one per input, strictly positive and finite: a zero weight could
+        # zero a live slot's scale and falsely certify it dead.
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule=SensitivitySplit([1.0]))
+        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, 0.0]))
+        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, Inf]))
+    end
+
     @testset "node levels and partitions" begin
         f = x -> exp(x[1] * x[2]) + x[2]
         t, outidx = tape_function(f, [1.0, 2.0])

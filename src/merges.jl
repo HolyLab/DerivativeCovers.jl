@@ -119,13 +119,13 @@ function abs_reverse(t::Tape, Theta::AbstractMatrix)
 end
 
 """
-    cover_hybrid(t::Tape, outidx::Int, groups::AbstractVector{<:Integer}; check::Bool=true) -> h
-    cover_hybrid(t::Tape, outidx::Int, ngroups::Integer; check::Bool=true) -> h
-    cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true) -> h
+    cover_hybrid(t::Tape, outidx::Int, groups::AbstractVector{<:Integer}; check::Bool=true, rule=ValueSplit()) -> h
+    cover_hybrid(t::Tape, outidx::Int, ngroups::Integer; check::Bool=true, rule=ValueSplit()) -> h
+    cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, rule=ValueSplit()) -> h
 
 Cover of the Hessian obtained by summing the per-node covers within each group of `groups` and
 combining the groups in quadrature. An integer `spec` selects a [`cyclic_partition`](@ref) with
-that many groups.
+that many groups. `rule` selects the [`SplitRule`](@ref) behind the per-node covers.
 
 The result is a valid cover for *any* partition: the group partial sums `S_g = sum_{k in g} s_k`
 are nonnegative, so `sum_g S_g S_g' >= sum_k s_k s_k'` entrywise, and Cauchy–Schwarz makes
@@ -142,18 +142,20 @@ on a tape with inner-product nodes is therefore the per-node quadrature merge, b
 `h_quad` from [`cover_hessian`](@ref) rather than equal to it; validity for every partition, and
 the interpolation between the sum and quadrature extremes, are unaffected.
 """
-function cover_hybrid(t::Tape, outidx::Int, groups::AbstractVector{<:Integer}; check::Bool=true)
+function cover_hybrid(t::Tape, outidx::Int, groups::AbstractVector{<:Integer}; check::Bool=true,
+                      rule::SplitRule=ValueSplit())
     vbar = adjoints(t, outidx)
-    rhos, _ = local_covers(t, vbar; check)
+    rhos, _ = local_covers(t, vbar; check, rule)
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
     return [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs]
 end
 
-function cover_hybrid(t::Tape, outidx::Int, ngroups::Integer; check::Bool=true)
-    return cover_hybrid(t, outidx, cyclic_partition(t, ngroups); check)
+function cover_hybrid(t::Tape, outidx::Int, ngroups::Integer; check::Bool=true,
+                      rule::SplitRule=ValueSplit())
+    return cover_hybrid(t, outidx, cyclic_partition(t, ngroups); check, rule)
 end
 
-function cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true)
+function cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, rule::SplitRule=ValueSplit())
     t, outidx = tape_function(f, x0)
-    return cover_hybrid(t, outidx, spec; check)
+    return cover_hybrid(t, outidx, spec; check, rule)
 end

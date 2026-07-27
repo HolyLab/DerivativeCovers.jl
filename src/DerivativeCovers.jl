@@ -7,7 +7,9 @@ A scalar program is recorded on a [`Tape`](@ref) by running it on [`TVar`](@ref)
 [`cover_hessian`](@ref) then returns nonnegative vectors `h` with `abs(H[i,j]) <= h[i]*h[j]`,
 without ever forming the Hessian `H`. The covers are deterministic, guaranteed, and exactly
 covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of the objective
-(`h -> sqrt(c)*h` when `f -> c*f`).
+(`h -> sqrt(c)*h` when `f -> c*f`). Input covariance holds as stated for the default
+[`ValueSplit`](@ref) rule; under [`SensitivitySplit`](@ref) it holds when the input weights are
+rescaled alongside (`w -> D*w`).
 
 The submodule [`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs, with
 reference Hessians, for measuring how loose a cover is and what makes it so.
@@ -22,6 +24,7 @@ import MatrixCovers: support_components, gramcover, gramcover!
 export Tape, TVar, tape_function, nnodes, value
 export CoverResult, cover_hessian, adjoints, sensitivities, hessian_bound,
        local_covers, local_cover_slots, balanced_split, abs_reverse, paired_reverse
+export SplitRule, ValueSplit, SensitivitySplit, split_scales
 export cyclic_partition, node_levels, level_partition, group_seeds, cover_hybrid
 export VarianceCover, cover_variance, variance_seeds, dependency_sweep, dependency_severity
 export hvp, scaled_spectral_radius, spectral_shrink
