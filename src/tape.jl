@@ -85,25 +85,61 @@ Number of nodes recorded on `t`, inputs included. This is the tape length `L`.
 nnodes(t::Tape) = length(t.vals)
 
 """
-    TVar
+    TVar(t::Tape, idx::Integer)
+    TVar(c::Real)
 
-A scalar variable that records each elementary operation applied to it onto a [`Tape`](@ref).
-`idx` is the index of the node holding this variable's value.
+A scalar in a program being recorded, in one of two states. A *recording* `TVar` refers to node
+`idx` of the tape `t`, and every elemental applied to it appends a node. A *constant* `TVar`
+([`isconstant`](@ref)) carries a value and no tape: it is what `eltype(x)(c)` and `zero(eltype(x))`
+produce in generic numeric code, where a typed literal is asked for before any tape is in reach.
+
+Constants are closed under the elementals — an operation on constants alone folds to a constant,
+and an operation mixing the two records against the recording operand with the constant as a
+coefficient — so a constant never reaches a node builder. `val` is the scalar both states carry;
+for a recording `TVar` it equals `t.vals[idx]`, which nodes never mutate once pushed.
 """
 struct TVar
-    tape::Tape
+    tape::Union{Tape,Nothing}
     idx::Int
+    val::Float64
 end
+
+TVar(t::Tape, idx::Integer) = TVar(t, Int(idx), t.vals[idx])
+TVar(c::Real) = TVar(nothing, 0, float(c))
+TVar(x::TVar) = x
+
+"""
+    isconstant(x::TVar) -> Bool
+
+Whether `x` is a constant: a value with no tape behind it, as returned by `TVar(::Real)` and by
+`zero`/`one`/`oneunit` of the element type. A constant contributes coefficients to the nodes it
+enters and has no node of its own.
+"""
+isconstant(x::TVar) = x.tape === nothing
 
 """
     value(x)
 
-The numeric value carried by `x`: `x.tape.vals[x.idx]` for a [`TVar`](@ref), or `x` itself for
-a plain `Real`. The `Real` fallback lets generic code read the value of either a `TVar` or a
-plain number without a branch, detaching a quantity from the tape.
+The numeric value carried by `x`: the recorded value of a [`TVar`](@ref), constant or not, or `x`
+itself for a plain `Real`. The `Real` fallback lets generic code read the value of either a `TVar`
+or a plain number without a branch, detaching a quantity from the tape.
 """
-value(x::TVar) = x.tape.vals[x.idx]
+value(x::TVar) = x.val
 value(x::Real) = x
+
+"""
+    noderef(x::TVar) -> (tape, idx)
+
+The tape and node index behind `x`. A constant has neither: every elemental folds a constant
+operand into one that records, so reaching here with a constant means a caller bypassed that
+folding.
+"""
+function noderef(x::TVar)
+    t = x.tape
+    t === nothing &&
+        throw(ArgumentError("a constant TVar (value $(value(x))) has no node on any tape; it must be folded into an operand that does"))
+    return t, x.idx
+end
 
 """
     pushnode!(t::Tape, val, parents, d, C) -> TVar
@@ -124,7 +160,10 @@ end
 
 Record a node `φ(x)` with value `val`, `φ'(x) = d`, and `φ''(x) = c`.
 """
-unarynode(x::TVar, val, d, c) = pushnode!(x.tape, val, [x.idx], [float(d)], fill(float(c), 1, 1))
+function unarynode(x::TVar, val, d, c)
+    t, i = noderef(x)
+    return pushnode!(t, val, [i], [float(d)], fill(float(c), 1, 1))
+end
 
 """
     binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22) -> TVar
@@ -133,8 +172,10 @@ Record a node `φ(x, y)` with value `val`, first partials `(d1, d2)`, and second
 `[c11 c12; c12 c22]`.
 """
 function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
-    x.tape === y.tape || throw(ArgumentError("cannot combine TVars from different tapes"))
-    return pushnode!(x.tape, val, [x.idx, y.idx], [float(d1), float(d2)],
+    tx, ix = noderef(x)
+    ty, iy = noderef(y)
+    tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
+    return pushnode!(tx, val, [ix, iy], [float(d1), float(d2)],
                      Float64[c11 c12; c12 c22])
 end
 
@@ -150,17 +191,19 @@ function dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     isempty(ws) && throw(ArgumentError("cannot record an empty inner product"))
     idxs = eachindex(ws, xs)
     q = length(idxs)
-    t = ws[first(idxs)].tape
+    t, _ = noderef(ws[first(idxs)])
     val = 0.0
     parents = Vector{Int}(undef, 2q)
     ds = Vector{Float64}(undef, 2q)
     for (n, j) in enumerate(idxs)
         w, x = ws[j], xs[j]
-        (w.tape === t && x.tape === t) ||
+        tw, iw = noderef(w)
+        tx, ix = noderef(x)
+        (tw === t && tx === t) ||
             throw(ArgumentError("cannot combine TVars from different tapes"))
         val += value(w) * value(x)
-        parents[n] = w.idx
-        parents[q + n] = x.idx
+        parents[n] = iw
+        parents[q + n] = ix
         ds[n] = value(x)
         ds[q + n] = value(w)
     end
@@ -177,15 +220,15 @@ constants and `TVar`s has no second-order term.
 function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty inner product"))
     idxs = eachindex(coeffs, xs)
-    t = xs[first(idxs)].tape
+    t, _ = noderef(xs[first(idxs)])
     val = 0.0
     parents = Vector{Int}(undef, length(idxs))
     ds = Vector{Float64}(undef, length(idxs))
     for (n, j) in enumerate(idxs)
-        x = xs[j]
-        x.tape === t || throw(ArgumentError("cannot combine TVars from different tapes"))
-        val += coeffs[j] * value(x)
-        parents[n] = x.idx
+        tx, ix = noderef(xs[j])
+        tx === t || throw(ArgumentError("cannot combine TVars from different tapes"))
+        val += coeffs[j] * value(xs[j])
+        parents[n] = ix
         ds[n] = float(coeffs[j])
     end
     return pushnode!(t, val, parents, ds, Matrix{Float64}(undef, 0, 0))
@@ -227,10 +270,10 @@ function submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
             throw(DimensionMismatch("S is $(size(S)); expected ($q, $p) (outputs × arguments)"))
         all(>=(0), S) || throw(ArgumentError("curvature covers S must be nonnegative"))
     end
-    t = xs[1].tape
-    all(x -> x.tape === t, xs) ||
+    t, _ = noderef(xs[1])
+    all(x -> first(noderef(x)) === t, xs) ||
         throw(ArgumentError("cannot combine TVars from different tapes"))
-    parents = [x.idx for x in xs]     # shared by all q nodes; parent lists are never mutated
+    parents = [last(noderef(x)) for x in xs]   # shared by all q nodes; parent lists are never mutated
     return [begin
                 C = if S === nothing || all(iszero, view(S, k, :))
                     Matrix{Float64}(undef, 0, 0)
@@ -261,6 +304,8 @@ function tape_function(f, x0::AbstractVector)
 end
 
 function _tape_output(t::Tape, out::TVar)
+    isconstant(out) &&
+        throw(ArgumentError("program output is a constant (value $(value(out))); it does not depend on the inputs"))
     out.tape === t ||
         throw(ArgumentError("program output was recorded on a different tape than its inputs"))
     return t, out.idx
@@ -270,6 +315,8 @@ function _tape_output(t::Tape, out::AbstractVector)
     isempty(out) && throw(ArgumentError("program returned no outputs"))
     all(v -> v isa TVar, out) ||
         throw(ArgumentError("program output vector must contain only TVars; got element types $(unique(map(typeof, out)))"))
+    any(isconstant, out) &&
+        throw(ArgumentError("program outputs $(findall(isconstant, out)) are constants; they do not depend on the inputs"))
     all(v -> v.tape === t, out) ||
         throw(ArgumentError("some program outputs were recorded on a different tape than the inputs"))
     return t, [v.idx for v in out]

@@ -21,7 +21,7 @@ using Random: AbstractRNG, MersenneTwister, randn
 using MatrixCovers: SupportComponents, ncomponents, rowcomponent, colcomponent
 import MatrixCovers: support_components, gramcover, gramcover!
 
-export Tape, TVar, tape_function, nnodes, value
+export Tape, TVar, tape_function, nnodes, value, isconstant
 export CoverResult, cover_hessian, adjoints, sensitivities, hessian_bound,
        local_covers, local_cover_slots, balanced_split, abs_reverse, paired_reverse
 export SplitRule, ValueSplit, SensitivitySplit, split_scales
