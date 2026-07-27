@@ -436,9 +436,33 @@ with `scales[p_i] == 0` gets `rho[i] = 0` and its partner covers only its own di
 covering invariant deliberately does not hold slotwise there: every entry it would cover is
 multiplied by a total gradient that vanishes identically, so the bound
 `B <= sum_k s_k s_k'` of [`cover_hessian`](@ref) is unaffected.
+
+A node whose covering entries are not finite is reported by
+[`check_finite_partials`](@ref) rather than by the invariant test.
 """
 local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true) =
     local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
+
+"""
+    check_finite_partials(t::Tape, k::Int, av, c::Tuple)
+
+Throw unless the absolute adjoint `av` of node `k` and its covering entries `c` are all finite,
+reporting the node's own value and its parents' values.
+
+The covering invariant is a set of comparisons against `c`, so it cannot fire meaningfully when
+`c` is not finite: every comparison against `NaN` is false and no finite `rho` covers an infinite
+entry, so the test would reject a split that is not at fault. A non-finite `c` says instead that
+the program is not twice-differentiable where it was recorded — a division by zero, or a power,
+logarithm or root at its singularity. A non-finite `av` says the same of a node downstream, whose
+partials the adjoint has already passed through.
+"""
+function check_finite_partials(t::Tape, k::Int, av::Real, c::Tuple)
+    (isfinite(av) && all(isfinite, c)) && return nothing
+    cause = isfinite(av) ? "node $k has non-finite second partials c=$c" :
+                           "the absolute adjoint reaching node $k is $av, from a node downstream"
+    error("$cause; the program is not twice-differentiable at this point (node value " *
+          "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))")
+end
 
 function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
                            scales::AbstractVector; check::Bool=true)
@@ -456,6 +480,7 @@ function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
             end
             a, b = balanced_split(0.0, c, 0.0, s1, s2)
             if check
+                check_finite_partials(t, k, av, (c,))
                 rtol = 1e-9
                 a * b >= c * (1 - rtol) ||
                     error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
@@ -491,6 +516,7 @@ function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
             rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
         end
         if check
+            check_finite_partials(t, k, av, (c11, c12, c22))
             rtol = 1e-9
             (rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
              rho1 * rho2 >= c12 * (1 - rtol)) ||

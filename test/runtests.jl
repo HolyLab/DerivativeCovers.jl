@@ -98,6 +98,20 @@ include("paired.jl")
         @test_throws "requires a positive base" cover_hessian(x -> (-2.0)^x[1], [1.3])
     end
 
+    @testset "constant powers at the origin" begin
+        # `x^0` is constant and `x^1` linear, so the derivatives their vanishing leading factors
+        # multiply are zero at the origin, where the power those factors multiply is singular.
+        x0 = [0.0, 1.3]
+        for p in (0, 1, 2, 3)
+            f = x -> x[1]^p + x[1] * x[2]
+            res = cover_hessian(f, x0)
+            @test res.grad ≈ ForwardDiff.gradient(f, x0)
+            @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
+        end
+        # A nonzero factor leaves a genuine singularity singular.
+        @test !all(isfinite, cover_hessian(x -> x[1]^0.5 + x[1] * x[2], x0; check=false).h_sum)
+    end
+
     @testset "gradient matches ForwardDiff — $name" for (name, f, x0) in PROBLEMS
         res = cover_hessian(f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
@@ -236,6 +250,39 @@ include("paired.jl")
             @test rho1 ≈ 1.0
             @test rho2 ≈ 10.0
         end
+    end
+
+    @testset "non-finite second partials" begin
+        # A program evaluated where it is not twice-differentiable is named as such, rather than
+        # blamed on the split: the covering invariant compares against entries that are NaN or
+        # infinite, so it would reject a split that covers everything coverable.
+
+        # Binary node: a divided difference whose denominator vanishes is 0/0, giving
+        # C = [0 -Inf; -Inf NaN].
+        divdiff = x -> (exp(x[1]) - exp(x[2])) / (x[1] - x[2])
+        @test_throws "not twice-differentiable" cover_hessian(divdiff, [0.5, 0.5])
+
+        # The offending node is named where the sweep reaches it first. `paired_reverse` runs in
+        # reverse order and so meets the division itself; the forward pass of `local_covers`
+        # meets one of its parents, whose adjoint has already come through the division.
+        tsing, osing = tape_function(divdiff, [0.5, 0.5])
+        @test_throws "non-finite second partials" paired_reverse(tsing, osing)
+        @test_throws "node value NaN" paired_reverse(tsing, osing)
+        @test_throws "from a node downstream" local_covers(tsing, adjoints(tsing, osing))
+
+        # Inner-product node: its covering entry is the absolute adjoint, which the reciprocal of
+        # a vanishing inner product makes infinite.
+        recipdot = x -> 1 / dot(x[1:2], x[3:4])
+        @test_throws "not twice-differentiable" cover_hessian(recipdot, [1.0, 2.0, 2.0, -1.0])
+
+        # `check=false` remains the way to get IEEE propagation instead: the cover comes back
+        # non-finite for the caller to test, as `abs.(H) <= h*h'` cannot hold at such a point.
+        @test !all(isfinite, cover_hessian(divdiff, [0.5, 0.5]; check=false).h_sum)
+        @test !all(isfinite, cover_hessian(recipdot, [1.0, 2.0, 2.0, -1.0]; check=false).h_sum)
+
+        # Away from the singularity both programs cover normally.
+        @test all(isfinite, cover_hessian(divdiff, [0.5, 1.5]).h_sum)
+        @test all(isfinite, cover_hessian(recipdot, [1.0, 2.0, 2.0, 1.0]).h_sum)
     end
 
     @testset "split rules" begin
