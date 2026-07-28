@@ -704,6 +704,7 @@ exact forced excess: longer support cycles can dominate it, and [`jacobian_minim
 computes the exact value together with a pair attaining it.
 """
 function jacobian_representability(M::AbstractMatrix)
+    Base.require_one_based_indexing(M)
     m, n = size(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
     worst = 0.0
