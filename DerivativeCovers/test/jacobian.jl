@@ -283,8 +283,8 @@
             # :quad, :max, and the geomean a-rule reach their own fixed points and stay valid.
             # (Fixed points of different rules are not comparable entrywise; tightness
             # comparisons live in the measurement scripts.)
-            for kwargs in ((; merge=:quad), (; merge=:max), (; arule=:geomean),
-                           (; merge=:max, arule=:geomean))
+            for kwargs in ((; merge=QuadMerge()), (; merge=MaxMerge()), (; arule=:geomean),
+                           (; merge=MaxMerge(), arule=:geomean))
                 balv = balance_cover(t, outidxs; kwargs...)
                 @test jacobian_ratio(U, balv.a, balv.b) <= GATE
                 @test jacobian_ratio(J, balv.a, balv.b) <= GATE
@@ -303,7 +303,7 @@
         J = ForwardDiff.jacobian(r, x0)
         @test_throws "total support" balance_cover(t, outidxs; maxiter=50)
         @test_throws "total support" balance_cover(U; maxiter=50)
-        for kwargs in ((; arule=:geomean), (; arule=:geomean, merge=:max))
+        for kwargs in ((; arule=:geomean), (; arule=:geomean, merge=MaxMerge()))
             bal = balance_cover(t, outidxs; kwargs...)
             @test jacobian_ratio(U, bal.a, bal.b) <= GATE
             @test jacobian_ratio(J, bal.a, bal.b) <= GATE
@@ -320,8 +320,14 @@
         rng = MersenneTwister(7)
         u, v = exp.(randn(rng, 6)), exp.(randn(rng, 4))
         U = u * v'
+        # The annotation supplies the rule check: there is no list of admissible spellings to
+        # fall out of date, and SumMerge() is the default in both call forms.
+        @test_throws TypeError balance_cover(U; merge=:max)
+        @test balance_cover(U; merge=SumMerge()).b == balance_cover(U).b
+        @test SumMerge() isa MergeRule && QuadMerge() isa MergeRule && MaxMerge() isa MergeRule
+
         # The max-merge fixed point recovers a rank-1 magnitude matrix exactly.
-        balx = balance_cover(U; merge=:max)
+        balx = balance_cover(U; merge=MaxMerge())
         @test balx.a .* balx.b' ≈ U
         # The sum-merge fixed point is the Sinkhorn scaling: every row and column of the ratio
         # matrix R = U ./ (a .* b') sums to 1 after its own half-step; on rank-1 the uniform
@@ -394,7 +400,7 @@
         @test balance_cover(Ucyc).iters < 1000               # :sum/marginal (Sinkhorn) converges
 
         stall = try
-            balance_cover(Ucyc; merge=:max, maxiter=100_000)
+            balance_cover(Ucyc; merge=MaxMerge(), maxiter=100_000)
             nothing
         catch e
             e
@@ -405,7 +411,7 @@
         # Detected as a stall, not by exhausting the (large) budget.
         @test occursin("stalled", stall.msg)
 
-        bal = balance_cover(Ucyc; merge=:max, arule=:geomean)
+        bal = balance_cover(Ucyc; merge=MaxMerge(), arule=:geomean)
         @test jacobian_ratio(Ucyc, bal.a, bal.b) <= GATE
     end
 
@@ -422,12 +428,12 @@
             k > 1 && (Uslow[k, k - 1] = 0.5)
         end
 
-        bal = balance_cover(Uslow; merge=:max, arule=:geomean)
+        bal = balance_cover(Uslow; merge=MaxMerge(), arule=:geomean)
         @test jacobian_ratio(Uslow, bal.a, bal.b) <= GATE
         @test bal.iters > 1000                                # exceeds the marginal budget
 
         undersized = try
-            balance_cover(Uslow; merge=:max, arule=:geomean, maxiter=10)
+            balance_cover(Uslow; merge=MaxMerge(), arule=:geomean, maxiter=10)
             nothing
         catch e
             e

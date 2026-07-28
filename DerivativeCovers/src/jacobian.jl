@@ -251,15 +251,55 @@ function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
 end
 
 """
-    balance_cover(t::Tape, outidxs; merge=:sum, arule=:marginal, a0=nothing,
+    MergeRule
+
+How [`balance_cover`](@ref)'s b-step combines a column of the scaled surrogate into one input
+weight: given the entries `Ũ_kj/a_k` over the outputs `k`, it returns `b_j`. Every rule that
+dominates each of its terms yields a valid cover, so the choice trades tightness, never validity.
+
+The family is open, and deliberately so. [`cover_jacobian_hybrid`](@ref) computes a group-max
+merge that interpolates between [`SumMerge`](@ref) (one group) and [`MaxMerge`](@ref) (one output
+per group); it carries a partition, so it could only ever join this family as a type, never as a
+name. It is not a `MergeRule` today — it reaches the inputs by its own sweep rather than through
+this b-step. A new rule defines a method of the b-step accumulation for its own type.
+
+`arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
+see that function's docstring.
+"""
+abstract type MergeRule end
+
+"""
+    SumMerge <: MergeRule
+
+`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and the only one the tape form can run as `O(L)` sweeps.
+"""
+struct SumMerge <: MergeRule end
+
+"""
+    QuadMerge <: MergeRule
+
+`b_j = √(∑_k (Ũ_kj/a_k)²)`, combining the same terms in quadrature.
+"""
+struct QuadMerge <: MergeRule end
+
+"""
+    MaxMerge <: MergeRule
+
+`b_j = max_k Ũ_kj/a_k`, the exact minimal `b` for the given `a`. Non-smooth, so its marginal
+alternation can settle into a limit cycle; see [`balance_cover`](@ref).
+"""
+struct MaxMerge <: MergeRule end
+
+"""
+    balance_cover(t::Tape, outidxs; merge=SumMerge(), arule=:marginal, a0=nothing,
                   maxiter=nothing, rtol=eps(eltype(t.vals))^(2//3), check=true)
     balance_cover(r, x0::AbstractVector; kwargs...)
-    balance_cover(Utilde::AbstractMatrix; merge=:sum, arule=:marginal, a0=nothing,
+    balance_cover(Utilde::AbstractMatrix; merge=SumMerge(), arule=:marginal, a0=nothing,
                   maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3))
 
 Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
-with the `merge` b-step `b_j = ∑_k Ũ_kj/a_k` (`:sum`; `:quad` and `:max` combine the same terms in
-quadrature or by maximum). Returns `(; a, b, iters, delta)` — the pair (whose `b` is the chosen
+with the [`MergeRule`](@ref) b-step ([`SumMerge`](@ref), [`QuadMerge`](@ref) or
+[`MaxMerge`](@ref)). Returns `(; a, b, iters, delta)` — the pair (whose `b` is the chosen
 merge for the returned `a`, so it is a valid cover of the surrogate for any `arule`), the number
 of alternation rounds, and the final gauge-invariant change bound
 `delta = max_{kj} |log((a_k b_j)_new / (a_k b_j)_old)|`. Throws when `delta ≤ rtol` is not reached
@@ -267,18 +307,24 @@ within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → 
 fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
 untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
 
+The two strategy axes are spelled differently because only one of them is open. `merge` is a
+[`MergeRule`](@ref) type: the family is a continuum whose interpolating member, the group-max
+merge of [`cover_jacobian_hybrid`](@ref), carries a partition and so cannot be a `Symbol`.
+`arule` is a `Symbol`: `:marginal` and `:geomean` are a closed pair of distinct algorithms that
+carry no data and admit no obvious third member.
+
 `maxiter = nothing` (the default) selects a per-rule budget: `1000` rounds for the marginal
 alternation, `10000` for the slower `:geomean` fit; pass an explicit count to override.
 
 - `arule = :marginal` alternates `a = ` [`marginal_weights`](@ref)`(…, b)` with the `merge`
   b-step. Every iterate is a valid cover — each half-step is valid for any positive other side —
-  so the alternation trades only tightness, never validity. With `merge = :sum` this is exactly
+  so the alternation trades only tightness, never validity. With [`SumMerge`](@ref) this is exactly
   Sinkhorn matrix scaling of `Ũ` (the b-step normalizes the columns of `R_kj = Ũ_kj/(a_k b_j)`,
   the a-step its rows), and it inherits Sinkhorn's convergence condition: the sparsity pattern of
   `Ũ` must have **total support** (every nonzero entry on some positive diagonal). Dense patterns
   qualify; a pattern with a nonzero entry on no positive diagonal (e.g. triangular) makes the
   iteration drift without bound — every iterate still covers, but the excess grows by a constant
-  per round and the run ends in the non-convergence error. The `merge = :max` b-step is
+  per round and the run ends in the non-convergence error. The [`MaxMerge`](@ref) b-step is
   non-smooth and can instead settle into a **limit cycle**: the per-round product change plateaus
   at a positive constant that no larger `maxiter` reduces (independent of total support). This is
   detected and reported as a stall, distinct from the drift error; `arule = :geomean` is the
@@ -296,7 +342,7 @@ gauge drift that is geometric in the round count; each round therefore renormali
 of two nearest `a`'s geometric mean, which is exact in floating point and leaves every product
 `a_k b_j` bit-identical.
 
-The tape form with `merge = :sum, arule = :marginal` (the default) runs both steps as `O(L)`
+The tape form with `merge = SumMerge(), arule = :marginal` (the default) runs both steps as `O(L)`
 sweeps ([`abs_forward`](@ref) seeded `1/b_j` at the inputs, [`abs_reverse`](@ref) seeded `1/a_k`
 at the output nodes) without ever forming `Ũ` — the production path. Every other combination
 needs per-output separation, so the tape form forms the surrogate once (`O(mL)`, diagnostic tier)
@@ -307,12 +353,12 @@ and balances it explicitly. The matrix form accepts any nonnegative magnitude ma
 `Utilde` directly). A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a
 zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
 """
-function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbol=:sum,
+function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule=SumMerge(),
                        arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
                        rtol::Real=eps(float(real(eltype(t.vals))))^(2//3), check::Bool=true)
     m, N = length(outidxs), nnodes(t)
     maxiter = _resolve_maxiter(maxiter, arule)
-    if merge !== :sum || arule !== :marginal
+    if !(merge isa SumMerge) || arule !== :marginal
         # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
         # explicit surrogate instead.
         return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol)
@@ -345,7 +391,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbo
     end
     astep = b -> marginal_weights(t, outidxs, b)
 
-    a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(:sum))
+    a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(SumMerge()))
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         r = jacobian_ratio(Utilde, a, b)
@@ -362,13 +408,11 @@ function balance_cover(r, x0::AbstractVector; kwargs...)
     return balance_cover(t, outidxs; kwargs...)
 end
 
-function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol=:marginal,
+function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arule::Symbol=:marginal,
                        a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
                        rtol::Real=eps(float(real(eltype(Utilde))))^(2//3))
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
-    merge in (:sum, :quad, :max) ||
-        throw(ArgumentError("merge must be :sum, :quad, or :max; got $(repr(merge))"))
     maxiter = _resolve_maxiter(maxiter, arule)
     m, n = size(Utilde)
     a = _balance_start(a0, m)
@@ -390,7 +434,17 @@ function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol
     return (; a, b, iters, delta)
 end
 
-function _merge_bstep(U, a, merge)
+# One rule-specific step of the b-step accumulation, and the pass the rule needs once its column
+# is complete. Methods rather than a branch: `merge` is concrete, so the doubly-nested loop below
+# specializes on it instead of testing per entry.
+_merge_accum(::SumMerge, bj, tkj) = bj + tkj
+_merge_accum(::QuadMerge, bj, tkj) = bj + tkj^2
+_merge_accum(::MaxMerge, bj, tkj) = max(bj, tkj)
+
+_merge_finalize!(::MergeRule, b) = b
+_merge_finalize!(::QuadMerge, b) = (b .= sqrt.(b); b)
+
+function _merge_bstep(U, a, merge::MergeRule)
     m, n = size(U)
     b = zeros(n)
     for j in 1:n, k in 1:m
@@ -398,17 +452,9 @@ function _merge_bstep(U, a, merge)
         Ukj == 0 && continue
         a[k] > 0 ||
             throw(ArgumentError("a is zero on live output $k (Utilde[$k, $j] = $Ukj); no input cover can cover it"))
-        tkj = Ukj / a[k]
-        if merge === :sum
-            b[j] += tkj
-        elseif merge === :quad
-            b[j] += tkj^2
-        else
-            b[j] = max(b[j], tkj)
-        end
+        b[j] = _merge_accum(merge, b[j], Ukj / a[k])
     end
-    merge === :quad && (b .= sqrt.(b))
-    return b
+    return _merge_finalize!(merge, b)
 end
 
 # Per-rule default iteration budget: the marginal alternation converges in a few hundred rounds
@@ -417,10 +463,10 @@ _resolve_maxiter(maxiter, arule::Symbol) =
     maxiter === nothing ? (arule === :geomean ? 10_000 : 1_000) : maxiter
 
 # Non-convergence hint for the marginal alternation, specific to how each merge can fail.
-_marginal_hint(merge::Symbol) =
-    merge === :max ?
-        "; the max merge's marginal alternation can enter a limit cycle — arule=:geomean converges for every pattern" :
-        "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern"
+_marginal_hint(::MergeRule) =
+    "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern"
+_marginal_hint(::MaxMerge) =
+    "; the max merge's marginal alternation can enter a limit cycle — arule=:geomean converges for every pattern"
 
 # Alternating geometric-mean fit of log U_kj ≈ log a_k + log b_j over the nonzero entries:
 # coordinate descent on the two-way least-squares objective, convergent for every pattern.

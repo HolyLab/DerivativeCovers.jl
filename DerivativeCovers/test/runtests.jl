@@ -20,7 +20,8 @@ using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, boun
                         declare_submap, submap, cyclic_partition, level_partition, node_levels,
                         nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
                         local_covers, balanced_split, variance_seeds, dependency_sweep,
-                        jacobian_surrogate, marginal_weights, balance_cover
+                        jacobian_surrogate, marginal_weights, balance_cover,
+                        MergeRule, SumMerge, QuadMerge, MaxMerge
 # This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
 using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
                     rowcomponent, colcomponent
@@ -117,7 +118,7 @@ include("paired.jl")
                    :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
                    :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
                    :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-                   :balance_cover)
+                   :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge)
         for sym in private
             @test isdefined(DerivativeCovers, sym)
             VERSION >= v"1.11" && @test !Base.ispublic(DerivativeCovers, sym)
