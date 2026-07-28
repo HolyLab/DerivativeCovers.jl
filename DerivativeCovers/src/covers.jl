@@ -343,7 +343,17 @@ Cost: one extra `O(L)` forward sweep per cover.
 """
 struct SensitivitySplit{W} <: SplitRule
     w::W
+
+    function SensitivitySplit{W}(w) where W
+        w === nothing || all(wi -> isfinite(wi) && wi > 0, w) ||
+            throw(ArgumentError("SensitivitySplit weights must be strictly positive and finite: " *
+                                "a zero weight could zero a live slot's scale and falsely " *
+                                "certify it dead"))
+        return new{W}(w)
+    end
 end
+SensitivitySplit(w) = SensitivitySplit{typeof(w)}(w)
+SensitivitySplit{W}() where {W} = SensitivitySplit{W}(nothing)
 SensitivitySplit() = SensitivitySplit(nothing)
 
 """
@@ -387,8 +397,6 @@ function split_scales(rule::SensitivitySplit, t::Tape)
         Base.require_one_based_indexing(w)
         length(w) == t.ninputs ||
             throw(DimensionMismatch("SensitivitySplit weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
-        all(wi -> isfinite(wi) && wi > 0, w) ||
-            throw(ArgumentError("SensitivitySplit weights must be strictly positive and finite: a zero weight could zero a live slot's scale and falsely certify it dead"))
         copyto!(view(theta, 1:t.ninputs), w)
     end
     return abs_forward(t, theta)

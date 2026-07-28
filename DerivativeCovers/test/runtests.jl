@@ -492,11 +492,19 @@ include("paired.jl")
         @test resd2.h_sum ≈ res.h_sum ./ d rtol=1e-12
         @test resd2.h_quad ≈ res.h_quad ./ d rtol=1e-12
 
-        # Weights must be one per input, strictly positive and finite: a zero weight could
-        # zero a live slot's scale and falsely certify it dead.
+        # Weights must be strictly positive and finite — a zero weight could zero a live slot's
+        # scale and falsely certify it dead — and a malformed rule cannot be built at all.
+        @test_throws "strictly positive" SensitivitySplit([1.0, 0.0])
+        @test_throws "strictly positive" SensitivitySplit([1.0, Inf])
+        @test_throws "strictly positive" SensitivitySplit([1.0, NaN])
+        # Length is the one requirement that cannot be checked without a tape.
         @test_throws DimensionMismatch cover_hessian(fmul, x0; rule=SensitivitySplit([1.0]))
-        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, 0.0]))
-        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, Inf]))
+
+        # Every reachable call form builds the same rule.
+        @test SensitivitySplit() === SensitivitySplit(nothing) === SensitivitySplit{Nothing}()
+        let w = [1.0, 2.0]
+            @test SensitivitySplit(w) === SensitivitySplit{typeof(w)}(w)
+        end
 
         # Both channels of the variance pair are seeded from the same splits, so the rule
         # carries through: the hard channel reproduces the sum merge under the same rule.
