@@ -1149,6 +1149,14 @@ include("paired.jl")
         @test spiked.x ≈ A \ b
 
         @test_throws "strictly positive" cover_cg(A, b, [0.0, 2.0, 3.0])
+
+        # An indefinite A gives a direction of nonpositive curvature; without the guard the
+        # division by it would fill x and the whole history with NaN.
+        Aneg = Matrix(Diagonal([1.0, -4.0, 9.0]))
+        @test_throws "nonpositive curvature" cover_cg(Aneg, b, h)
+        @test_throws ArgumentError cover_cg(Aneg, b, h)
+        # A singular direction is caught on the same test.
+        @test_throws "nonpositive curvature" cover_cg(zeros(3, 3), b, h)
     end
 
     @testset "cover quality is step quality under a truncated CG" begin
