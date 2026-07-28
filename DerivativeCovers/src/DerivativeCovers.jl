@@ -18,10 +18,10 @@ reached by qualification. Tape methods for `MatrixCovers.support_components`,
 `MatrixCovers.gramcover`, and `MatrixCovers.gramcover!` are defined here, but those functions
 belong to MatrixCovers: calling them unqualified takes `using MatrixCovers` as well.
 
-Two submodules serve the study of cover quality rather than its use:
-[`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs with reference
-Hessians, and [`DerivativeCovers.Diagnostics`](@ref) supplies the instruments that measure what a
-loose cover costs a consumer of it.
+The [`DerivativeCovers.Diagnostics`](@ref) submodule serves the study of cover quality rather than
+its use: it supplies the instruments that measure what a loose cover costs a consumer of it. The
+programs those instruments are exercised on live in the companion package
+`DerivativeCoverProblems`, which depends on nothing here.
 """
 module DerivativeCovers
 
@@ -79,6 +79,5 @@ include("gram.jl")
 include("equilibrate.jl")
 include("compose.jl")
 include("diagnostics.jl")
-include("problems.jl")
 
 end

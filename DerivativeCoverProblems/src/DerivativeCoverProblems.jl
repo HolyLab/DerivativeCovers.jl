@@ -1,14 +1,17 @@
 """
-    DerivativeCovers.Problems
+    DerivativeCoverProblems
 
 Parameterized families of scalar programs for studying cover quality.
 
-Each generator returns a [`CoverProblem`](@ref): a program `f` written from the elementals
-[`TVar`](@ref DerivativeCovers.TVar) overloads (so it can be taped), the point `x0` to evaluate
-it at, an optional idiomatic-Julia `twin` that computes the same function by an independent
-route, and an optional analytic `hessian`. The families differ in the property that drives cover
-looseness — how much the paths from an input to the output reconverge — and each has knobs for
-size, reconvergence, and dynamic range:
+The programs are written in generic Julia and depend on nothing here, so any operator-overloading
+tool can run them; DerivativeCovers tapes them by virtue of `DerivativeCovers.TVar` overloading the
+elementals they use.
+
+Each generator returns a [`CoverProblem`](@ref): a program `f` written from those elementals, the
+point `x0` to evaluate it at, an optional idiomatic-Julia `twin` that computes the same function by
+an independent route, and an optional analytic `hessian`. The families differ in the property that
+drives cover looseness — how much the paths from an input to the output reconverge — and each has
+knobs for size, reconvergence, and dynamic range:
 
 - [`quadratic`](@ref): `x'Ax/2` with `A = W*W'` of prescribed rank, written entrywise, as a
   matrix-vector product, or in factored form. The same `A` in three programs, so the three
@@ -22,7 +25,7 @@ Wide dynamic range enters along two independent axes: `sigma` widens the log-mag
 a family's coefficients, while [`rescale`](@ref) (with scales from [`logscales`](@ref)) spreads
 the units of the *inputs*.
 """
-module Problems
+module DerivativeCoverProblems
 
 using LinearAlgebra: Diagonal, dot, norm
 using Random: AbstractRNG, MersenneTwister
@@ -37,9 +40,9 @@ export JacobianProblem, noutputs, exact_jacobian, has_exact_jacobian, jacobian_c
 A scalar program together with the references needed to judge a cover of its Hessian.
 
 - `name`: a short identifier, unique within a family sweep.
-- `f`: the program. Built only from the elementals overloaded for
-  [`TVar`](@ref DerivativeCovers.TVar), so `f(x)` records a tape when `x` is a vector of `TVar`s,
-  and evaluates normally on any other numeric vector (`Float64`, `ForwardDiff.Dual`, ...).
+- `f`: the program. Built only from the elementals overloaded for `DerivativeCovers.TVar`, so
+  `f(x)` records a tape when `x` is a vector of `TVar`s, and evaluates normally on any other
+  numeric vector (`Float64`, `ForwardDiff.Dual`, ...).
 - `x0`: the point at which the Hessian is covered.
 - `twin`: an idiomatic-Julia implementation of the same function, or `nothing`. It is written
   independently of `f`, by an independent route — array operations `f` cannot express (most
@@ -438,9 +441,9 @@ length `p = sum_l n_l*(n_{l-1}+1)`:
 `batch` input/target column pairs are drawn once at construction and closed over; only the
 parameters vary thereafter. `f` is written in array notation: a matvec whose `TVar` factor meets a
 constant factor (the data column feeding layer 1, or feeding layer `K` directly when `K = 1`)
-records one [`linearnode`](@ref DerivativeCovers.linearnode) per row, while a matvec between two
+records one linear tape node per row, while a matvec between two
 `TVar` factors (every hidden-to-hidden transition) records one
-[`dotnode`](@ref DerivativeCovers.dotnode) per row. Each column's error sums as
+inner-product node per row. Each column's error sums as
 one linear node, and the batch total sums as another, so the tape stays short despite the array
 notation.
 
@@ -659,8 +662,8 @@ Jacobian — the vector-output counterpart of [`CoverProblem`](@ref).
 
 - `name`: a short identifier, unique within a family sweep.
 - `r`: the program, mapping an input vector to an output vector. Built only from the elementals
-  overloaded for [`TVar`](@ref DerivativeCovers.TVar), so `r(x)` records a tape when `x` is a
-  vector of `TVar`s and evaluates normally on any other numeric vector.
+  overloaded for `DerivativeCovers.TVar`, so `r(x)` records a tape when `x` is a vector of `TVar`s
+  and evaluates normally on any other numeric vector.
 - `x0`: the point at which the Jacobian is covered.
 - `nout`: the number of outputs of `r`.
 - `twin`: an independent idiomatic-Julia implementation of the same map, or `nothing`.

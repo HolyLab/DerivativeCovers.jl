@@ -1,6 +1,14 @@
 using DerivativeCovers
-using DerivativeCovers.Problems
 using DerivativeCovers.Diagnostics
+# The problem corpus is the sibling package in this repository. It depends on nothing here — the
+# sweeps tape its programs by virtue of their being written in generic Julia — so it is loaded
+# from source rather than declared a dependency: it is unregistered, and a path dependency of a
+# test target cannot be expressed in `Project.toml`. `Problems` is the qualifier the tests use
+# where a generator's name collides with a fixture in `programs.jl`.
+include(joinpath(@__DIR__, "..", "..", "DerivativeCoverProblems", "src",
+                 "DerivativeCoverProblems.jl"))
+using .DerivativeCoverProblems
+const Problems = DerivativeCoverProblems
 # The tests exercise the sweeps and their intermediates, most of which are deliberately not in the
 # top namespace. Naming them here keeps the call sites readable while leaving the export list —
 # pinned in the "public API boundary" testset — as the only thing `using DerivativeCovers` grants.
@@ -850,7 +858,7 @@ include("paired.jl")
             v[1:r.ninputs] = x0
             ds = Float64[]
             for (k, (op, ps, cs)) in enumerate(r.ops)
-                v[r.ninputs + k] = DerivativeCovers.Problems._apply(op, v, ps, cs)
+                v[r.ninputs + k] = Problems._apply(op, v, ps, cs)
                 op === :tanh && push!(ds, 1 - tanh(v[ps[1]])^2)
             end
             return ds
