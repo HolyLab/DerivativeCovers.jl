@@ -1,6 +1,7 @@
 using DerivativeCovers
 using DerivativeCovers.Problems
 using Aqua
+using ExplicitImports
 using ForwardDiff
 using LinearAlgebra
 using Random
@@ -31,6 +32,18 @@ include("paired.jl")
 
     @testset "Aqua" begin
         Aqua.test_all(DerivativeCovers)
+    end
+
+    @testset "ExplicitImports" begin
+        # `Base.broadcastable` is the documented way to opt a type into broadcasting, but Base
+        # does not mark it public. The two public-ness checks read `Base.ispublic` only from
+        # Julia 1.11; before that they fall back to `isexported` and flag public-but-unexported
+        # names, so they run only where they are accurate.
+        public_ok = VERSION >= v"1.11"
+        test_explicit_imports(DerivativeCovers;
+                              all_explicit_imports_are_public=public_ok,
+                              all_qualified_accesses_are_public=public_ok ?
+                                  (; ignore=(:broadcastable,)) : false)
     end
 
     @testset "tape mechanics" begin
