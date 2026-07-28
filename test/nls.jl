@@ -120,10 +120,29 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test nls.Utilde ≈ [1.0 0.0; 0.0 1.0]
     end
 
+    # A unit residual is how `genrose`, `rosenbrock` and `chainwoo` write the additive constant of
+    # their objectives: it contributes ½c² to the loss and a zero row to J.
+    @testset "constant residual is a loss offset" begin
+        rmap(x) = [one(eltype(x)), 10 * (x[2] - x[1]^2), x[1] - 1]
+        x0 = [0.4, 0.7]
+        floss = y -> 0.5 * sum(abs2, [1.0, 10 * (y[2] - y[1]^2), y[1] - 1])
+        nls = cover_nls(rmap, x0)
+        t, outidx, residx, sqidx = DerivativeCovers.nls_loss_tape(rmap, x0)
+
+        @test t.vals[outidx] ≈ floss(x0)          # the offset reaches the loss
+        @test nls.grad ≈ ForwardDiff.gradient(floss, x0)
+        @test length(sqidx) == 3 && allunique(sqidx)
+        @test all(iszero, nls.Utilde[1, :])
+        H = ForwardDiff.hessian(floss, x0)
+        @test maximum(abs.(H) ./ (nls.h * nls.h')) <= GATE
+        @test all(nls.h_gn .<= nls.h .+ 1e-12)
+    end
+
     @testset "input validation" begin
         x0 = [1.0, 2.0]
         @test_throws ArgumentError cover_nls(x -> x[1] + x[2], x0)          # scalar, not a vector
         @test_throws ArgumentError cover_nls(x -> [1.0, 2.0], x0)           # plain numbers, no tape
         @test_throws ArgumentError cover_nls(x -> TVar[], x0)               # no residuals
+        @test_throws "every residual is a constant" cover_nls(x -> [one(eltype(x))], x0)
     end
 end

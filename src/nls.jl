@@ -52,7 +52,9 @@ to a vector of residual `TVar`s. Returns the [`Tape`](@ref), the loss output nod
 indices `residx` of the residuals `rₖ`, and the node indices `sqidx` of their squares `rₖ²`.
 
 `r` may return residuals that are input or duplicated nodes; each is squared into its own fresh
-node, so `sqidx` has one distinct entry per residual regardless.
+node, so `sqidx` has one distinct entry per residual regardless. A constant residual — a fixed
+offset of the loss, contributing `½c²` to `f` and a zero row to `J` — gets a node of its own
+([`constantnode`](@ref)); an all-constant residual vector depends on no parameter and is an error.
 """
 function nls_loss_tape(r, x0::AbstractVector)
     t = Tape(x0)
@@ -63,12 +65,13 @@ function nls_loss_tape(r, x0::AbstractVector)
     isempty(rs) && throw(ArgumentError("residual map returned no residuals"))
     all(v -> v isa TVar, rs) ||
         throw(ArgumentError("residual map must return TVars; got element types $(unique(typeof.(rs)))"))
-    any(isconstant, rs) &&
-        throw(ArgumentError("residuals $(findall(isconstant, rs)) are constants; they do not depend on the parameters"))
-    all(v -> v.tape === t, rs) ||
+    all(isconstant, rs) &&
+        throw(ArgumentError("every residual is a constant; none of them depends on the parameters"))
+    all(v -> isconstant(v) || v.tape === t, rs) ||
         throw(ArgumentError("residuals were recorded on a different tape than the inputs"))
-    residx = [v.idx for v in rs]
-    sqs = [v^2 for v in rs]
+    rnodes = [isconstant(v) ? constantnode(t, value(v)) : v for v in rs]
+    residx = [v.idx for v in rnodes]
+    sqs = [v^2 for v in rnodes]
     sqidx = [s.idx for s in sqs]
     loss = 0.5 * sum(sqs)
     return t, loss.idx, residx, sqidx
