@@ -25,7 +25,7 @@ the units of the *inputs*.
 module Problems
 
 using LinearAlgebra: Diagonal, dot, norm
-using Random: AbstractRNG, MersenneTwister, rand, randn
+using Random: AbstractRNG, MersenneTwister
 
 export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
 export quadratic, deep_composition, random_dag, mlp, cancellation, rescale, logscales, families

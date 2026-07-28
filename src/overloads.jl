@@ -2,7 +2,7 @@
 # its second partials; a program built from anything outside this set hits a MethodError.
 
 import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint
-import LinearAlgebra: dot, Adjoint, Transpose
+import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 
 # A TVar is a broadcast scalar: `xs ./ s` with `s::TVar` broadcasts `s` against every entry of
 # `xs` instead of falling back to Base's default `collect(s)`, which errors on a scalar TVar.
@@ -212,21 +212,17 @@ end
 dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = linearnode(w, xs)
 dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = linearnode(x, ws)
 
-function *(W::AbstractMatrix{TVar}, x::AbstractVector{TVar})
+# Row-by-row matrix-vector product. Each row dispatches to the `dot` methods above, so a
+# constant row or a constant `x` records a `linearnode` and a mixed pair a `dotnode`.
+function matvecnodes(W::AbstractMatrix, x::AbstractVector)
     axes(W, 2) == axes(x, 1) ||
         throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
     return TVar[dot(view(W, m, :), x) for m in axes(W, 1)]
 end
-function *(W::AbstractMatrix{<:Real}, x::AbstractVector{TVar})
-    axes(W, 2) == axes(x, 1) ||
-        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
-    return TVar[linearnode(view(W, m, :), x) for m in axes(W, 1)]
-end
-function *(W::AbstractMatrix{TVar}, x::AbstractVector{<:Real})
-    axes(W, 2) == axes(x, 1) ||
-        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
-    return TVar[linearnode(x, view(W, m, :)) for m in axes(W, 1)]
-end
+
+*(W::AbstractMatrix{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 
 # Disambiguate against LinearAlgebra's generic `Adjoint`/`Transpose` row-vector and `Diagonal`
 # matrix-vector products, which are `AbstractMatrix` and so tie with the three methods above:
@@ -242,6 +238,13 @@ end
 *(W::Diagonal{TVar}, x::AbstractVector{TVar}) = W.diag .* x
 *(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = W.diag .* x
 *(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = W.diag .* x
+
+# LinearAlgebra's triangular matrix-vector product likewise ties with the three `AbstractMatrix`
+# methods. Triangular structure needs no special handling: `matvecnodes` reads each row through
+# `getindex`, which supplies the structural zeros and the unit diagonal.
+*(W::AbstractTriangular{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
+*(W::AbstractTriangular{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
 
 # A sum of TVars records as one linear n-ary node (see `linearnode`) rather than a chain of
 # n-1 binary additions: additions relay adjoints and absolute sweeps with unit weight and

@@ -17,7 +17,7 @@ reference Hessians, for measuring how loose a cover is and what makes it so.
 module DerivativeCovers
 
 using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm, opnorm
-using Random: AbstractRNG, MersenneTwister, randn
+using Random: AbstractRNG, MersenneTwister
 using MatrixCovers: SupportComponents, ncomponents, rowcomponent, colcomponent
 import MatrixCovers: support_components, gramcover, gramcover!
 
