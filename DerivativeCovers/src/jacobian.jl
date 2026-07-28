@@ -257,11 +257,10 @@ How [`balance_cover`](@ref)'s b-step combines a column of the scaled surrogate i
 weight: given the entries `Ũ_kj/a_k` over the outputs `k`, it returns `b_j`. Every rule that
 dominates each of its terms yields a valid cover, so the choice trades tightness, never validity.
 
-The family is open, and deliberately so. [`cover_jacobian_hybrid`](@ref) computes a group-max
-merge that interpolates between [`SumMerge`](@ref) (one group) and [`MaxMerge`](@ref) (one output
-per group); it carries a partition, so it could only ever join this family as a type, never as a
-name. It is not a `MergeRule` today — it reaches the inputs by its own sweep rather than through
-this b-step. A new rule defines a method of the b-step accumulation for its own type.
+[`SumMerge`](@ref), [`QuadMerge`](@ref) and [`MaxMerge`](@ref) are the `p = 1, 2, ∞` members of
+one family, so a parameterized member (a `p`-norm merge) is reachable through the same b-step
+without an API break. They are types rather than names so that the b-step's doubly-nested loop
+specializes on the choice, and so that the non-convergence hint can dispatch per rule.
 
 `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
 see that function's docstring.
@@ -307,11 +306,11 @@ within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → 
 fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
 untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
 
-The two strategy axes are spelled differently because only one of them is open. `merge` is a
-[`MergeRule`](@ref) type: the family is a continuum whose interpolating member, the group-max
-merge of [`cover_jacobian_hybrid`](@ref), carries a partition and so cannot be a `Symbol`.
-`arule` is a `Symbol`: `:marginal` and `:geomean` are a closed pair of distinct algorithms that
-carry no data and admit no obvious third member.
+The two strategy axes are spelled differently. `merge` is a [`MergeRule`](@ref) type: its members
+are the `p = 1, 2, ∞` points of one continuum, so the b-step loop specializes on the choice and a
+parameterized member would fit the existing hook. `arule` is a `Symbol`: `:marginal` and
+`:geomean` are a closed pair of distinct algorithms that carry no data and admit no obvious third
+member.
 
 `maxiter = nothing` (the default) selects a per-rule budget: `1000` rounds for the marginal
 alternation, `10000` for the slower `:geomean` fit; pass an explicit count to override.
