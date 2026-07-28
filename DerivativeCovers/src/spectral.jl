@@ -79,6 +79,8 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     return Hv
 end
 
+@doc (@doc hvp) hvp!
+
 function hvp(f, x0::AbstractVector, v::AbstractVector)
     t, outidx = tape_function(f, x0)
     return hvp(t, outidx, v)

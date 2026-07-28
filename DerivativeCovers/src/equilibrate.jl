@@ -47,6 +47,8 @@ function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v
     return Jv
 end
 
+@doc (@doc jvp) jvp!
+
 function jvp(r, x0::AbstractVector, v::AbstractVector)
     t, outidxs = tape_function(r, x0)
     return jvp(t, outidxs, v)
@@ -95,6 +97,8 @@ function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, 
     Jtu .= view(vbar, 1:n)
     return Jtu
 end
+
+@doc (@doc vjp) vjp!
 
 function vjp(r, x0::AbstractVector, u::AbstractVector)
     t, outidxs = tape_function(r, x0)
