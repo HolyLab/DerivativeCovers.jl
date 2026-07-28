@@ -998,7 +998,7 @@ include("paired.jl")
             @test tightness(hd, h)[1] ≈ maximum(f)
         end
 
-        @test inflate(h, UniformInflation(), 2.5) ≈ 2.5 .* h
+        @test inflate(UniformInflation(), h, 2.5) ≈ 2.5 .* h
         @test_throws ArgumentError inflate(h, fill(0.5, length(h)))
         @test_throws DimensionMismatch inflate(h, ones(length(h) + 1))
     end
@@ -1044,7 +1044,7 @@ include("paired.jl")
         # A gradient halving each iteration, against a cover held fixed along the path.
         grads = [[2.0^-k, 0.0] for k in 0:10]
         covers = [ones(2) for _ in 0:10]
-        dcovers = [inflate(h, UniformInflation(), 4.0) for h in covers]
+        dcovers = [inflate(UniformInflation(), h, 4.0) for h in covers]
         tol = 0.1
         # 2^-k <= 0.1 first at k = 4, and 2^-k <= 0.4 (the inflated test) first at k = 2.
         @test stopping_index(grads, covers, tol) == 5
@@ -1074,7 +1074,7 @@ include("paired.jl")
         A = Symmetric(randn(rng, 5, 5)) |> Matrix
         g = randn(rng, 5)
         h = abs.(randn(rng, 5)) .+ 0.5
-        hd = inflate(h, LognormalInflation(), 8.0; rng)
+        hd = inflate(LognormalInflation(), h, 8.0; rng)
         b = regularization_bias(A, g, h, hd, 0.5)
         # Variables: x -> D*x sends g -> D*g, A -> D*A*D, and any cover h -> D*h.
         D = Diagonal([1e3, 1e-2, 1.0, 7.0, 1e-4])
@@ -1126,9 +1126,9 @@ include("paired.jl")
         @test exact.iters == 1                      # the scaled system is the identity
 
         # Uniform inflation rescales the metric without reshaping it: still one iteration.
-        @test cover_cg(A, b, inflate(h, UniformInflation(), 5.0)).iters == 1
+        @test cover_cg(A, b, inflate(UniformInflation(), h, 5.0)).iters == 1
         # A spike leaves the scaled system with two distinct eigenvalues.
-        spiked = cover_cg(A, b, inflate(h, SpikeInflation(1), 10.0))
+        spiked = cover_cg(A, b, inflate(SpikeInflation(1), h, 10.0))
         @test spiked.iters == 2
         @test spiked.x ≈ A \ b
 
@@ -1141,7 +1141,7 @@ include("paired.jl")
         A = M * M' + 12I                            # symmetric positive definite
         g = randn(rng, 12)
         h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
-        hd = inflate(h, LognormalInflation(), 1e4; rng)
+        hd = inflate(LognormalInflation(), h, 1e4; rng)
 
         # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
         # reach the target, and the loose cover pays for it in iterations.
@@ -1159,7 +1159,7 @@ include("paired.jl")
         @test budget.error_dist > 1e3 * budget.error_ref
 
         # Uniform inflation is invisible here too: only the shape of the metric steers CG.
-        uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); maxiter=4)
+        uni = step_degradation(A, g, h, inflate(UniformInflation(), h, 50.0); maxiter=4)
         @test uni.error_dist ≈ uni.error_ref
     end
 

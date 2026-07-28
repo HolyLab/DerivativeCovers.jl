@@ -131,7 +131,7 @@ inflation_factors(pattern::InflationPattern, n::Integer, peak::Real;
 
 """
     inflate(h::AbstractVector, f::AbstractVector) -> hd
-    inflate(h::AbstractVector, pattern, peak; rng=MersenneTwister(1)) -> hd
+    inflate(pattern, h::AbstractVector, peak; rng=MersenneTwister(1)) -> hd
 
 Loosen the cover `h` coordinatewise by the factors `f` (or by the factors that `pattern` and
 `peak` generate, per [`inflation_factors`](@ref)). Since every factor is at least 1, `hd` covers
@@ -149,7 +149,7 @@ function inflate(h::AbstractVector, f::AbstractVector)
     return h .* f
 end
 
-inflate(h::AbstractVector, pattern::InflationPattern, peak::Real;
+inflate(pattern::InflationPattern, h::AbstractVector, peak::Real;
         rng::AbstractRNG=MersenneTwister(1)) =
     inflate(h, inflation_factors(pattern, h, peak; rng))
 
