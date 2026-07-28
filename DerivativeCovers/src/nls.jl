@@ -33,7 +33,6 @@ Covers and diagnostics for a least-squares loss `f = ½∑ₖ rₖ²`, as return
   |J_{kj}|`. A diagnostic, `O(m·L)` to form; the accessor [`gn_ab`](@ref) reads a rank-1
   Jacobian cover off it.
 - `m`: the number of residuals.
-- `L`: the tape length (node count) of the loss program, inputs included.
 """
 struct NLSCover
     grad::Vector{Float64}
@@ -41,7 +40,6 @@ struct NLSCover
     h_gn::Vector{Float64}
     Utilde::Matrix{Float64}
     m::Int
-    L::Int
 end
 
 """
@@ -136,7 +134,7 @@ function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true)
     h = cover_hybrid(t, outidx, groups; check)
     grad = adjoints(t, outidx)[1:n]
 
-    return NLSCover(grad, h, h_gn, Utilde, m, N)
+    return NLSCover(grad, h, h_gn, Utilde, m)
 end
 
 """

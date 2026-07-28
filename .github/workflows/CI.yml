@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 jobs:
   test:
-    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
+    name: ${{ matrix.package }} - Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions: # needed to allow julia-actions/cache to proactively delete old caches that it has created
@@ -22,6 +22,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # The repository holds one package per subdirectory; each is tested on its own.
+        package:
+          - DerivativeCovers
+          - DerivativeCoverProblems
         version:
           - 'min'
           - '1'
@@ -35,13 +39,22 @@ jobs:
         with:
           version: ${{ matrix.version }}
           arch: ${{ matrix.arch }}
+          # 'min' reads the julia compat bound from this project; there is none at the root.
+          project: ${{ matrix.package }}
       - uses: julia-actions/cache@v3
       # MatrixCovers is not registered; clone it into the project's manifest.
       - name: Develop MatrixCovers
-        run: julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
+        if: matrix.package == 'DerivativeCovers'
+        run: julia --project=DerivativeCovers -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
       - uses: julia-actions/julia-buildpkg@v1
+        with:
+          project: ${{ matrix.package }}
       - uses: julia-actions/julia-runtest@v1
+        with:
+          project: ${{ matrix.package }}
       - uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: ${{ matrix.package }}/src
       - uses: codecov/codecov-action@v7
         with:
           files: lcov.info
@@ -60,21 +73,30 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      # MatrixCovers is not registered. The docs environment resolves
-      # DerivativeCovers, so both must enter its manifest in a single call.
-      - name: Develop MatrixCovers
+      # The site documents both packages in this repository, and neither they nor MatrixCovers are
+      # registered. The docs environment resolves all three, so they must enter its manifest in a
+      # single call.
+      - name: Develop unregistered dependencies
+        working-directory: DerivativeCovers
         run: |
           julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
-          julia --project=docs -e 'using Pkg; Pkg.develop([PackageSpec(url="https://github.com/HolyLab/MatrixCovers.jl"), PackageSpec(path=".")])'
+          julia --project=docs -e 'using Pkg; Pkg.develop([PackageSpec(url="https://github.com/HolyLab/MatrixCovers.jl"), PackageSpec(path="."), PackageSpec(path="../DerivativeCoverProblems")])'
       - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-docdeploy@v1
+        with:
+          project: DerivativeCovers
+      - name: Build and deploy documentation
+        working-directory: DerivativeCovers
+        run: julia --project=docs --color=yes docs/make.jl
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
       - name: Run doctests
+        working-directory: DerivativeCovers
         shell: julia --project=docs --color=yes {0}
         run: |
           using Documenter: DocMeta, doctest
           using DerivativeCovers
+          using DerivativeCoverProblems
           DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); recursive=true)
-          doctest(DerivativeCovers)
+          DocMeta.setdocmeta!(DerivativeCoverProblems, :DocTestSetup, :(using DerivativeCoverProblems); recursive=true)
+          doctest(abspath("docs/src"), [DerivativeCovers, DerivativeCovers.Diagnostics, DerivativeCoverProblems])

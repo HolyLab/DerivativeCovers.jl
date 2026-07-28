@@ -1,5 +1,5 @@
 ```@meta
-CurrentModule = DerivativeCovers
+CurrentModule = DerivativeCoverProblems
 ```
 
 # Problem families
@@ -12,5 +12,5 @@ Pages = ["problems.md"]
 ```
 
 ```@autodocs
-Modules = [DerivativeCovers.Problems]
+Modules = [DerivativeCoverProblems]
 ```

@@ -14,8 +14,8 @@
     end
 
     @testset "parity between the array program and its scalar-loop twin" begin
-        rp = cover_hessian(p.f, p.x0)
-        rs = cover_hessian(p.twin, p.x0)
+        rp = cover_hessian(WithDiagnostics(), p.f, p.x0)
+        rs = cover_hessian(WithDiagnostics(), p.twin, p.x0)
         @test rp.grad ≈ rs.grad rtol=1e-12
         @test rp.B ≈ rs.B rtol=1e-12
         @test rp.h_sum ≈ rs.h_sum rtol=1e-12
@@ -31,7 +31,7 @@
 
     @testset "validity vs ForwardDiff" begin
         H = ForwardDiff.hessian(p.f, p.x0)
-        res = cover_hessian(p.f, p.x0)
+        res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         @test res.grad ≈ ForwardDiff.gradient(p.f, p.x0)
         @test bound_ratio(H, res.B) <= GATE
         @test cover_ratio(H, res.h_sum) <= GATE
@@ -64,17 +64,17 @@
     end
 
     @testset "covariance" begin
-        res = cover_hessian(p.f, p.x0)
+        res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         rng = MersenneTwister(2)
         d = exp.(4.0 .* randn(rng, length(p.x0)))
         @test maximum(d) / minimum(d) > 1e2
 
-        resd = cover_hessian(xt -> p.f(xt ./ d), d .* p.x0)
+        resd = cover_hessian(WithDiagnostics(), xt -> p.f(xt ./ d), d .* p.x0)
         @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-10
         @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-10
 
         c = 7.3
-        resc = cover_hessian(x -> c * p.f(x), p.x0)
+        resc = cover_hessian(WithDiagnostics(), x -> c * p.f(x), p.x0)
         @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
         @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
     end
@@ -82,7 +82,7 @@
     @testset "alternate activation" begin
         ps = mlp(sizes; batch, activation=sin)
         H = ForwardDiff.hessian(ps.f, ps.x0)
-        res = cover_hessian(ps.f, ps.x0)
+        res = cover_hessian(WithDiagnostics(), ps.f, ps.x0)
         @test res.grad ≈ ForwardDiff.gradient(ps.f, ps.x0)
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE

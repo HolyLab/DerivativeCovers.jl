@@ -1,7 +1,7 @@
 name = "DerivativeCovers"
 uuid = "b3df4d26-329c-4856-95c3-f070459abeb7"
-authors = ["Tim Holy <tim.holy@gmail.com> and contributors"]
 version = "1.0.0-DEV"
+authors = ["Tim Holy <tim.holy@gmail.com> and contributors"]
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"

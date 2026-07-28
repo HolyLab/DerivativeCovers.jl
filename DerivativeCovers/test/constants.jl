@@ -50,7 +50,8 @@
         tc, _ = tape_function(withconst, x0)
         tn, _ = tape_function(withnumber, x0)
         @test nnodes(tc) == nnodes(tn)
-        @test cover_hessian(withconst, x0).h_sum == cover_hessian(withnumber, x0).h_sum
+        @test cover_hessian(WithDiagnostics(), withconst, x0).h_sum ==
+              cover_hessian(WithDiagnostics(), withnumber, x0).h_sum
         # A constant reaching a node builder directly is a caller bug, and says so.
         @test_throws "no node on any tape" DerivativeCovers.noderef(TVar(1.0))
     end
@@ -62,7 +63,7 @@
             return (x[1] + 2s)^2 + (x[2] - s)^4 + z * x[1]
         end
         x0 = [3.0, 4.0]
-        r = cover_hessian(f, x0)
+        r = cover_hessian(WithDiagnostics(), f, x0)
         @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
         H = ForwardDiff.hessian(f, x0)
         for h in (r.h_sum, r.h_quad)
@@ -74,7 +75,7 @@
         # The `eltype(x)(c)` idiom, as `biggs6` and `clplatea` write it.
         f = x -> sum(exp(-x[1] * i / 10) for i = 1:4) - eltype(x)(2.75) * x[2]^2
         x0 = [0.4, 1.25]
-        r = cover_hessian(f, x0)
+        r = cover_hessian(WithDiagnostics(), f, x0)
         @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
         H = ForwardDiff.hessian(f, x0)
         @test all(abs.(H) .<= r.h_sum * r.h_sum' .* GATE)
@@ -88,7 +89,7 @@
             return sum((exp(x[i] / 10) - y[i])^2 for i = 1:3)
         end
         x0 = [0.3, -0.2, 0.7]
-        r = cover_hessian(f, x0)
+        r = cover_hessian(WithDiagnostics(), f, x0)
         @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
         H = ForwardDiff.hessian(f, x0)
         for h in (r.h_sum, r.h_quad)
@@ -131,7 +132,7 @@
         x0 = [2.0, 3.0]
         t, outidx = tape_function(f, x0)
         @test t.vals[outidx] ≈ 2.0^2 + 3.0^2 + 2.5
-        r = cover_hessian(f, x0)
+        r = cover_hessian(WithDiagnostics(), f, x0)
         @test r.grad ≈ [4.0, 6.0]
         H = ForwardDiff.hessian(y -> y[1]^2 + y[2]^2 + 2.5, x0)
         @test all(abs.(H) .<= r.h_sum * r.h_sum' .* GATE)

@@ -17,28 +17,42 @@
 # second-partial matrix and contributes no atom at all.
 
 """
-    CoverResult
+    HessianCover
 
-Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@ref).
+The gradient and the sum-merge cover of one taped program, as returned by
+[`cover_hessian`](@ref) under [`CoverOnly`](@ref).
+
+- `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
+- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
+"""
+struct HessianCover
+    grad::Vector{Float64}
+    h_sum::Vector{Float64}
+end
+
+"""
+    HessianDiagnostics
+
+Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@ref) under
+[`WithDiagnostics`](@ref). `grad` and `h_sum` are the same quantities a [`HessianCover`](@ref)
+carries.
 
 - `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
 - `B`: the elementwise bound `B >= abs.(H)`. A diagnostic, quadratic in `n`; the production
   path never forms it.
-- `h_sum`: the sum merge, `h = sum_k s_k`.
+- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
 - `h_quad`: the quadrature merge, `h[i] = sqrt(sum_atoms s_atom[i]^2)`, combining per [`atom_slots`](@ref)
   atom rather than per node (see [`cover_hessian`](@ref)).
 - `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic
   ([`abs_reverse`](@ref)), equal to `h_sum` up to roundoff. The production form is
-  [`paired_reverse`](@ref), which fuses this sweep with the adjoint sweep.
-- `L`: the tape length (node count), inputs included.
+  [`CoverOnly`](@ref), which fuses this sweep with the adjoint sweep.
 """
-struct CoverResult
+struct HessianDiagnostics
     grad::Vector{Float64}
     B::Matrix{Float64}
     h_sum::Vector{Float64}
     h_quad::Vector{Float64}
     h_sum_rev::Vector{Float64}
-    L::Int
 end
 
 """
@@ -274,10 +288,9 @@ supplies the scale reference for each parent slot that makes the selection. Conc
 [`ValueSplit`](@ref) (the default) and [`SensitivitySplit`](@ref).
 
 The rule enters every cover construction through [`local_cover_slots`](@ref); pass it via the
-`rule` keyword of [`cover_hessian`](@ref), [`paired_reverse`](@ref), [`local_covers`](@ref), or
-[`cover_hybrid`](@ref). Every rule yields valid covers everywhere — the rules differ in which
-member of the family they pick, hence in tightness and in continuity with respect to the
-evaluation point.
+`rule` keyword of [`cover_hessian`](@ref), [`local_covers`](@ref), or [`cover_hybrid`](@ref).
+Every rule yields valid covers everywhere — the rules differ in which member of the family they
+pick, hence in tightness and in continuity with respect to the evaluation point.
 """
 abstract type SplitRule end
 
@@ -333,9 +346,16 @@ struct SensitivitySplit{W} <: SplitRule
 end
 SensitivitySplit() = SensitivitySplit(nothing)
 
-# Whether a zero scale reference from this rule certifies that the slot's total gradient
-# vanishes identically, so the slot's Hessian contributions are zero and it needs no cover.
-# A zero *value* certifies nothing of the sort.
+"""
+    certifies_dead(rule::SplitRule) -> Bool
+
+Whether a zero scale reference from `rule` certifies that the slot's total gradient vanishes
+identically, so the slot's Hessian contributions are zero and it needs no cover weight. A zero
+*value* certifies nothing of the sort, so [`ValueSplit`](@ref) answers `false`; a zero
+absolute sensitivity does, so [`SensitivitySplit`](@ref) answers `true`.
+
+With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must define.
+"""
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
@@ -424,8 +444,8 @@ The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `r
 `rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
 `nothing` when the node contributes no second-order term (`av == 0`, or an empty `C`). This is
 the per-node kernel shared by [`local_covers`](@ref), which accumulates the results into
-`(rhos, theta)`, and [`paired_reverse`](@ref), which deposits them directly into the absolute
-adjoint channel; see [`local_covers`](@ref) for the constructions per node type. `check`
+`(rhos, theta)`, and the [`CoverOnly`](@ref) sweep, which deposits them directly into the
+absolute adjoint channel; see [`local_covers`](@ref) for the constructions per node type. `check`
 verifies the covering invariant on recorded nodes.
 
 The first form uses [`ValueSplit`](@ref). The second takes any [`SplitRule`](@ref) together
@@ -551,10 +571,61 @@ function abs_reverse(t::Tape, theta::AbstractVector)
 end
 
 """
-    paired_reverse(t::Tape, outidx::Int; check::Bool=true) -> (; grad, h)
+    atom_slots(C, nslots) -> atoms
 
-The exact gradient and the sum-merge cover of [`cover_hessian`](@ref), from a single reverse
-sweep carrying a paired adjoint `(vbar[k], abar[k])` per node:
+The groups of a node's parent slots that the quadrature merge of [`cover_hessian`](@ref)
+combines separately. A dense `C` (unary or binary) forms one atom spanning every slot. A
+[`PairedPartials`](@ref)`(q)` forms `q` atoms, one per pair `(j, q+j)`, matching the
+block-diagonal structure of its second partials — the atoms it contributes are independent
+rank-1 terms, not one combined term for the whole node.
+"""
+atom_slots(C, nslots) = (1:nslots,)
+atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
+
+"""
+    CoverOnly()
+
+Ask [`cover_hessian`](@ref) for a [`HessianCover`](@ref): the gradient and the sum-merge cover
+alone, at `O(L)`. The default.
+"""
+struct CoverOnly end
+
+"""
+    WithDiagnostics()
+
+Ask [`cover_hessian`](@ref) for a [`HessianDiagnostics`](@ref): the gradient and the sum-merge
+cover together with the elementwise bound `B`, the quadrature merge, and the constructive
+recomputation of the sum merge that cross-checks it. Costs `O(n*L)` time and `O(n^2)` memory.
+"""
+struct WithDiagnostics end
+
+const CoverMode = Union{CoverOnly,WithDiagnostics}
+
+"""
+    cover_hessian([mode], t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit())
+    cover_hessian([mode], f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
+
+Rank-1 covers of the Hessian of the taped program with output node `outidx`, or of the scalar
+program `f` at `x0`. `mode` is [`CoverOnly`](@ref)`()`, the default, or
+[`WithDiagnostics`](@ref)`()`; see below for what each returns. `rule` selects the
+[`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks; every rule yields valid
+covers. Both merges of the per-node covers `s_k = sum_{i in P_k} rho_k[i] * utilde_i` are valid
+covers of the Hessian:
+
+- **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
+  nonnegative slack;
+- **quadrature merge**, `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`: valid by Cauchy–Schwarz, and
+  the minimal cover of the no-cancellation surrogate `M = sum_atoms s_atom s_atom'`. An atom (see
+  [`atom_slots`](@ref)) is a whole node for unary and binary elementals and one parent pair for
+  an inner-product node, so an inner-product node contributes `q` separate terms to the
+  quadrature merge rather than one.
+
+Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` for either `h`.
+
+# `CoverOnly()`
+
+Returns a [`HessianCover`](@ref): the exact gradient and the sum merge, from one forward pass and
+a single reverse sweep carrying a paired adjoint `(vbar[k], abar[k])` per node,
 
     vbar[p_i] += d_i * vbar[k]                       # signed channel: reverse-mode AD
     abar[p_i] += abs(d_i) * abar[k] + rho_k[i]       # absolute channel: the cover
@@ -569,76 +640,20 @@ Each node's update consumes only its own partials, its paired adjoint, and the f
 scale references of its parents (their values under [`ValueSplit`](@ref), one extra absolute
 forward sweep under [`SensitivitySplit`](@ref)), so the sweep has the shape of a reverse-mode
 rule set with a widened cotangent — the form a compiled AD backend can implement, yielding
-cover and gradient together at gradient cost. `rule` selects the [`SplitRule`](@ref); `check`
-verifies the per-node covering invariants, as in [`local_covers`](@ref).
+cover and gradient together at about twice the cost of a gradient. `check` verifies the
+per-node covering invariants, as in [`local_covers`](@ref).
+
+# `WithDiagnostics()`
+
+Returns a [`HessianDiagnostics`](@ref), which adds `B`, `h_quad`, and `h_sum_rev`. These and the
+forward absolute sensitivities behind them cost `O(n*L)` time and `O(n^2)` memory; they are
+diagnostics, and reaching them takes the constructive two-sweep form (`adjoints`,
+`local_covers`, `abs_reverse`) that defines the covers rather than the fused sweep that
+computes them. `check` additionally verifies that the absolute-value reverse sweep reproduces
+`h_sum`, and that the `CoverOnly()` sweep reproduces both the gradient and `h_sum`.
 """
-function paired_reverse(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
-    n, N = t.ninputs, nnodes(t)
-    scales = split_scales(rule, t)
-    vbar = zeros(N)
-    abar = zeros(N)
-    vbar[outidx] = 1.0
-    for k in N:-1:1
-        vk, ak = vbar[k], abar[k]
-        ps = t.parents[k]
-        rho = local_cover_slots(rule, t, k, abs(vk), scales; check)
-        if rho !== nothing
-            for (i, p) in enumerate(ps)
-                abar[p] += rho[i]
-            end
-        end
-        (vk == 0 && ak == 0) && continue
-        ds = t.ds[k]
-        for (i, p) in enumerate(ps)
-            vbar[p] += ds[i] * vk
-            abar[p] += abs(ds[i]) * ak
-        end
-    end
-    return (; grad = vbar[1:n], h = abar[1:n])
-end
-
-"""
-    atom_slots(C, nslots) -> atoms
-
-The groups of a node's parent slots that the quadrature merge of [`cover_hessian`](@ref)
-combines separately. A dense `C` (unary or binary) forms one atom spanning every slot. A
-[`PairedPartials`](@ref)`(q)` forms `q` atoms, one per pair `(j, q+j)`, matching the
-block-diagonal structure of its second partials — the atoms it contributes are independent
-rank-1 terms, not one combined term for the whole node.
-"""
-atom_slots(C, nslots) = (1:nslots,)
-atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
-
-"""
-    cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit()) -> CoverResult
-    cover_hessian(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> CoverResult
-
-Rank-1 covers of the Hessian of the taped program with output node `outidx`, or of the scalar
-program `f` at `x0`. `rule` selects the [`SplitRule`](@ref) that breaks the tie at
-off-diagonal-active blocks; every rule yields valid covers. Both merges of the per-node covers `s_k = sum_{i in P_k} rho_k[i] * utilde_i`
-are valid covers of the Hessian:
-
-- **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
-  nonnegative slack;
-- **quadrature merge**, `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`: valid by Cauchy–Schwarz, and
-  the minimal cover of the no-cancellation surrogate `M = sum_atoms s_atom s_atom'`. An atom (see
-  [`atom_slots`](@ref)) is a whole node for unary and binary elementals and one parent pair for
-  an inner-product node, so an inner-product node contributes `q` separate terms to the
-  quadrature merge rather than one.
-
-Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` for either `h`.
-
-`check` verifies the per-node cover invariants, that the absolute-value reverse sweep
-reproduces `h_sum`, and that the fused sweep [`paired_reverse`](@ref) reproduces both the
-gradient and `h_sum`.
-
-The returned `B`, `h_quad`, and the forward absolute sensitivities behind them cost `O(n*L)`;
-they are diagnostics. The production path is [`paired_reverse`](@ref) — one forward pass and
-one paired reverse sweep, about twice the cost of a gradient — which returns `grad` and
-`h_sum` alone; this function additionally builds the constructive two-sweep form
-(`adjoints`, `local_covers`, `abs_reverse`) that defines them.
-"""
-function cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
+function cover_hessian(::WithDiagnostics, t::Tape, outidx::Int; check::Bool=true,
+                       rule::SplitRule=ValueSplit())
     n, N = t.ninputs, nnodes(t)
     vbar = adjoints(t, outidx)
     utilde = sensitivities(t)
@@ -676,21 +691,54 @@ function cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=V
             abs(h_sum[q] - h_sum_rev[q]) <= 1e-12 * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
-        pr = paired_reverse(t, outidx; check=false, rule)  # invariants already checked in local_covers
+        # invariants already checked in local_covers
+        pr = cover_hessian(CoverOnly(), t, outidx; check=false, rule)
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)
             abs(vbar[q] - pr.grad[q]) <= 1e-12 * gdenom ||
                 error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
             hdenom = max(abs(h_sum[q]), 1.0)
-            abs(h_sum[q] - pr.h[q]) <= 1e-12 * hdenom ||
-                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h[q])")
+            abs(h_sum[q] - pr.h_sum[q]) <= 1e-12 * hdenom ||
+                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
         end
     end
 
-    return CoverResult(vbar[1:n], B, h_sum, h_quad, h_sum_rev, N)
+    return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
-function cover_hessian(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit())
-    t, outidx = tape_function(f, x0)
-    return cover_hessian(t, outidx; check, rule)
+function cover_hessian(::CoverOnly, t::Tape, outidx::Int; check::Bool=true,
+                       rule::SplitRule=ValueSplit())
+    n, N = t.ninputs, nnodes(t)
+    scales = split_scales(rule, t)
+    vbar = zeros(N)
+    abar = zeros(N)
+    vbar[outidx] = 1.0
+    for k in N:-1:1
+        vk, ak = vbar[k], abar[k]
+        ps = t.parents[k]
+        rho = local_cover_slots(rule, t, k, abs(vk), scales; check)
+        if rho !== nothing
+            for (i, p) in enumerate(ps)
+                abar[p] += rho[i]
+            end
+        end
+        (vk == 0 && ak == 0) && continue
+        ds = t.ds[k]
+        for (i, p) in enumerate(ps)
+            vbar[p] += ds[i] * vk
+            abar[p] += abs(ds[i]) * ak
+        end
+    end
+    return HessianCover(vbar[1:n], abar[1:n])
 end
+
+function cover_hessian(mode::CoverMode, f, x0::AbstractVector; check::Bool=true,
+                       rule::SplitRule=ValueSplit())
+    t, outidx = tape_function(f, x0)
+    return cover_hessian(mode, t, outidx; check, rule)
+end
+
+cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit()) =
+    cover_hessian(CoverOnly(), t, outidx; check, rule)
+cover_hessian(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit()) =
+    cover_hessian(CoverOnly(), f, x0; check, rule)

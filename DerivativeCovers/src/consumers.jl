@@ -24,7 +24,7 @@ be satisfied — and the coordinate is simply skipped if `g[i]` vanishes too.
 function cover_norm(g::AbstractVector, h::AbstractVector)
     axes(g) == axes(h) ||
         throw(DimensionMismatch("g and h must share indices: $(axes(g)) vs $(axes(h))"))
-    T = _ratio_type(g, h)
+    T = typeof(float(one(eltype(g)) / one(eltype(h))))
     acc = zero(T)
     for i in eachindex(g, h)
         gi = abs(g[i])

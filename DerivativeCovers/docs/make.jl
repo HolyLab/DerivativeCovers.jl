@@ -1,10 +1,12 @@
 using DerivativeCovers
+using DerivativeCoverProblems
 using Documenter
 
 DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); recursive=true)
+DocMeta.setdocmeta!(DerivativeCoverProblems, :DocTestSetup, :(using DerivativeCoverProblems); recursive=true)
 
 makedocs(;
-    modules=[DerivativeCovers, DerivativeCovers.Problems],
+    modules=[DerivativeCovers, DerivativeCovers.Diagnostics, DerivativeCoverProblems],
     authors="Tim Holy <tim.holy@gmail.com> and contributors",
     sitename="DerivativeCovers.jl",
     format=Documenter.HTML(;
@@ -14,7 +16,10 @@ makedocs(;
     ),
     pages=[
         "Home" => "index.md",
+        "Quantities and extension points" => "reference.md",
+        "Diagnostics" => "diagnostics.md",
         "Problem families" => "problems.md",
+        "Internals" => "internals.md",
     ],
 )
 

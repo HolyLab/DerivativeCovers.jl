@@ -1,7 +1,7 @@
 *.jl.*.cov
 *.jl.cov
 *.jl.mem
-/docs/Manifest*.toml
-/docs/build/
+*/docs/Manifest*.toml
+*/docs/build/
 Manifest.toml
 Manifest-v*.toml

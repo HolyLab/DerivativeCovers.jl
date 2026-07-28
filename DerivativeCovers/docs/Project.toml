@@ -1,4 +1,5 @@
 [deps]
+DerivativeCoverProblems = "37db61e4-0844-41b4-bf47-3d76f271524d"
 DerivativeCovers = "b3df4d26-329c-4856-95c3-f070459abeb7"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 MatrixCovers = "727e6139-ff52-4636-a344-ed1d23e73ffc"
