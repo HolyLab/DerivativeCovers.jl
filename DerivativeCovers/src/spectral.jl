@@ -111,7 +111,7 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
         all(j -> iszero(H[i, j]), axes(H, 2)) ||
             throw(ArgumentError("h[$i] is zero but row $i of H is not: h does not cover H"))
     end
-    isempty(supp) && return 0.0
+    isempty(supp) && return zero(real(one(eltype(H)) / (one(eltype(h)) * one(eltype(h)))))
     Hhat = [H[i, j] / (h[i] * h[j]) for i in supp, j in supp]
     return opnorm(Hhat, 2)
 end
@@ -132,7 +132,7 @@ function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
     for _ in 1:maxiter
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v
-        lambdanew == 0 && return 0.0             # the Hessian vanishes on the whole support
+        lambdanew == 0 && return lambdanew       # the Hessian vanishes on the whole support
         converged = abs(lambdanew - lambda) <= rtol * lambdanew
         lambda = lambdanew
         v = u ./ lambdanew
