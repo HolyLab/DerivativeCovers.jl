@@ -82,8 +82,9 @@ function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, 
     b_max = vec(maximum(scaled; dims=1))
 
     if check
+        rtol = eps(float(real(eltype(Utilde))))^(2//3)
         for j in 1:n, k in 1:m
-            a[k] * b_max[j] >= Utilde[k, j] * (1 - 1e-10) ||
+            a[k] * b_max[j] >= Utilde[k, j] * (1 - rtol) ||
                 error("b_max does not cover the surrogate at output $k, input $j: " *
                       "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])")
         end
@@ -138,8 +139,9 @@ function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer},
 
     if check
         Utilde = jacobian_surrogate(t, outidxs)
+        rtol = eps(float(real(eltype(Utilde))))^(2//3)
         for j in 1:n, k in 1:m
-            a[k] * b[j] >= Utilde[k, j] * (1 - 1e-10) ||
+            a[k] * b[j] >= Utilde[k, j] * (1 - rtol) ||
                 error("group-max cover does not cover the surrogate at output $k, input $j: " *
                       "a*b = $(a[k] * b[j]) < Ũ = $(Utilde[k, j])")
         end
@@ -347,7 +349,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbo
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         r = jacobian_ratio(Utilde, a, b)
-        r <= 1 + 1e-10 ||
+        r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
             error("balanced pair does not cover the surrogate: worst ratio $r")
     end
     return (; a, b, iters, delta)
@@ -382,7 +384,8 @@ function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol
     end
 
     r = jacobian_ratio(Utilde, a, b)
-    r <= 1 + 1e-10 || error("balanced pair does not cover the matrix: worst ratio $r")
+    r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
+        error("balanced pair does not cover the matrix: worst ratio $r")
     return (; a, b, iters, delta)
 end
 
@@ -608,7 +611,8 @@ function jacobian_minimax(M::AbstractMatrix; tol::Real=1e-12)
     b[.!livecol] .= 0.0
     _regauge!(a, b)
     excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
-    excess >= 1 - 1e-10 || error("minimax pair does not cover M: worst ratio $(1 / excess)")
+    excess >= 1 - eps(float(real(eltype(M))))^(2//3) ||
+        error("minimax pair does not cover M: worst ratio $(1 / excess)")
     return (; a, b, excess)
 end
 

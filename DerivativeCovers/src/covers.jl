@@ -501,7 +501,9 @@ function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
             a, b = balanced_split(0.0, c, 0.0, s1, s2)
             if check
                 check_finite_partials(t, k, av, (c,))
-                rtol = 1e-9
+                # sqrt(eps): the entries compared here carry roundoff accumulated over an
+                # operation count set by the tape, not by this expression.
+                rtol = sqrt(eps(float(real(eltype(t.vals)))))
                 a * b >= c * (1 - rtol) ||
                     error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
             end
@@ -537,7 +539,7 @@ function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
         end
         if check
             check_finite_partials(t, k, av, (c11, c12, c22))
-            rtol = 1e-9
+            rtol = sqrt(eps(float(real(eltype(t.vals)))))
             (rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
              rho1 * rho2 >= c12 * (1 - rtol)) ||
                 error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
@@ -686,19 +688,22 @@ function cover_hessian(::WithDiagnostics, t::Tape, outidx::Int; check::Bool=true
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
+        # Two routes to the same quantity, so their errors are correlated and the gap they may
+        # legitimately show is far below the accumulated roundoff of either route alone.
+        rtol = eps(float(real(eltype(t.vals))))^(3//4)
         for q in 1:n
             denom = max(abs(h_sum[q]), 1.0)
-            abs(h_sum[q] - h_sum_rev[q]) <= 1e-12 * denom ||
+            abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
         # invariants already checked in local_covers
         pr = cover_hessian(CoverOnly(), t, outidx; check=false, rule)
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)
-            abs(vbar[q] - pr.grad[q]) <= 1e-12 * gdenom ||
+            abs(vbar[q] - pr.grad[q]) <= rtol * gdenom ||
                 error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
             hdenom = max(abs(h_sum[q]), 1.0)
-            abs(h_sum[q] - pr.h_sum[q]) <= 1e-12 * hdenom ||
+            abs(h_sum[q] - pr.h_sum[q]) <= rtol * hdenom ||
                 error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
         end
     end
