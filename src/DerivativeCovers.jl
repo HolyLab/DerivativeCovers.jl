@@ -11,6 +11,13 @@ covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of
 [`ValueSplit`](@ref) rule; under [`SensitivitySplit`](@ref) it holds when the input weights are
 rescaled alongside (`w -> D*w`).
 
+`using DerivativeCovers` brings in the entry points and the types they return, and nothing else.
+The quantities defined on a cover (`cover_ratio`, `tightness`, `equilibrate`, …) and the surface
+for adding a new elemental (`pushnode!`, `unarynode`, …) are public but unexported, so they are
+reached by qualification. Tape methods for `MatrixCovers.support_components`,
+`MatrixCovers.gramcover`, and `MatrixCovers.gramcover!` are defined here, but those functions
+belong to MatrixCovers: calling them unqualified takes `using MatrixCovers` as well.
+
 Two submodules serve the study of cover quality rather than its use:
 [`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs with reference
 Hessians, and [`DerivativeCovers.Diagnostics`](@ref) supplies the instruments that measure what a
@@ -20,39 +27,44 @@ module DerivativeCovers
 
 using LinearAlgebra: Diagonal, dot, norm, opnorm
 using Random: AbstractRNG, MersenneTwister
-using MatrixCovers: SupportComponents, ncomponents, rowcomponent, colcomponent
+using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
-export Tape, TVar, tape_function, nnodes, value, isconstant
-export CoverResult, cover_hessian, adjoints, sensitivities, hessian_bound,
-       local_covers, local_cover_slots, balanced_split, abs_reverse, paired_reverse
-export SplitRule, ValueSplit, SensitivitySplit, split_scales
-export cyclic_partition, node_levels, level_partition, group_seeds, cover_hybrid
-export VarianceCover, cover_variance, variance_seeds, dependency_sweep, dependency_severity
-export hvp, scaled_spectral_radius, spectral_shrink
-export cover_ratio, bound_ratio, rank1_ratio, tightness
-export softmax, layernorm
-export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
-export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
-       jacobian_ratio, jacobian_representability, jacobian_minimax
-export abs_forward, marginal_weights, balance_cover
-export support_components, gramcover, gramcover!
-export SupportComponents, ncomponents, rowcomponent, colcomponent
-export jvp, vjp, equilibrate, scaled_singular_value, jacobian_shrink
-export submapnode, submap, declare_submap, compose_jacobian_cover, compose_hessian_cover
+# The entry points a caller needs after `using DerivativeCovers`: the tape, the four cover
+# constructors and the two that trade cost against tightness, the types they return, the split
+# rules that parameterize them, and the matrix-free products.
+export Tape, TVar, tape_function
+export cover_hessian, cover_jacobian, cover_nls, cover_variance
+export cover_hybrid, cover_jacobian_hybrid
+export CoverResult, JacobianCover, NLSCover, VarianceCover
+export SplitRule, ValueSplit, SensitivitySplit
+export hvp, jvp, vjp
 
-# The tape-construction and cover-invariant entry points: the supported route for adding a new
-# elemental. Public but not exported — they belong to the extension surface, not the top namespace.
+# Addressable by qualification, and covered by the same compatibility promise as the exports,
+# but kept out of the top namespace. Two kinds of name qualify: the contracts outside code
+# implements or records against, and the quantities that are defined independently of how any
+# sweep computes them. Neither can be disturbed by a reimplementation of the sweeps themselves,
+# which is why they carry the promise and the sweep machinery does not.
+#
 # `public` is 1.11+ syntax and would be a parse error on the 1.10 given in `[compat]`, so the
 # declaration goes through `eval` where the parser never sees the keyword.
 @static if VERSION >= v"1.11"
+    # Tape construction and the invariants a new elemental must satisfy.
     eval(Expr(:public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-              :constantnode, :atom_slots, :certifies_dead, :check_finite_partials))
+              :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
+              :split_scales, :value, :isconstant, :nnodes))
+    # Ratios, bounds, and rescalings defined on a cover from any source.
+    eval(Expr(:public, :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
+              :jacobian_representability, :jacobian_minimax, :dependency_severity,
+              :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink, :jacobian_shrink,
+              :equilibrate))
+    # Adapters between the result types and the functions that take bare vectors.
+    eval(Expr(:public, :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
+              :declare_submap, :submap))
 end
 
 include("tape.jl")
 include("overloads.jl")
-include("composites.jl")
 include("covers.jl")
 include("merges.jl")
 include("variance.jl")

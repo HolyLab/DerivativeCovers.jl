@@ -1,6 +1,6 @@
-# Composite array operations built from the primitives in overloads.jl. Each runs both on
-# AbstractVector{TVar}, recording onto the tape, and on plain numeric vectors, so the same
-# function serves as its own ForwardDiff-comparable twin.
+# Composite array operations built from the elementals the package overloads, used as fixtures by
+# arrayops.jl. Each runs both on AbstractVector{TVar}, recording onto the tape, and on plain
+# numeric vectors, so the same function serves as its own ForwardDiff-comparable twin.
 
 """
     softmax(x::AbstractVector)
@@ -24,7 +24,7 @@ end
     layernorm(x::AbstractVector; epsilon::Real=0)
 
 `(x .- mean(x)) ./ sqrt(var(x) + epsilon)`, using the biased (divide-by-`n`) variance. Unlike
-[`softmax`](@ref)'s max, the mean and variance carry real derivatives and must be recorded on the
+`softmax`'s max, the mean and variance carry real derivatives and must be recorded on the
 tape rather than detached. `epsilon` defaults to `0`, so a constant input yields a non-finite
 result rather than a silently ill-scaled one.
 """

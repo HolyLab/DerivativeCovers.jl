@@ -1,6 +1,21 @@
 using DerivativeCovers
 using DerivativeCovers.Problems
 using DerivativeCovers.Diagnostics
+# The tests exercise the sweeps and their intermediates, most of which are deliberately not in the
+# top namespace. Naming them here keeps the call sites readable while leaving the export list —
+# pinned in the "public API boundary" testset — as the only thing `using DerivativeCovers` grants.
+using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, bound_ratio,
+                        rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
+                        jacobian_minimax, dependency_severity, scaled_spectral_radius,
+                        scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
+                        compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
+                        declare_submap, submap, cyclic_partition, level_partition, node_levels,
+                        nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
+                        local_covers, balanced_split, variance_seeds, dependency_sweep,
+                        jacobian_surrogate, marginal_weights, balance_cover, paired_reverse
+# This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
+using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
+                    rowcomponent, colcomponent
 using Aqua
 using ExplicitImports
 using ForwardDiff
@@ -16,6 +31,7 @@ const GATE = 1 + 1e-10
 
 include("constants.jl")
 include("primitives.jl")
+include("composites.jl")
 include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
@@ -54,15 +70,55 @@ include("paired.jl")
         @test !(TVar <: Real)
         @test supertype(TVar) === Any
 
-        # The extension surface for adding a new elemental. Public, so that outside code may use
-        # it without reaching into internals, but unexported, so `using DerivativeCovers` does not
-        # pull it into the top namespace.
+        # What `using DerivativeCovers` grants, in full. Pinned exactly, so that a name cannot
+        # drift into the top namespace as a side effect of adding one somewhere in `src/`.
+        # `names` reports `public` declarations alongside exports from 1.11 on, and includes the
+        # module's own name, so neither can be read off it directly.
+        exported = filter(s -> Base.isexported(DerivativeCovers, s), names(DerivativeCovers))
+        @test Set(setdiff(exported, [:DerivativeCovers])) == Set([
+            :Tape, :TVar, :tape_function,
+            :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
+            :cover_hybrid, :cover_jacobian_hybrid,
+            :CoverResult, :JacobianCover, :NLSCover, :VarianceCover,
+            :SplitRule, :ValueSplit, :SensitivitySplit,
+            :hvp, :jvp, :vjp,
+        ])
+
+        # Addressable by qualification and covered by the compatibility promise, but unexported:
+        # the contracts a new elemental implements, the quantities defined on a cover from any
+        # source, and the adapters between the result types and the bare-vector functions.
         internals = (:pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-                     :constantnode, :atom_slots, :certifies_dead, :check_finite_partials)
+                     :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
+                     :submapnode, :split_scales, :value, :isconstant, :nnodes,
+                     :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
+                     :jacobian_representability, :jacobian_minimax, :dependency_severity,
+                     :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
+                     :jacobian_shrink, :equilibrate,
+                     :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
+                     :declare_submap, :submap)
         for sym in internals
             @test isdefined(DerivativeCovers, sym)
             @test !Base.isexported(DerivativeCovers, sym)
             VERSION >= v"1.11" && @test Base.ispublic(DerivativeCovers, sym)
+        end
+
+        # The sweep machinery and the partition policies behind `cover_hybrid`'s integer argument
+        # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
+        private = (:cyclic_partition, :level_partition, :node_levels, :nls_partition,
+                   :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
+                   :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+                   :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
+                   :balance_cover)
+        for sym in private
+            @test isdefined(DerivativeCovers, sym)
+            VERSION >= v"1.11" && @test !Base.ispublic(DerivativeCovers, sym)
+        end
+
+        # MatrixCovers' functions, which this package extends with `Tape` methods rather than
+        # owning. Reaching them takes `using MatrixCovers`.
+        for sym in (:support_components, :gramcover, :gramcover!, :SupportComponents,
+                    :ncomponents, :rowcomponent, :colcomponent)
+            @test !Base.isexported(DerivativeCovers, sym)
         end
 
         # The study instruments live in their own namespace, reached by
