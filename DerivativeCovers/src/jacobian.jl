@@ -479,7 +479,7 @@ function _geomean_fit(U, a, maxiter, rtol)
             U[k, j] == 0 && continue
             i = dim == 1 ? k : j
             w = dim == 1 ? weights[j] : weights[k]
-            out[i] += log(U[k, j] / w)
+            out[i] += log(U[k, j]) - log(w)
             cnt[i] += 1
         end
         [cnt[i] > 0 ? exp(out[i] / cnt[i]) : 0.0 for i in eachindex(out)]
