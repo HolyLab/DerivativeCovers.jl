@@ -1,5 +1,6 @@
 using DerivativeCovers
 using DerivativeCovers.Problems
+using DerivativeCovers.Diagnostics
 using Aqua
 using ExplicitImports
 using ForwardDiff
@@ -62,6 +63,18 @@ include("paired.jl")
             @test isdefined(DerivativeCovers, sym)
             @test !Base.isexported(DerivativeCovers, sym)
             VERSION >= v"1.11" && @test Base.ispublic(DerivativeCovers, sym)
+        end
+
+        # The study instruments live in their own namespace, reached by
+        # `using DerivativeCovers.Diagnostics`, and are not re-exported by the parent.
+        diagnostics = (:InflationPattern, :UniformInflation, :LognormalInflation,
+                       :SpikeInflation, :RampInflation, :inflation_shape, :inflation_factors,
+                       :inflate, :anisotropy, :cover_norm, :stopping_index, :stopping_shift,
+                       :regularized_step, :regularization_bias, :psd_shift, :psd_excess,
+                       :cover_cg, :step_degradation)
+        for sym in diagnostics
+            @test Base.isexported(DerivativeCovers.Diagnostics, sym)
+            @test !isdefined(DerivativeCovers, sym)
         end
     end
 

@@ -11,12 +11,14 @@ covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of
 [`ValueSplit`](@ref) rule; under [`SensitivitySplit`](@ref) it holds when the input weights are
 rescaled alongside (`w -> D*w`).
 
-The submodule [`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs, with
-reference Hessians, for measuring how loose a cover is and what makes it so.
+Two submodules serve the study of cover quality rather than its use:
+[`DerivativeCovers.Problems`](@ref) supplies parameterized families of programs with reference
+Hessians, and [`DerivativeCovers.Diagnostics`](@ref) supplies the instruments that measure what a
+loose cover costs a consumer of it.
 """
 module DerivativeCovers
 
-using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm, opnorm
+using LinearAlgebra: Diagonal, dot, norm, opnorm
 using Random: AbstractRNG, MersenneTwister
 using MatrixCovers: SupportComponents, ncomponents, rowcomponent, colcomponent
 import MatrixCovers: support_components, gramcover, gramcover!
@@ -29,10 +31,6 @@ export cyclic_partition, node_levels, level_partition, group_seeds, cover_hybrid
 export VarianceCover, cover_variance, variance_seeds, dependency_sweep, dependency_severity
 export hvp, scaled_spectral_radius, spectral_shrink
 export cover_ratio, bound_ratio, rank1_ratio, tightness
-export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
-export inflation_shape, inflation_factors, inflate, anisotropy
-export cover_norm, stopping_index, stopping_shift, regularized_step, regularization_bias,
-       psd_shift, psd_excess, cover_cg, step_degradation
 export softmax, layernorm
 export NLSCover, cover_nls, nls_loss_tape, nls_partition, gn_ab
 export JacobianCover, cover_jacobian, cover_jacobian_hybrid, jacobian_surrogate,
@@ -60,14 +58,13 @@ include("merges.jl")
 include("variance.jl")
 include("spectral.jl")
 include("metrics.jl")
-include("inflation.jl")
-include("consumers.jl")
 include("nls.jl")
 include("support.jl")
 include("jacobian.jl")
 include("gram.jl")
 include("equilibrate.jl")
 include("compose.jl")
+include("diagnostics.jl")
 include("problems.jl")
 
 end
