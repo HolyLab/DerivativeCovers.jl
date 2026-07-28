@@ -93,8 +93,8 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
 @testset "primitives.jl" begin
 
     @testset "parity with scalarized twin — $name" for (name, fp, fs, x0) in PRIMITIVE_PARITY
-        rp = cover_hessian(fp, x0)
-        rs = cover_hessian(fs, x0)
+        rp = cover_hessian(WithDiagnostics(), fp, x0)
+        rs = cover_hessian(WithDiagnostics(), fs, x0)
         @test rp.grad ≈ rs.grad rtol=1e-12
         @test rp.B ≈ rs.B rtol=1e-12
         @test rp.h_sum ≈ rs.h_sum rtol=1e-12
@@ -110,7 +110,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
 
     @testset "validity vs ForwardDiff — $name" for (name, f, x0) in PRIMITIVE_VALIDITY
         H = ForwardDiff.hessian(f, x0)
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test bound_ratio(H, res.B) <= GATE
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE
@@ -121,7 +121,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     @testset "exact cover of the factored quadratic with constant weights" begin
         f = dot_const_prim(W0_CONST)
         x0 = [0.3, -1.2, 2.0, -0.5]
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.h_sum ≈ abs.(W0_CONST) rtol=1e-12
         @test res.h_quad ≈ abs.(W0_CONST) rtol=1e-12
 
@@ -138,7 +138,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
             end
             return acc / 2
         end
-        res_e = cover_hessian(f_entrywise, x0)
+        res_e = cover_hessian(WithDiagnostics(), f_entrywise, x0)
         @test all(res_e.h_sum .>= abs.(W0_CONST))
         @test maximum(res_e.h_sum ./ abs.(W0_CONST)) > 2
     end
@@ -154,7 +154,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
             0.5 * sum(abs2.(r))
         end
         zW = randn(rng, p * q)
-        res = cover_hessian(f, zW)
+        res = cover_hessian(WithDiagnostics(), f, zW)
         pattern = vec(repeat(abs.(x0v)', p, 1))    # each row's weights get |x0v|
         @test res.h_sum ≈ pattern rtol=1e-12
         @test res.h_quad ≈ pattern rtol=1e-12
@@ -168,7 +168,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         f = z -> log(1 + dot(z, z))
         x0 = [0.5, -1.2, 0.3]
         H = ForwardDiff.hessian(f, x0)
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
         @test bound_ratio(H, res.B) <= GATE
         @test cover_ratio(H, res.h_sum) <= GATE
@@ -182,7 +182,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         f = z -> (T = eltype(z); log(1 + dot(T[z[1], T(2.0), z[2]], T[z[1], T(2.0), z[2]])))
         x0 = [0.5, -1.2]
         H = ForwardDiff.hessian(f, x0)
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
         @test bound_ratio(H, res.B) <= GATE
         @test cover_ratio(H, res.h_sum) <= GATE
@@ -206,7 +206,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         f_constx = z -> sum(abs2.(reshape(z, 2, 2) * xconst))
         x0 = [0.1, 0.2, 0.3, 0.4]
         H = ForwardDiff.hessian(f_constx, x0)
-        res = cover_hessian(f_constx, x0)
+        res = cover_hessian(WithDiagnostics(), f_constx, x0)
         @test res.grad ≈ ForwardDiff.gradient(f_constx, x0)
         @test bound_ratio(H, res.B) <= GATE
         @test cover_ratio(H, res.h_sum) <= GATE
@@ -216,7 +216,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         f_constW = z -> sum(abs2.(Aconst * z)) / 2
         z0 = [0.5, -0.2]
         Hw = ForwardDiff.hessian(f_constW, z0)
-        resw = cover_hessian(f_constW, z0)
+        resw = cover_hessian(WithDiagnostics(), f_constW, z0)
         @test resw.grad ≈ ForwardDiff.gradient(f_constW, z0)
         @test cover_ratio(Hw, resw.h_sum) <= GATE
         @test cover_ratio(Hw, resw.h_quad) <= GATE
@@ -230,7 +230,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     @testset "merges and variance compose on the matvec program" begin
         f, x0 = matvec_prim, [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4]
         H = ForwardDiff.hessian(f, x0)
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         t, outidx = tape_function(f, x0)
         N = nnodes(t)
 
@@ -254,14 +254,14 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
                  ("matvec", matvec_prim, [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4],
                   [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3, 1.0])]
         @testset "$name" for (name, f, x0, d) in cases
-            res = cover_hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0)
 
-            resd = cover_hessian(xt -> f(xt ./ d), d .* x0)
+            resd = cover_hessian(WithDiagnostics(), xt -> f(xt ./ d), d .* x0)
             @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-12
             @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-12
 
             c = 7.3
-            resc = cover_hessian(x -> c * f(x), x0)
+            resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
             @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
             @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
         end

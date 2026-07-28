@@ -58,7 +58,7 @@
         y0 = Fsub(x0)
         d = declare_submap(Fsub, x0)
         jc = cover_jacobian(Fsub, x0)
-        hg = cover_hessian(gout, y0)
+        hg = cover_hessian(WithDiagnostics(), gout, y0)
         gamma = abs.(ForwardDiff.gradient(gout, y0))
         res = compose_hessian_cover(hg.h_sum, gamma, jc.a, jc.b_max, d.S)
         H = ForwardDiff.hessian(x -> gout(Fsub(x)), x0)
@@ -73,7 +73,7 @@
         dl = declare_submap(v -> A * v, xl)
         @test all(iszero, dl.S)
         jcl = cover_jacobian(v -> A * v, xl)
-        hgl = cover_hessian(gl, A * xl)
+        hgl = cover_hessian(WithDiagnostics(), gl, A * xl)
         gammal = abs.(ForwardDiff.gradient(gl, A * xl))
         resl = compose_hessian_cover(hgl.h_sum, gammal, jcl.a, jcl.b_max, nothing)
         Hl = ForwardDiff.hessian(x -> gl(A * x), xl)
@@ -93,9 +93,9 @@
          x -> gout(Fsub([x[1] * x[2], x[3] + x[1], x[2]]))),
     ]
         t, o = tape_function(fdecl, x0)
-        res = cover_hessian(t, o)
+        res = cover_hessian(WithDiagnostics(), t, o)
         ttr, otr = tape_function(ftraced, x0)
-        rtr = cover_hessian(ttr, otr)
+        rtr = cover_hessian(WithDiagnostics(), ttr, otr)
         H = ForwardDiff.hessian(ftraced, x0)
 
         @test res.grad ≈ ForwardDiff.gradient(ftraced, x0) rtol = 1e-12
@@ -168,14 +168,14 @@
         base = xs -> gout(submap(Fsub, xs))
         e = ones(3)
         te, oe = tape_function(xt -> base(xt ./ e), x0)
-        re = cover_hessian(te, oe)
+        re = cover_hessian(WithDiagnostics(), te, oe)
 
         # Conjugation by an input rescaling and an objective scale: h → sqrt(c) .* d .* h.
         # The wrapper is applied on both sides so the two tapes have identical shape.
         dvec = [2.0, 0.5, 4.0]
         c = 4.0
         tc, oc = tape_function(xt -> c * base(xt ./ (1 ./ dvec)), x0 ./ dvec)
-        rc = cover_hessian(tc, oc)
+        rc = cover_hessian(WithDiagnostics(), tc, oc)
         @test rc.grad ≈ c .* dvec .* re.grad rtol = 1e-12
         @test rc.h_sum ≈ sqrt(c) .* dvec .* re.h_sum rtol = 1e-12
         @test rc.h_quad ≈ sqrt(c) .* dvec .* re.h_quad rtol = 1e-12
@@ -190,7 +190,7 @@
         end
         t1, o1 = gauge(ones(4))
         tC, oC = gauge([4.0, 0.25, 16.0, 1.0])
-        r1, rC = cover_hessian(t1, o1), cover_hessian(tC, oC)
+        r1, rC = cover_hessian(WithDiagnostics(), t1, o1), cover_hessian(WithDiagnostics(), tC, oC)
         @test rC.h_sum == r1.h_sum
         @test rC.h_quad == r1.h_quad
         @test rC.grad == r1.grad

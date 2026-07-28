@@ -30,8 +30,8 @@
         ta, oa = tape_function(pa.f, pa.x0)
         @test nnodes(tc) == nnodes(ta)
 
-        rc = cover_hessian(tc, oc)
-        ra = cover_hessian(ta, oa)
+        rc = cover_hessian(WithDiagnostics(), tc, oc)
+        ra = cover_hessian(WithDiagnostics(), ta, oa)
         # The gradient at x0 is identically delta*(q'x0)*q in both variants — every quartet's
         # linear form vanishes at x0 by construction, so it contributes nothing at first order —
         # but the two variants sum that cancellation in a different order (opposite-signed
@@ -50,7 +50,7 @@
         p = Problems.cancellation(n; m, delta, aligned, rng=MersenneTwister(21))
         H = exact_hessian(p)
         t, outidx = tape_function(p.f, p.x0)
-        res = cover_hessian(t, outidx)
+        res = cover_hessian(WithDiagnostics(), t, outidx)
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE
         @test cover_ratio(H, cover_hybrid(t, outidx, 4)) <= GATE
@@ -60,7 +60,7 @@
         pc = Problems.cancellation(n; m, delta, aligned=false, rng=MersenneTwister(7))
         pa = Problems.cancellation(n; m, delta, aligned=true, rng=MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
-        res = cover_hessian(pc.f, pc.x0)
+        res = cover_hessian(WithDiagnostics(), pc.f, pc.x0)
         vc = cover_variance(pc.f, pc.x0)
 
         @test res.h_quad ≈ sqrt.(diag(Ha)) rtol=1e-8
@@ -78,7 +78,7 @@
             p = Problems.cancellation(16; m=mval, delta=1e-2, aligned=false, rng=MersenneTwister(3))
             Hc = exact_hessian(p)
             hstar = sqrt.(diag(Hc))
-            res = cover_hessian(p.f, p.x0)
+            res = cover_hessian(WithDiagnostics(), p.f, p.x0)
             ratios = res.h_quad ./ hstar
             return exp(sum(log, ratios) / length(ratios))
         end
@@ -90,7 +90,7 @@
         p = Problems.cancellation(n; m=4, delta=1e-2, aligned=false, support, rng=MersenneTwister(3))
         Hc = exact_hessian(p)
         hstar = sqrt.(diag(Hc))
-        res = cover_hessian(p.f, p.x0)
+        res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         for i in setdiff(1:n, support)
             @test res.h_quad[i] ≈ hstar[i] rtol=1e-8
         end
@@ -104,8 +104,8 @@
         pa = Problems.cancellation(n; m, delta, aligned=true, sigma=0.5, rng=MersenneTwister(7))
         tc, oc = tape_function(pc.f, pc.x0)
         ta, oa = tape_function(pa.f, pa.x0)
-        rc = cover_hessian(tc, oc)
-        ra = cover_hessian(ta, oa)
+        rc = cover_hessian(WithDiagnostics(), tc, oc)
+        ra = cover_hessian(WithDiagnostics(), ta, oa)
         @test isapprox(rc.grad, ra.grad; rtol=1e-12)
         @test rc.B == ra.B
         @test rc.h_sum == ra.h_sum
@@ -128,9 +128,9 @@
     @testset "scale covariance" begin
         p = Problems.cancellation(n; m, delta, aligned=false, rng=MersenneTwister(1))
         d = exp.(0.3 .* randn(MersenneTwister(3), n))
-        res = cover_hessian(p.f, p.x0)
+        res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         pr = rescale(p, d)
-        resr = cover_hessian(pr.f, pr.x0)
+        resr = cover_hessian(WithDiagnostics(), pr.f, pr.x0)
         @test resr.h_sum ≈ res.h_sum ./ d rtol=1e-10
     end
 

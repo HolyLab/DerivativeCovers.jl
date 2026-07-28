@@ -12,7 +12,7 @@ using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, boun
                         declare_submap, submap, cyclic_partition, level_partition, node_levels,
                         nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
                         local_covers, balanced_split, variance_seeds, dependency_sweep,
-                        jacobian_surrogate, marginal_weights, balance_cover, paired_reverse
+                        jacobian_surrogate, marginal_weights, balance_cover
 # This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
 using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
                     rowcomponent, colcomponent
@@ -79,6 +79,7 @@ include("paired.jl")
             :Tape, :TVar, :tape_function,
             :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
             :cover_hybrid, :cover_jacobian_hybrid,
+            :CoverOnly, :WithDiagnostics,
             :CoverResult, :JacobianCover, :NLSCover, :VarianceCover,
             :SplitRule, :ValueSplit, :SensitivitySplit,
             :hvp, :jvp, :vjp,
@@ -176,18 +177,18 @@ include("paired.jl")
         ("product", x -> x[1] * x[2], [2.0, -3.0]),
         ("quotient", x -> x[1] / x[2], [2.0, -3.0]),
     ]
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
         @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
     end
 
     @testset "identity elementals leave the tape unchanged" begin
         x0 = [2.0, -3.0]
-        res = cover_hessian(x -> x[1] * x[2], x0)
+        res = cover_hessian(WithDiagnostics(), x -> x[1] * x[2], x0)
         for f in (x -> (+x[1]) * x[2], x -> x[1]' * x[2])
             t, _ = tape_function(f, x0)
             @test nnodes(t) == 3                       # two inputs, one product node
-            @test cover_hessian(f, x0).h_sum == res.h_sum
+            @test cover_hessian(WithDiagnostics(), f, x0).h_sum == res.h_sum
         end
     end
 
@@ -195,7 +196,7 @@ include("paired.jl")
         c = [2.0, -0.5, 3.0]
         x0 = [1.3]
         for f in (x -> sum(x[1] * c), x -> sum(c * x[1]))
-            @test cover_hessian(f, x0).grad ≈ ForwardDiff.gradient(f, x0)
+            @test cover_hessian(WithDiagnostics(), f, x0).grad ≈ ForwardDiff.gradient(f, x0)
         end
     end
 
@@ -210,22 +211,24 @@ include("paired.jl")
         x0 = [0.0, 1.3]
         for p in (0, 1, 2, 3)
             f = x -> x[1]^p + x[1] * x[2]
-            res = cover_hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0)
             @test res.grad ≈ ForwardDiff.gradient(f, x0)
             @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
         end
         # A nonzero factor leaves a genuine singularity singular.
-        @test !all(isfinite, cover_hessian(x -> x[1]^0.5 + x[1] * x[2], x0; check=false).h_sum)
+        @test !all(isfinite,
+                   cover_hessian(WithDiagnostics(), x -> x[1]^0.5 + x[1] * x[2], x0;
+                                 check=false).h_sum)
     end
 
     @testset "gradient matches ForwardDiff — $name" for (name, f, x0) in PROBLEMS
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
     end
 
     @testset "covering chain — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
-        res = cover_hessian(f, x0)
+        res = cover_hessian(WithDiagnostics(), f, x0)
         @test bound_ratio(H, res.B) <= GATE                  # abs.(H) <= B
         for h in (res.h_sum, res.h_quad)
             @test all(>=(0), h)
@@ -245,7 +248,7 @@ include("paired.jl")
     @testset "exact cover of the factored rank-1 quadratic" begin
         # f = (w'x)²/2 has H = w*w', whose minimal cover is abs.(w). A single nonlinear node
         # carries the whole Hessian, so both merges attain it.
-        res = cover_hessian(quad_factored(WQ), XQ)
+        res = cover_hessian(WithDiagnostics(), quad_factored(WQ), XQ)
         @test res.h_sum ≈ abs.(WQ)
         @test res.h_quad ≈ abs.(WQ)
         H = ForwardDiff.hessian(quad_factored(WQ), XQ)
@@ -259,14 +262,14 @@ include("paired.jl")
         # Entrywise form: each Hessian entry is produced by exactly one tape node, so the
         # absolute-value bound has nothing to cancel and attains abs.(H).
         He = ForwardDiff.hessian(cancellation, x0)
-        Be = cover_hessian(cancellation, x0).B
+        Be = cover_hessian(WithDiagnostics(), cancellation, x0).B
         @test Be ≈ abs.(He)
 
         # Summed form: the same Hessian I - e*e'/n, but its diagonal now arises by cancellation
         # between sum(x²)/2 and (sum x)²/(2n). The bound sums magnitudes instead, giving
         # B = I + e*e'/n and a diagonal excess of (n+1)/(n-1).
         Hs = ForwardDiff.hessian(cancellation_summed, x0)
-        Bs = cover_hessian(cancellation_summed, x0).B
+        Bs = cover_hessian(WithDiagnostics(), cancellation_summed, x0).B
         @test Hs ≈ He
         @test Bs ≈ I + ones(n, n) ./ n
         @test maximum(Bs[i, i] / abs(Hs[i, i]) for i in 1:n) ≈ (n + 1) / (n - 1)
@@ -279,17 +282,17 @@ include("paired.jl")
                   [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
                   [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3])]
         @testset "$name" for (name, f, x0, d) in cases
-            res = cover_hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0)
 
             # x -> D*x leaves every intermediate value and adjoint unchanged and puts a factor
             # 1/d[a] on each input edge, so h -> h ./ d exactly.
-            resd = cover_hessian(xt -> f(xt ./ d), d .* x0)
+            resd = cover_hessian(WithDiagnostics(), xt -> f(xt ./ d), d .* x0)
             @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-12
             @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-12
 
             # f -> c*f scales every adjoint by c, hence every rho and every h by sqrt(c).
             c = 7.3
-            resc = cover_hessian(x -> c * f(x), x0)
+            resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
             @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
             @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
         end
@@ -368,12 +371,12 @@ include("paired.jl")
         divdiff = x -> (exp(x[1]) - exp(x[2])) / (x[1] - x[2])
         @test_throws "not twice-differentiable" cover_hessian(divdiff, [0.5, 0.5])
 
-        # The offending node is named where the sweep reaches it first. `paired_reverse` runs in
+        # The offending node is named where the sweep reaches it first. The paired sweep runs in
         # reverse order and so meets the division itself; the forward pass of `local_covers`
         # meets one of its parents, whose adjoint has already come through the division.
         tsing, osing = tape_function(divdiff, [0.5, 0.5])
-        @test_throws "non-finite second partials" paired_reverse(tsing, osing)
-        @test_throws "node value NaN" paired_reverse(tsing, osing)
+        @test_throws "non-finite second partials" cover_hessian(CoverOnly(), tsing, osing)
+        @test_throws "node value NaN" cover_hessian(CoverOnly(), tsing, osing)
         @test_throws "from a node downstream" local_covers(tsing, adjoints(tsing, osing))
 
         # Inner-product node: its covering entry is the absolute adjoint, which the reciprocal of
@@ -383,19 +386,21 @@ include("paired.jl")
 
         # `check=false` remains the way to get IEEE propagation instead: the cover comes back
         # non-finite for the caller to test, as `abs.(H) <= h*h'` cannot hold at such a point.
-        @test !all(isfinite, cover_hessian(divdiff, [0.5, 0.5]; check=false).h_sum)
-        @test !all(isfinite, cover_hessian(recipdot, [1.0, 2.0, 2.0, -1.0]; check=false).h_sum)
+        @test !all(isfinite, cover_hessian(WithDiagnostics(), divdiff, [0.5, 0.5]; check=false).h_sum)
+        @test !all(isfinite,
+                   cover_hessian(WithDiagnostics(), recipdot, [1.0, 2.0, 2.0, -1.0];
+                                 check=false).h_sum)
 
         # Away from the singularity both programs cover normally.
-        @test all(isfinite, cover_hessian(divdiff, [0.5, 1.5]).h_sum)
-        @test all(isfinite, cover_hessian(recipdot, [1.0, 2.0, 2.0, 1.0]).h_sum)
+        @test all(isfinite, cover_hessian(WithDiagnostics(), divdiff, [0.5, 1.5]).h_sum)
+        @test all(isfinite, cover_hessian(WithDiagnostics(), recipdot, [1.0, 2.0, 2.0, 1.0]).h_sum)
     end
 
     @testset "split rules" begin
         # Passing ValueSplit explicitly is the default, bitwise.
         @testset "ValueSplit is the default — $name" for (name, f, x0) in PROBLEMS
-            res = cover_hessian(f, x0)
-            resv = cover_hessian(f, x0; rule=ValueSplit())
+            res = cover_hessian(WithDiagnostics(), f, x0)
+            resv = cover_hessian(WithDiagnostics(), f, x0; rule=ValueSplit())
             @test resv.h_sum == res.h_sum
             @test resv.h_quad == res.h_quad
         end
@@ -403,7 +408,7 @@ include("paired.jl")
         # SensitivitySplit satisfies the same covering chain on the whole battery.
         @testset "SensitivitySplit covering chain — $name" for (name, f, x0) in PROBLEMS
             H = ForwardDiff.hessian(f, x0)
-            res = cover_hessian(f, x0; rule=SensitivitySplit())
+            res = cover_hessian(WithDiagnostics(), f, x0; rule=SensitivitySplit())
             for h in (res.h_sum, res.h_quad)
                 @test all(>=(0), h)
                 @test rank1_ratio(res.B, h) <= GATE
@@ -422,10 +427,10 @@ include("paired.jl")
         fmul = x -> (x[1] - 1) * (x[2] - 1)
         x0 = [1.0, 1.0]
         xp = [1.0 + 2.0^-40, 1.0 + 2.0^-38]
-        @test cover_hessian(fmul, x0; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(fmul, xp; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(fmul, x0; rule=ValueSplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(fmul, xp; rule=ValueSplit()).h_sum == [2.0, 0.5]
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule=ValueSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule=ValueSplit()).h_sum == [2.0, 0.5]
 
         # Dead channel: sigma == 0 certifies that the slot's total gradient vanishes, so the
         # multiplication node deposits nothing there and its partner covers only its own
@@ -433,27 +438,27 @@ include("paired.jl")
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
-        resd = cover_hessian(fdead, xd; rule=SensitivitySplit())
+        resd = cover_hessian(WithDiagnostics(), fdead, xd; rule=SensitivitySplit())
         @test resd.h_sum ≈ [sqrt(6), 0.0]
         @test cover_ratio(Hd, resd.h_sum) <= GATE
         # Approaching the dead point, the response of h is bounded by the sqrt(sigma1*sigma2)
         # envelope — a square-root cusp, not a jump.
-        rese = cover_hessian(fdead, [2.0^-20, 3.0]; rule=SensitivitySplit())
+        rese = cover_hessian(WithDiagnostics(), fdead, [2.0^-20, 3.0]; rule=SensitivitySplit())
         @test maximum(abs, rese.h_sum .- resd.h_sum) <= 2.0^-8
 
         # A dead inner-product pair: the (x[1]^2, x[3]) pair contributes nothing at x[1] == 0,
         # the (x[2], x[4]) pair splits 1:1, and the x[1]^2 node covers the (1,1) entry.
         fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
         xdot = [0.0, 1.0, 2.0, 3.0]
-        resdot = cover_hessian(fdot, xdot; rule=SensitivitySplit())
+        resdot = cover_hessian(WithDiagnostics(), fdot, xdot; rule=SensitivitySplit())
         @test resdot.h_sum ≈ [2.0, 1.0, 0.0, 1.0]
         @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
 
         # Input covariance holds when the weights are rescaled alongside the inputs.
         w = [0.5, 4.0, 1.0, 2.0, 0.25]
         d = [1e-6, 1e3, 1.0, 1e-2, 1e4]
-        res = cover_hessian(quad_matvec(AQ), XQ; rule=SensitivitySplit(w))
-        resd2 = cover_hessian(xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+        res = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule=SensitivitySplit(w))
+        resd2 = cover_hessian(WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
                               rule=SensitivitySplit(d .* w))
         @test resd2.h_sum ≈ res.h_sum ./ d rtol=1e-12
         @test resd2.h_quad ≈ res.h_quad ./ d rtol=1e-12
@@ -505,7 +510,7 @@ include("paired.jl")
         H = ForwardDiff.hessian(f, x0)
         t, outidx = tape_function(f, x0)
         N = nnodes(t)
-        res = cover_hessian(t, outidx)
+        res = cover_hessian(WithDiagnostics(), t, outidx)
 
         # One group sums every node: the sum merge. One node per group: the quadrature merge.
         @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol=1e-12
@@ -569,7 +574,7 @@ include("paired.jl")
 
     @testset "variance channel — $name" for (name, f, x0) in PROBLEMS
         t, outidx = tape_function(f, x0)
-        res = cover_hessian(t, outidx)
+        res = cover_hessian(WithDiagnostics(), t, outidx)
         vc = cover_variance(t, outidx)
 
         @test vc.grad ≈ res.grad
@@ -594,7 +599,8 @@ include("paired.jl")
         # Each input reaches each node along a single path, and no node has two parents sharing an
         # input, so there is no covariance to drop: the estimate attains the quadrature merge.
         for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
-            @test cover_variance(f, x0).h_var ≈ cover_hessian(f, x0).h_quad rtol=1e-12
+            @test cover_variance(f, x0).h_var ≈
+                  cover_hessian(WithDiagnostics(), f, x0).h_quad rtol=1e-12
         end
         # One nonlinear node carries the whole Hessian of the factored quadratic, so the estimate
         # lands on the exact minimal cover.
@@ -605,7 +611,7 @@ include("paired.jl")
         # The entrywise quadratic routes each input through n nonlinear nodes whose contributions
         # overlap — exactly the covariances the independence assumption drops.
         f, x0 = quad_entrywise(AQ), XQ
-        @test all(cover_variance(f, x0).h_var .< cover_hessian(f, x0).h_quad)
+        @test all(cover_variance(f, x0).h_var .< cover_hessian(WithDiagnostics(), f, x0).h_quad)
         @test maximum(cover_variance(f, x0).severity) > 1.5
 
         # The estimate is not a cover. The diamond makes that concrete: its quadrature merge
@@ -613,7 +619,7 @@ include("paired.jl")
         # squaring node along two paths of strength 2 and 1, which the variance channel combines
         # in quadrature as sqrt(5) instead of summing to 3.
         H = ForwardDiff.hessian(reconvergent_diamond, [0.4, -0.9])
-        res = cover_hessian(reconvergent_diamond, [0.4, -0.9])
+        res = cover_hessian(WithDiagnostics(), reconvergent_diamond, [0.4, -0.9])
         vc = cover_variance(reconvergent_diamond, [0.4, -0.9])
         @test H ≈ [9.0 -3.0; -3.0 1.0]
         @test res.h_quad ≈ [3.0, 1.0]
@@ -677,7 +683,7 @@ include("paired.jl")
     @testset "spectral shrink — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         t, outidx = tape_function(f, x0)
-        h = cover_hessian(t, outidx).h_sum
+        h = cover_hessian(WithDiagnostics(), t, outidx).h_sum
 
         # Every entry of the scaled Hessian is bounded by its spectral norm.
         lambda = scaled_spectral_radius(H, h)
@@ -781,7 +787,7 @@ include("paired.jl")
 
     @testset "covering chain on generated problems — $(p.name) sigma=$sigma" for (sigma, p) in GENERATED
         H = ForwardDiff.hessian(p.f, p.x0)
-        res = cover_hessian(p.f, p.x0)
+        res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         @test res.grad ≈ ForwardDiff.gradient(p.f, p.x0)
         @test bound_ratio(H, res.B) <= GATE
         for h in (res.h_sum, res.h_quad, cover_hybrid(p.f, p.x0, 3))
@@ -799,13 +805,13 @@ include("paired.jl")
         @test all(p -> p.x0 ≈ ps[1].x0, ps)
         # The factored form's rank-many nonlinear nodes do not overlap, so its cover is far
         # tighter than the entrywise form's n² overlapping ones.
-        hs = [cover_hessian(p.f, p.x0).h_sum for p in ps]
+        hs = [cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum for p in ps]
         @test all(hs[3] .< hs[1])
 
         # rank 1: H = w*w' and the minimal cover abs.(w) = sqrt.(diag(A)) is attained.
         p1 = quadratic(6; rank=1, form=:factored, rng=MersenneTwister(4))
         @test rank(exact_hessian(p1)) == 1
-        @test cover_hessian(p1.f, p1.x0).h_quad ≈ sqrt.(diag(exact_hessian(p1)))
+        @test cover_hessian(WithDiagnostics(), p1.f, p1.x0).h_quad ≈ sqrt.(diag(exact_hessian(p1)))
     end
 
     @testset "random_dag sharing controls reconvergence" begin
@@ -813,13 +819,14 @@ include("paired.jl")
         # every node along a single path. The variance channel drops covariances between
         # reconverging paths, so it attains the quadrature merge exactly iff there are none.
         tree = random_dag(8; nops=40, sharing=0.0, rng=MersenneTwister(11))
-        @test cover_variance(tree.f, tree.x0).h_var ≈ cover_hessian(tree.f, tree.x0).h_quad rtol=1e-10
+        @test cover_variance(tree.f, tree.x0).h_var ≈
+              cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol=1e-10
 
         # With reuse, paths reconverge; the variance channel drops exactly those covariances and
         # so falls strictly below the quadrature merge on the coordinates that reconverge.
         shared = random_dag(8; nops=40, sharing=0.6, rng=MersenneTwister(11))
         hv = cover_variance(shared.f, shared.x0).h_var
-        hq = cover_hessian(shared.f, shared.x0).h_quad
+        hq = cover_hessian(WithDiagnostics(), shared.f, shared.x0).h_quad
         @test all(hv .<= hq .* GATE)
         @test count(hv .< hq .* (1 - 1e-8)) >= 2
 
@@ -874,7 +881,8 @@ include("paired.jl")
         @test exact_hessian(q) ≈ ForwardDiff.hessian(q.f, q.x0)
         @test exact_hessian(q) ≈ Diagonal(inv.(d)) * exact_hessian(p) * Diagonal(inv.(d))
         # The cover is covariant under it: this is the property the whole method rests on.
-        @test cover_hessian(q.f, q.x0).h_sum ≈ cover_hessian(p.f, p.x0).h_sum ./ d rtol=1e-10
+        @test cover_hessian(WithDiagnostics(), q.f, q.x0).h_sum ≈
+              cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum ./ d rtol=1e-10
 
         @test_throws DimensionMismatch rescale(p, [1.0, 2.0])
         @test_throws ArgumentError rescale(p, [1.0, 2.0, 0.0, 1.0])
@@ -947,7 +955,7 @@ include("paired.jl")
     @testset "an inflated cover is still a cover" begin
         p = quadratic(6; form=:entrywise, rng=MersenneTwister(7))
         H = exact_hessian(p)
-        h = cover_hessian(p.f, p.x0).h_sum
+        h = cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum
         @test cover_ratio(H, h) <= 1
 
         for pat in (UniformInflation(), LognormalInflation(), SpikeInflation(2), RampInflation())

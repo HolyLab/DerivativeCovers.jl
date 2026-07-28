@@ -31,11 +31,13 @@ using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
 # The entry points a caller needs after `using DerivativeCovers`: the tape, the four cover
-# constructors and the two that trade cost against tightness, the types they return, the split
-# rules that parameterize them, and the matrix-free products.
+# constructors and the two that trade cost against tightness, the modes that select how much
+# `cover_hessian` returns, the types they return, the split rules that parameterize them, and the
+# matrix-free products.
 export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid
+export CoverOnly, WithDiagnostics
 export CoverResult, JacobianCover, NLSCover, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
 export hvp, jvp, vjp
