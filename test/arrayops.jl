@@ -266,6 +266,44 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         end
     end
 
+    @testset "structured matrix-vector products" begin
+        # LinearAlgebra's wrapper types are `AbstractMatrix` and so tie with the generic
+        # matrix-vector methods. Each disambiguating method must record the same tape its
+        # dense twin does, whichever side carries the variables.
+        M = [2.0 -1.0 0.5; 0.3 1.4 -0.8; -0.6 0.2 1.1]
+        c = [0.9, -0.4, 1.3]
+        x0 = [0.4, -1.1, 0.7]
+        v0 = vec(M)
+
+        @testset "$wrap" for wrap in (UpperTriangular, LowerTriangular,
+                                      UnitUpperTriangular, UnitLowerTriangular)
+            cases = [("constant matrix", z -> sum(abs2, wrap(M) * z),
+                      z -> sum(abs2, Matrix(wrap(M)) * z), x0),
+                     ("variable matrix", v -> sum(abs2, wrap(reshape(v, 3, 3)) * v[1:3]),
+                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * v[1:3]), v0)]
+            @testset "$name" for (name, f, fd, z0) in cases
+                res = cover_hessian(f, z0)
+                @test res.grad ≈ ForwardDiff.gradient(fd, z0)
+                @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+                @test res.h_sum == cover_hessian(fd, z0).h_sum
+            end
+        end
+
+        @testset "$name" for (name, f, fd, z0) in
+            [("Diagonal, constant matrix", z -> sum(abs2, Diagonal(c) * z),
+              z -> sum(abs2, Matrix(Diagonal(c)) * z), x0),
+             ("Diagonal, variable matrix", v -> sum(abs2, Diagonal(v[1:3]) * v[4:6]),
+              v -> sum(abs2, Matrix(Diagonal(v[1:3])) * v[4:6]), [c; x0]),
+             ("adjoint row vector", z -> abs2(c' * z), z -> abs2(sum(c .* z)), x0),
+             ("transpose row vector", v -> abs2(transpose(v[1:3]) * v[4:6]),
+              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0])]
+            res = cover_hessian(f, z0)
+            @test res.grad ≈ ForwardDiff.gradient(fd, z0)
+            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test res.h_sum == cover_hessian(fd, z0).h_sum
+        end
+    end
+
     @testset "covariance — softmax and layernorm" begin
         cases = [("softmax", softmax_prim(C0_5), [0.3, -1.7, 2.1, -0.4, 1.0],
                   [1e-3, 1e2, 1.0, 1e-1, 1e4]),
