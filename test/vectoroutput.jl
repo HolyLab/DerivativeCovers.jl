@@ -79,9 +79,34 @@
         @test outidx == nnodes(t)
     end
 
+    # A constant output is a fixed offset of the program, legitimate in a least-squares model: it
+    # gets a node of its own, and hence a zero Jacobian row, which the asymmetric cover already
+    # handles exactly (`a_k = 0`).
+    @testset "constant outputs get a node and a zero row" begin
+        f = xs -> [one(eltype(xs)), xs[1] * xs[2], eltype(xs)(2.5), sin(xs[3])]
+        x0 = [0.7, -0.4, 1.1]
+        t, outidxs = tape_function(f, x0)
+        @test length(outidxs) == 4
+        @test t.vals[outidxs[1]] == 1.0 && t.vals[outidxs[3]] == 2.5
+        @test isempty(t.parents[outidxs[1]]) && isempty(t.parents[outidxs[3]])
+
+        J = adjoints(t, outidxs)[:, 1:t.ninputs]
+        @test J ≈ ForwardDiff.jacobian(y -> [1.0, y[1] * y[2], 2.5, sin(y[3])], x0)
+        @test all(iszero, J[1, :]) && all(iszero, J[3, :])
+        # The constant rows carry no absolute sensitivity either, so they cost the cover nothing.
+        Utilde = jacobian_surrogate(t, outidxs)
+        @test all(iszero, Utilde[1, :]) && all(iszero, Utilde[3, :])
+
+        bal = balance_cover(Utilde; arule=:geomean)
+        @test bal.a[1] == 0 && bal.a[3] == 0
+        @test jacobian_ratio(Utilde, bal.a, bal.b) <= GATE
+    end
+
     @testset "malformed vector outputs fail fast" begin
         x0 = [1.0, 2.0]
         @test_throws "returned no outputs" tape_function(xs -> TVar[], x0)
+        # Depending on no input at all is a bug, not an offset.
+        @test_throws "every program output is a constant" tape_function(xs -> [one(eltype(xs))], x0)
         @test_throws "only TVars" tape_function(xs -> [xs[1], 1.0], x0)
         @test_throws "not a TVar or a vector of TVars" tape_function(xs -> (xs[1], xs[2]), x0)
         @test_throws "different tape" tape_function(x0) do xs

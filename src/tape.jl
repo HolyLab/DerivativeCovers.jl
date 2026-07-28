@@ -50,9 +50,9 @@ in one of three forms:
     true second partials are not recorded, only the declared rank-1 bound
     `abs(C[i, j]) <= s[i]*s[j]`.
 
-The first `ninputs` nodes are the program's inputs; they carry no parents and empty partials.
-Nodes are appended as the program executes, so they are in topological order: every parent index
-is smaller than the node's own index.
+The first `ninputs` nodes are the program's inputs; they carry no parents and empty partials, as
+does a constant output node ([`constantnode`](@ref)). Nodes are appended as the program executes,
+so they are in topological order: every parent index is smaller than the node's own index.
 """
 struct Tape
     vals::Vector{Float64}
@@ -154,6 +154,20 @@ function pushnode!(t::Tape, val, parents, d, C)
     push!(t.Cs, C)
     return TVar(t, nnodes(t))
 end
+
+"""
+    constantnode(t::Tape, c::Real) -> TVar
+
+Record a node with value `c`, no parents, and empty partials. Its absolute sensitivity is zero, so
+its Jacobian row vanishes and it contributes no atom to any cover.
+
+Elementals fold a constant operand into the node that consumes it rather than giving it a node
+(see [`TVar`](@ref)), so this is reached only at the boundary where a program's outputs become
+node indices and a constant needs an index to be one: a fixed offset among a program's outputs,
+such as the unit residual that carries an additive constant of a least-squares loss.
+"""
+constantnode(t::Tape, c::Real) =
+    pushnode!(t, float(c), Int[], Float64[], Matrix{Float64}(undef, 0, 0))
 
 """
     unarynode(x::TVar, val, d, c) -> TVar
@@ -295,7 +309,9 @@ returns:
   - a single `TVar` output: the `Int` index `outidx` of the output node;
   - an `AbstractVector` of `TVar`s: the `Vector{Int}` of output-node indices `outidxs`, one per
     entry. Entries may be input nodes or repeat a node (a duplicated output), and both are kept as
-    given — the indices, not the values, define the outputs.
+    given — the indices, not the values, define the outputs. A constant entry gets a node of its
+    own ([`constantnode`](@ref)) and so a zero Jacobian row; a program whose outputs are *all*
+    constant depends on none of its inputs and is an error.
 """
 function tape_function(f, x0::AbstractVector)
     t = Tape(x0)
@@ -315,11 +331,11 @@ function _tape_output(t::Tape, out::AbstractVector)
     isempty(out) && throw(ArgumentError("program returned no outputs"))
     all(v -> v isa TVar, out) ||
         throw(ArgumentError("program output vector must contain only TVars; got element types $(unique(map(typeof, out)))"))
-    any(isconstant, out) &&
-        throw(ArgumentError("program outputs $(findall(isconstant, out)) are constants; they do not depend on the inputs"))
-    all(v -> v.tape === t, out) ||
+    all(isconstant, out) &&
+        throw(ArgumentError("every program output is a constant; the program does not depend on its inputs"))
+    all(v -> isconstant(v) || v.tape === t, out) ||
         throw(ArgumentError("some program outputs were recorded on a different tape than the inputs"))
-    return t, [v.idx for v in out]
+    return t, [isconstant(v) ? constantnode(t, value(v)).idx : v.idx for v in out]
 end
 
 _tape_output(t::Tape, out) =
