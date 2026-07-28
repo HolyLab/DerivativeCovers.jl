@@ -292,6 +292,27 @@
         end
     end
 
+    @testset "balance_cover: check is honored on every call form" begin
+        # A dense surrogate: every merge/arule combination converges on it, so any failure here
+        # is about `check` rather than about the alternation.
+        rmap = xs -> [tanh(y) - t5[k] for (k, y) in enumerate(W * xs)]
+        t, outidxs = tape_function(rmap, [0.3, -0.2, 0.5])
+        U = jacobian_surrogate(t, outidxs)
+
+        # The matrix form and the tape form's delegating branch (any merge/arule other than
+        # sum/marginal) both take `check`; skipping verification leaves the pair unchanged.
+        for kwargs in ((;), (; merge=MaxMerge()), (; arule=:geomean),
+                       (; merge=QuadMerge(), arule=:geomean))
+            balm = balance_cover(U; check=false, kwargs...)
+            @test balm.a == balance_cover(U; kwargs...).a
+            @test balm.b == balance_cover(U; kwargs...).b
+
+            balt = balance_cover(t, outidxs; check=false, kwargs...)
+            @test balt.a == balance_cover(t, outidxs; kwargs...).a
+            @test balt.b == balance_cover(t, outidxs; kwargs...).b
+        end
+    end
+
     @testset "balance_cover: support-deficient patterns" begin
         # Ũ has support (a positive diagonal) but not total support: entry (3,3) lies on no
         # positive diagonal, so the Sinkhorn alternation drifts without bound while every

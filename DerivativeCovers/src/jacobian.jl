@@ -295,7 +295,7 @@ struct MaxMerge <: MergeRule end
                   maxiter=nothing, rtol=eps(eltype(t.vals))^(2//3), check=true)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; merge=SumMerge(), arule=:marginal, a0=nothing,
-                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3))
+                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3), check=true)
 
 Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
 with the [`MergeRule`](@ref) b-step ([`SumMerge`](@ref), [`QuadMerge`](@ref) or
@@ -349,9 +349,12 @@ needs per-output separation, so the tape form forms the surrogate once (`O(mL)`,
 and balances it explicitly. The matrix form accepts any nonnegative magnitude matrix (a surrogate
 `Ũ`, or `abs.(J)`).
 
-`check` verifies the returned pair covers the surrogate (`O(mL)`; matrix form checks against
-`Utilde` directly). A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a
-zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
+`check` verifies the returned pair covers the surrogate. The tape form must form `Ũ` to do so,
+so checking costs `O(mL)` on top of the `O(L)` production path; the matrix form already holds
+`Utilde` and checks against it for the cost of one pass over its entries.
+
+A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero column (a dead
+input) gets `b_j = 0`; both are exact and minimal.
 """
 function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule=SumMerge(),
                        arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
@@ -361,7 +364,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Merge
     if !(merge isa SumMerge) || arule !== :marginal
         # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
         # explicit surrogate instead.
-        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol)
+        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol, check)
     end
     a = _balance_start(a0, m)
 
@@ -410,7 +413,7 @@ end
 
 function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arule::Symbol=:marginal,
                        a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
-                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3))
+                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3), check::Bool=true)
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     maxiter = _resolve_maxiter(maxiter, arule)
@@ -428,9 +431,11 @@ function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arul
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
-    r = jacobian_ratio(Utilde, a, b)
-    r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
-        error("balanced pair does not cover the matrix: worst ratio $r")
+    if check
+        r = jacobian_ratio(Utilde, a, b)
+        r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
+            error("balanced pair does not cover the matrix: worst ratio $r")
+    end
     return (; a, b, iters, delta)
 end
 
