@@ -78,6 +78,7 @@ include("jacobian.jl")
 include("gram.jl")
 include("equilibrate.jl")
 include("compose.jl")
+include("show.jl")
 include("diagnostics.jl")
 
 end
