@@ -43,6 +43,15 @@ export SupportComponents, ncomponents, rowcomponent, colcomponent
 export jvp, vjp, equilibrate, scaled_singular_value, jacobian_shrink
 export submapnode, submap, declare_submap, compose_jacobian_cover, compose_hessian_cover
 
+# The tape-construction and cover-invariant entry points: the supported route for adding a new
+# elemental. Public but not exported — they belong to the extension surface, not the top namespace.
+# `public` is 1.11+ syntax and would be a parse error on the 1.10 given in `[compat]`, so the
+# declaration goes through `eval` where the parser never sees the keyword.
+@static if VERSION >= v"1.11"
+    eval(Expr(:public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
+              :constantnode, :atom_slots, :certifies_dead, :check_finite_partials))
+end
+
 include("tape.jl")
 include("overloads.jl")
 include("composites.jl")

@@ -46,6 +46,25 @@ include("paired.jl")
                                   (; ignore=(:broadcastable,)) : false)
     end
 
+    @testset "public API boundary" begin
+        # TVar records operations rather than standing in for a number: it must not be a Real, so
+        # that generic `::Real` methods reject it instead of silently taping something the package
+        # has no rule for.
+        @test !(TVar <: Real)
+        @test supertype(TVar) === Any
+
+        # The extension surface for adding a new elemental. Public, so that outside code may use
+        # it without reaching into internals, but unexported, so `using DerivativeCovers` does not
+        # pull it into the top namespace.
+        internals = (:pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
+                     :constantnode, :atom_slots, :certifies_dead, :check_finite_partials)
+        for sym in internals
+            @test isdefined(DerivativeCovers, sym)
+            @test !Base.isexported(DerivativeCovers, sym)
+            VERSION >= v"1.11" && @test Base.ispublic(DerivativeCovers, sym)
+        end
+    end
+
     @testset "tape mechanics" begin
         f = x -> x[1] * x[2] + exp(x[3])
         x0 = [2.0, -3.0, 0.5]
