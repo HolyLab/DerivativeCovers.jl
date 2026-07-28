@@ -9,6 +9,7 @@
 """
     hvp(t::Tape, outidx::Integer, v::AbstractVector) -> Hv
     hvp(f, x0::AbstractVector, v::AbstractVector) -> Hv
+    hvp!(Hv, t::Tape, outidx::Integer, v::AbstractVector) -> Hv
 
 Hessian-vector product `H*v` of the taped program, formed without the Hessian by differentiating
 the adjoint recursion along `v`: one forward tangent sweep `dv_k = sum_i (∂φ_k/∂v_i) dv_i` seeded
@@ -24,11 +25,19 @@ node's adjoint happens to vanish. The tape method of [`scaled_spectral_radius`](
 this restriction; its dense method does not.
 
 Costs about two gradients and `O(L)` memory.
+
+`hvp!` writes into `Hv`, which shares the axes of `v`. It saves the result allocation only: the
+two sweeps still allocate their own `O(L)` working vectors, so it is not allocation-free.
 """
-function hvp(t::Tape, outidx::Integer, v::AbstractVector)
+hvp(t::Tape, outidx::Integer, v::AbstractVector) =
+    hvp!(similar(v, float(eltype(v))), t, outidx, v)
+
+function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
     length(v) == n ||
         throw(DimensionMismatch("v has length $(length(v)), expected $n (one per input)"))
+    axes(Hv) == axes(v) ||
+        throw(DimensionMismatch("Hv and v must share indices: $(axes(Hv)) vs $(axes(v))"))
     Base.require_one_based_indexing(v)
     kdecl = findfirst(C -> C isa CoveredPartials, t.Cs)
     kdecl === nothing ||
@@ -66,7 +75,8 @@ function hvp(t::Tape, outidx::Integer, v::AbstractVector)
             end
         end
     end
-    return vbardot[1:n]
+    Hv .= view(vbardot, 1:n)
+    return Hv
 end
 
 function hvp(f, x0::AbstractVector, v::AbstractVector)

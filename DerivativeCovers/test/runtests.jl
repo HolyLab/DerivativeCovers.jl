@@ -90,7 +90,7 @@ include("paired.jl")
             :CoverOnly, :WithDiagnostics,
             :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
             :SplitRule, :ValueSplit, :SensitivitySplit,
-            :hvp, :jvp, :vjp,
+            :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
         ])
 
         # Addressable by qualification and covered by the compatibility promise, but unexported:
@@ -715,6 +715,13 @@ include("paired.jl")
         @test hvp(f, x0, v) ≈ H * v rtol=1e-10
         @test hvp(f, x0, zero(x0)) ≈ zero(x0) atol=1e-14
         @test_throws DimensionMismatch hvp(f, x0, [1.0; v])
+
+        # The in-place form writes the caller's destination and returns it.
+        t, outidx = tape_function(f, x0)
+        Hv = fill(NaN, length(x0))
+        @test hvp!(Hv, t, outidx, v) === Hv
+        @test Hv == hvp(t, outidx, v)
+        @test_throws DimensionMismatch hvp!(similar(x0, length(x0) + 1), t, outidx, v)
     end
 
     @testset "spectral shrink — $name" for (name, f, x0) in PROBLEMS

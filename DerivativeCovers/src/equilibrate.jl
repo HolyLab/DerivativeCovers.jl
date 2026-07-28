@@ -10,6 +10,7 @@
 """
     jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) -> Jv
     jvp(r, x0::AbstractVector, v::AbstractVector) -> Jv
+    jvp!(Jv, t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) -> Jv
 
 Jacobian-vector product `J*v` of the taped vector-valued program, formed without the Jacobian by a
 single forward tangent sweep `dv_k = sum_i (∂φ_k/∂v_i) dv_i` seeded with `v` at the input nodes and
@@ -17,11 +18,19 @@ read off at `outidxs`. Costs one sweep and `O(L)` time and memory, independent o
 `m` — unlike [`adjoints`](@ref), which is `O(m*L)`.
 
 A repeated entry in `outidxs` yields an identical entry of `Jv`.
+
+`jvp!` writes into `Jv`, which shares the axes of `outidxs`. It saves the result allocation only:
+the sweep still allocates its own `O(L)` working vector, so it is not allocation-free.
 """
-function jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector)
+jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) =
+    jvp!(similar(v, float(eltype(v)), axes(outidxs)), t, outidxs, v)
+
+function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
     length(v) == n ||
         throw(DimensionMismatch("v has length $(length(v)), expected $n (one per input)"))
+    axes(Jv) == axes(outidxs) ||
+        throw(DimensionMismatch("Jv and outidxs must share indices: $(axes(Jv)) vs $(axes(outidxs))"))
     Base.require_one_based_indexing(v)
 
     dv = zeros(N)
@@ -34,7 +43,8 @@ function jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector)
         end
         dv[k] = acc
     end
-    return dv[outidxs]
+    Jv .= view(dv, outidxs)
+    return Jv
 end
 
 function jvp(r, x0::AbstractVector, v::AbstractVector)
@@ -45,6 +55,7 @@ end
 """
     vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) -> Jtu
     vjp(r, x0::AbstractVector, u::AbstractVector) -> Jtu
+    vjp!(Jtu, t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) -> Jtu
 
 Vector-Jacobian product `J'*u` of the taped vector-valued program: one reverse adjoint sweep seeded
 with `u[k]` at node `outidxs[k]`, read off at the input nodes. Costs one sweep and `O(L)` time and
@@ -53,11 +64,20 @@ memory, independent of the output count `m`.
 Outputs that name the same node accumulate their seeds, so a repeated entry in `outidxs`
 contributes the sum of the corresponding entries of `u` — the transpose of [`jvp`](@ref)'s
 duplicated rows.
+
+`vjp!` writes into `Jtu`, which is indexed by the tape's inputs, `Base.OneTo(t.ninputs)`. It
+saves the result allocation only: the sweep still allocates its own `O(L)` working vector, so it
+is not allocation-free.
 """
-function vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector)
+vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) =
+    vjp!(similar(u, float(eltype(u)), Base.OneTo(t.ninputs)), t, outidxs, u)
+
+function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector)
     n, N = t.ninputs, nnodes(t)
     length(u) == length(outidxs) ||
         throw(DimensionMismatch("u has length $(length(u)), expected $(length(outidxs)) (one per output)"))
+    axes(Jtu, 1) == Base.OneTo(n) ||
+        throw(DimensionMismatch("Jtu has axes $(axes(Jtu)), expected $((Base.OneTo(n),)) (one per input)"))
     Base.require_one_based_indexing(u)
 
     vbar = zeros(N)
@@ -72,7 +92,8 @@ function vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector)
             vbar[p] += t.ds[k][i] * vk
         end
     end
-    return vbar[1:n]
+    Jtu .= view(vbar, 1:n)
+    return Jtu
 end
 
 function vjp(r, x0::AbstractVector, u::AbstractVector)
