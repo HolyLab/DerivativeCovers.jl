@@ -113,7 +113,7 @@ function dependency_severity(h_sum::AbstractVector, h_var::AbstractVector)
 end
 
 """
-    cover_variance(t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit()) -> VarianceCover
+    cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit()) -> VarianceCover
     cover_variance(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> VarianceCover
 
 The hard sum-merge cover and the variance-channel estimate of the quadrature merge, for the taped
@@ -128,7 +128,7 @@ quadrature merge.
 `rule` selects the [`SplitRule`](@ref) behind the per-node covers; both channels are seeded from
 the same splits. `check` verifies the per-node cover invariants.
 """
-function cover_variance(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit())
+function cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule::SplitRule=ValueSplit())
     n = t.ninputs
     vbar = adjoints(t, outidx)
     rhos, theta = local_covers(t, vbar; check, rule)

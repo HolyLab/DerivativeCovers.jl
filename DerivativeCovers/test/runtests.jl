@@ -163,6 +163,27 @@ include("paired.jl")
         @test_throws MethodError tape_function(x -> abs(x[1]), x0)
     end
 
+    # Node indices and scalar magnitudes are annotated no more narrowly than the sweeps need, so
+    # any `Integer` indexes an output and any `Real` supplies an absolute adjoint.
+    @testset "index and magnitude arguments accept any Integer/Real" begin
+        f = x -> x[1] * x[2] + exp(x[3])
+        x0 = [2.0, -3.0, 0.5]
+        t, outidx = tape_function(f, x0)
+        oi = Int32(outidx)
+        @test adjoints(t, oi) == adjoints(t, outidx)
+        @test cover_hessian(t, oi).h_sum == cover_hessian(t, outidx).h_sum
+        @test cover_variance(t, oi).h_var == cover_variance(t, outidx).h_var
+        @test cover_hybrid(t, oi, 2) == cover_hybrid(t, outidx, 2)
+        @test hvp(t, oi, [1.0, 0.0, 0.0]) == hvp(t, outidx, [1.0, 0.0, 0.0])
+        h = cover_hessian(t, outidx).h_sum
+        @test scaled_spectral_radius(t, oi, h; maxiter=Int32(50)) ≈
+              scaled_spectral_radius(t, outidx, h; maxiter=50)
+        # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
+        k = something(findfirst(C -> !isempty(C), t.Cs))
+        @test DerivativeCovers.local_cover_slots(t, Int32(k), 1) ==
+              DerivativeCovers.local_cover_slots(t, k, 1.0)
+    end
+
     # A program that is one elemental applied straight to the inputs has unit absolute
     # sensitivities, so its elementwise bound `B` is exactly `abs.(H)`. Both partials of each
     # elemental are therefore pinned against ForwardDiff: the first by `grad`, the second by `B`.

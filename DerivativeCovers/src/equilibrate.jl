@@ -142,7 +142,7 @@ end
 
 function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
                                a::AbstractVector, b::AbstractVector;
-                               maxiter::Int=200, tol::Real=1e-6,
+                               maxiter::Integer=200, tol::Real=1e-6,
                                rng::AbstractRNG=MersenneTwister(0))
     n, m = t.ninputs, length(outidxs)
     length(b) == n ||

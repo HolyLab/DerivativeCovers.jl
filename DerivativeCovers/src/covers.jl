@@ -56,12 +56,12 @@ struct HessianDiagnostics
 end
 
 """
-    adjoints(t::Tape, outidx::Int) -> vbar
+    adjoints(t::Tape, outidx::Integer) -> vbar
 
 Reverse-mode adjoints `vbar[k] = ∂v_outidx/∂v_k` for every node of `t`. The gradient of the
 program with respect to its inputs is `vbar[1:t.ninputs]`.
 """
-function adjoints(t::Tape, outidx::Int)
+function adjoints(t::Tape, outidx::Integer)
     N = nnodes(t)
     vbar = zeros(N)
     vbar[outidx] = 1.0
@@ -437,8 +437,8 @@ function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true,
 end
 
 """
-    local_cover_slots(t::Tape, k::Int, av; check::Bool=true) -> Union{Nothing,Vector{Float64}}
-    local_cover_slots(rule::SplitRule, t::Tape, k::Int, av, scales; check::Bool=true)
+    local_cover_slots(t::Tape, k::Integer, av; check::Bool=true) -> Union{Nothing,Vector{Float64}}
+    local_cover_slots(rule::SplitRule, t::Tape, k::Integer, av, scales; check::Bool=true)
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
 `rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
@@ -460,11 +460,11 @@ multiplied by a total gradient that vanishes identically, so the bound
 A node whose covering entries are not finite is reported by
 [`check_finite_partials`](@ref) rather than by the invariant test.
 """
-local_cover_slots(t::Tape, k::Int, av::Float64; check::Bool=true) =
+local_cover_slots(t::Tape, k::Integer, av::Real; check::Bool=true) =
     local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
 
 """
-    check_finite_partials(t::Tape, k::Int, av, c::Tuple)
+    check_finite_partials(t::Tape, k::Integer, av, c::Tuple)
 
 Throw unless the absolute adjoint `av` of node `k` and its covering entries `c` are all finite,
 reporting the node's own value and its parents' values.
@@ -476,7 +476,7 @@ the program is not twice-differentiable where it was recorded — a division by 
 logarithm or root at its singularity. A non-finite `av` says the same of a node downstream, whose
 partials the adjoint has already passed through.
 """
-function check_finite_partials(t::Tape, k::Int, av::Real, c::Tuple)
+function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
     (isfinite(av) && all(isfinite, c)) && return nothing
     cause = isfinite(av) ? "node $k has non-finite second partials c=$c" :
                            "the absolute adjoint reaching node $k is $av, from a node downstream"
@@ -484,7 +484,7 @@ function check_finite_partials(t::Tape, k::Int, av::Real, c::Tuple)
           "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))")
 end
 
-function local_cover_slots(rule::SplitRule, t::Tape, k::Int, av::Float64,
+function local_cover_slots(rule::SplitRule, t::Tape, k::Integer, av::Real,
                            scales::AbstractVector; check::Bool=true)
     ps, C = t.parents[k], t.Cs[k]
     if C isa PairedPartials
@@ -604,7 +604,7 @@ struct WithDiagnostics end
 const CoverMode = Union{CoverOnly,WithDiagnostics}
 
 """
-    cover_hessian([mode], t::Tape, outidx::Int; check::Bool=true, rule=ValueSplit())
+    cover_hessian([mode], t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
     cover_hessian([mode], f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
 
 Rank-1 covers of the Hessian of the taped program with output node `outidx`, or of the scalar
@@ -654,7 +654,7 @@ diagnostics, and reaching them takes the constructive two-sweep form (`adjoints`
 computes them. `check` additionally verifies that the absolute-value reverse sweep reproduces
 `h_sum`, and that the `CoverOnly()` sweep reproduces both the gradient and `h_sum`.
 """
-function cover_hessian(::WithDiagnostics, t::Tape, outidx::Int; check::Bool=true,
+function cover_hessian(::WithDiagnostics, t::Tape, outidx::Integer; check::Bool=true,
                        rule::SplitRule=ValueSplit())
     n, N = t.ninputs, nnodes(t)
     vbar = adjoints(t, outidx)
@@ -711,7 +711,7 @@ function cover_hessian(::WithDiagnostics, t::Tape, outidx::Int; check::Bool=true
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
-function cover_hessian(::CoverOnly, t::Tape, outidx::Int; check::Bool=true,
+function cover_hessian(::CoverOnly, t::Tape, outidx::Integer; check::Bool=true,
                        rule::SplitRule=ValueSplit())
     n, N = t.ninputs, nnodes(t)
     scales = split_scales(rule, t)
@@ -743,7 +743,7 @@ function cover_hessian(mode::CoverMode, f, x0::AbstractVector; check::Bool=true,
     return cover_hessian(mode, t, outidx; check, rule)
 end
 
-cover_hessian(t::Tape, outidx::Int; check::Bool=true, rule::SplitRule=ValueSplit()) =
+cover_hessian(t::Tape, outidx::Integer; check::Bool=true, rule::SplitRule=ValueSplit()) =
     cover_hessian(CoverOnly(), t, outidx; check, rule)
 cover_hessian(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit()) =
     cover_hessian(CoverOnly(), f, x0; check, rule)

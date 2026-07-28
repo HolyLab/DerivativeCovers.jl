@@ -7,7 +7,7 @@
 # sense rather than merely entrywise.
 
 """
-    hvp(t::Tape, outidx::Int, v::AbstractVector) -> Hv
+    hvp(t::Tape, outidx::Integer, v::AbstractVector) -> Hv
     hvp(f, x0::AbstractVector, v::AbstractVector) -> Hv
 
 Hessian-vector product `H*v` of the taped program, formed without the Hessian by differentiating
@@ -25,7 +25,7 @@ this restriction; its dense method does not.
 
 Costs about two gradients and `O(L)` memory.
 """
-function hvp(t::Tape, outidx::Int, v::AbstractVector)
+function hvp(t::Tape, outidx::Integer, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
     length(v) == n ||
         throw(DimensionMismatch("v has length $(length(v)), expected $n (one per input)"))
@@ -76,7 +76,7 @@ end
 
 """
     scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector) -> lambda
-    scaled_spectral_radius(t::Tape, outidx::Int, h::AbstractVector; maxiter=200, tol=1e-6, rng=MersenneTwister(0)) -> lambda
+    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, tol=1e-6, rng=MersenneTwister(0)) -> lambda
 
 Spectral norm of the scaled Hessian `Hhat = D^-1 H D^-1`, `D = diag(h)`, which measures how loose
 the cover `h` is in the spectral sense: `h` is valid iff every entry of `Hhat` is at most 1 in
@@ -106,8 +106,8 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
     return opnorm(Hhat, 2)
 end
 
-function scaled_spectral_radius(t::Tape, outidx::Int, h::AbstractVector;
-                                maxiter::Int=200, tol::Real=1e-6,
+function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
+                                maxiter::Integer=200, tol::Real=1e-6,
                                 rng::AbstractRNG=MersenneTwister(0))
     n = t.ninputs
     length(h) == n ||
