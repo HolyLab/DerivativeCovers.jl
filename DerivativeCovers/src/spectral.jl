@@ -86,7 +86,7 @@ end
 
 """
     scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector) -> lambda
-    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, rtol=cbrt(eps(eltype(h))), rng=MersenneTwister(0)) -> lambda
+    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, rtol=cbrt(eps(eltype(h))), rng=Xoshiro(0)) -> lambda
 
 Spectral norm of the scaled Hessian `Hhat = D^-1 H D^-1`, `D = diag(h)`, which measures how loose
 the cover `h` is in the spectral sense: `h` is valid iff every entry of `Hhat` is at most 1 in
@@ -119,7 +119,7 @@ end
 function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
                                 maxiter::Integer=200,
                                 rtol::Real=cbrt(eps(float(real(eltype(h))))),
-                                rng::AbstractRNG=MersenneTwister(0))
+                                rng::AbstractRNG=Xoshiro(0))
     n = t.ninputs
     length(h) == n ||
         throw(DimensionMismatch("h has length $(length(h)), expected $n (one per input)"))

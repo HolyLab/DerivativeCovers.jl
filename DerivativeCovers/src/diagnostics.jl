@@ -18,7 +18,7 @@ scale-invariant, the degradation is attributable to looseness alone.
 module Diagnostics
 
 using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm
-using Random: AbstractRNG, MersenneTwister
+using Random: AbstractRNG, Xoshiro
 
 export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
 export inflation_shape, inflation_factors, inflate, anisotropy

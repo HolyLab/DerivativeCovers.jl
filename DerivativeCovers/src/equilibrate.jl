@@ -136,7 +136,7 @@ end
 
 """
     scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::AbstractVector) -> sigma
-    scaled_singular_value(t::Tape, outidxs, a::AbstractVector, b::AbstractVector; maxiter=200, rtol=cbrt(eps(promote_type(eltype(a), eltype(b)))), rng=MersenneTwister(0)) -> sigma
+    scaled_singular_value(t::Tape, outidxs, a::AbstractVector, b::AbstractVector; maxiter=200, rtol=cbrt(eps(promote_type(eltype(a), eltype(b)))), rng=Xoshiro(0)) -> sigma
 
 Largest singular value of the equilibrated Jacobian `Jhat = diag(a)^-1 J diag(b)^-1` (see
 [`equilibrate`](@ref)), which measures how loose the cover `(a, b)` is in the spectral sense:
@@ -165,7 +165,7 @@ function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
                                a::AbstractVector, b::AbstractVector;
                                maxiter::Integer=200,
                                rtol::Real=cbrt(eps(float(real(promote_type(eltype(a), eltype(b)))))),
-                               rng::AbstractRNG=MersenneTwister(0))
+                               rng::AbstractRNG=Xoshiro(0))
     n, m = t.ninputs, length(outidxs)
     length(b) == n ||
         throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
