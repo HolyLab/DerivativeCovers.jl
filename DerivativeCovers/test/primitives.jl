@@ -101,6 +101,11 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol=1e-12
         @test rp.h_quad ≈ rs.h_quad rtol=1e-12
 
+        # The primitive form's inner-product nodes carry `PairedPartials`, the scalarized twin's
+        # multiply nodes a dense 2x2, so this pins the two curvature branches of `hvp!` together.
+        v = Float64[cos(3i) for i in eachindex(x0)]
+        @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol=1e-12
+
         vp = cover_variance(fp, x0)
         vs = cover_variance(fs, x0)
         @test vp.h_sum ≈ vs.h_sum rtol=1e-12
