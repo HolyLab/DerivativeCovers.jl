@@ -287,6 +287,15 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test_throws DimensionMismatch W * [1.0, 2.0]
         Wreal = [1.0 2.0; 3.0 4.0]
         @test_throws DimensionMismatch Wreal * xs
+
+        # The diagonal product broadcasts, which would silently expand a mismatched operand.
+        D, Dreal = Diagonal(xs), Diagonal([10.0, 20.0, 30.0])
+        @test length(D * xs) == length(Dreal * xs) == 3
+        @test_throws DimensionMismatch D * xs[1:2]
+        @test_throws DimensionMismatch D * [1.0, 2.0]
+        @test_throws DimensionMismatch Dreal * xs[1:2]
+        @test_throws DimensionMismatch Diagonal(xs[1:1]) * xs
+        @test_throws DimensionMismatch Diagonal([1.0]) * xs
     end
 
 end

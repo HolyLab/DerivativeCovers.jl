@@ -25,7 +25,7 @@ programs those instruments are exercised on live in the companion package
 """
 module DerivativeCovers
 
-using LinearAlgebra: Diagonal, dot, norm, opnorm
+using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!

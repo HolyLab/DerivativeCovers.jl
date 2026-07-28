@@ -235,9 +235,18 @@ end
 *(W::Union{Adjoint{<:Real,<:AbstractVector},Transpose{<:Real,<:AbstractVector}},
   x::AbstractVector{TVar}) = dot(parent(W), x)
 
-*(W::Diagonal{TVar}, x::AbstractVector{TVar}) = W.diag .* x
-*(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = W.diag .* x
-*(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = W.diag .* x
+# Elementwise product, not a row-by-row one: routing a `Diagonal` through `matvecnodes` would
+# record n dense linear nodes at O(n²) cost. Broadcasting expands a length-1 or otherwise
+# mismatched operand rather than rejecting it, so the axes must be checked here.
+function diagvecnodes(W::Diagonal, x::AbstractVector)
+    axes(W, 2) == axes(x, 1) ||
+        throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
+    return diag(W) .* x
+end
+
+*(W::Diagonal{TVar}, x::AbstractVector{TVar}) = diagvecnodes(W, x)
+*(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
+*(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = diagvecnodes(W, x)
 
 # LinearAlgebra's triangular matrix-vector product likewise ties with the three `AbstractMatrix`
 # methods. Triangular structure needs no special handling: `matvecnodes` reads each row through
