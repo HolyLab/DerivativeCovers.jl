@@ -1,5 +1,6 @@
 using DerivativeCovers
 using DerivativeCovers.Problems
+using Aqua
 using ForwardDiff
 using LinearAlgebra
 using Random
@@ -27,6 +28,10 @@ include("compose.jl")
 include("paired.jl")
 
 @testset "DerivativeCovers.jl" begin
+
+    @testset "Aqua" begin
+        Aqua.test_all(DerivativeCovers)
+    end
 
     @testset "tape mechanics" begin
         f = x -> x[1] * x[2] + exp(x[3])
