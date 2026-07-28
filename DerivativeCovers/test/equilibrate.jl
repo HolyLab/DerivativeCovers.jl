@@ -33,6 +33,15 @@
         # The function form retapes and must agree with the tape form.
         @test jvp(f, x0, v) ≈ J * v
         @test vjp(f, x0, u) ≈ J' * u
+
+        # The in-place forms write the caller's destination and return it. `Jv` is indexed by
+        # the outputs, `Jtu` by the inputs, so the two destinations differ in length whenever
+        # the program is not square.
+        Jv, Jtu = fill(NaN, length(outidxs)), fill(NaN, length(x0))
+        @test jvp!(Jv, t, outidxs, v) === Jv
+        @test vjp!(Jtu, t, outidxs, u) === Jtu
+        @test Jv == jvp(t, outidxs, v)
+        @test Jtu == vjp(t, outidxs, u)
     end
 
     @testset "duplicated outputs accumulate on vjp" begin
@@ -49,6 +58,9 @@
         t, outidxs = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
         @test_throws "expected 2 (one per input)" jvp(t, outidxs, [1.0, 2.0, 3.0])
         @test_throws "expected 2 (one per output)" vjp(t, outidxs, [1.0])
+        # A destination of the wrong shape is caught before the sweep runs.
+        @test_throws DimensionMismatch jvp!(zeros(3), t, outidxs, [1.0, 2.0])
+        @test_throws DimensionMismatch vjp!(zeros(3), t, outidxs, [1.0, 2.0])
     end
 
     @testset "equilibrate normalizes a valid cover" begin
@@ -86,7 +98,7 @@
         b = max.(c.b_sum, eps())            # the power iteration needs strict positivity
 
         exact = scaled_singular_value(J, c.a, b)
-        est = scaled_singular_value(t, outidxs, c.a, b; tol=1e-10, maxiter=2000)
+        est = scaled_singular_value(t, outidxs, c.a, b; rtol=1e-10, maxiter=2000)
         # Every iterate is norm(Jhat*v) at a unit v, hence a lower bound. This direction is what
         # forces `safety > 1` in `jacobian_shrink`; an estimate from above would need no guard.
         @test est <= exact * GATE
@@ -104,7 +116,7 @@
         @test_throws "expected 4 (one per output)" scaled_singular_value(t, outidxs, ones(2), c.b_max)
         # Non-convergence is an error, never a silently returned partial estimate.
         @test_throws "did not converge" scaled_singular_value(t, outidxs, c.a, c.b_max;
-                                                              tol=1e-15, maxiter=2)
+                                                              rtol=1e-15, maxiter=2)
     end
 
     @testset "jacobian_shrink" begin

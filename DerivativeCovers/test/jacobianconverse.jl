@@ -45,8 +45,8 @@
         tm, om = tape_function(pm.r, pm.x0)
         tp, op = tape_function(pp.r, pp.x0)
         @test cover_jacobian_hybrid(tm, om, 3) == cover_jacobian_hybrid(tp, op, 3)
-        balm = balance_cover(cm.Utilde; merge=:max, arule=:geomean)
-        balp = balance_cover(cp.Utilde; merge=:max, arule=:geomean)
+        balm = balance_cover(cm.Utilde; merge=MaxMerge(), arule=:geomean)
+        balp = balance_cover(cp.Utilde; merge=MaxMerge(), arule=:geomean)
         @test balm.a == balp.a && balm.b == balp.b
         # The signed Jacobian — outside the magnitude class — separates the pair decisively.
         @test maximum(abs, exact_jacobian(pp)) > 10 * maximum(abs, exact_jacobian(pm))
@@ -71,7 +71,7 @@
 
             # The minimax cover of the (rank-1) surrogate attains looseness kappa_j at every
             # entry of the cancel member — the theorem says no magnitude method beats it.
-            bal = balance_cover(cm.Utilde; merge=:max, arule=:geomean)
+            bal = balance_cover(cm.Utilde; merge=MaxMerge(), arule=:geomean)
             loose = (bal.a * bal.b') ./ abs.(Jm)
             @test loose ≈ ones(noutputs(pm)) * kappa' rtol = 1e-8
 

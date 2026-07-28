@@ -7,8 +7,9 @@
 # sense rather than merely entrywise.
 
 """
-    hvp(t::Tape, outidx::Int, v::AbstractVector) -> Hv
+    hvp(t::Tape, outidx::Integer, v::AbstractVector) -> Hv
     hvp(f, x0::AbstractVector, v::AbstractVector) -> Hv
+    hvp!(Hv, t::Tape, outidx::Integer, v::AbstractVector) -> Hv
 
 Hessian-vector product `H*v` of the taped program, formed without the Hessian by differentiating
 the adjoint recursion along `v`: one forward tangent sweep `dv_k = sum_i (∂φ_k/∂v_i) dv_i` seeded
@@ -24,11 +25,19 @@ node's adjoint happens to vanish. The tape method of [`scaled_spectral_radius`](
 this restriction; its dense method does not.
 
 Costs about two gradients and `O(L)` memory.
+
+`hvp!` writes into `Hv`, which shares the axes of `v`. It saves the result allocation only: the
+two sweeps still allocate their own `O(L)` working vectors, so it is not allocation-free.
 """
-function hvp(t::Tape, outidx::Int, v::AbstractVector)
+hvp(t::Tape, outidx::Integer, v::AbstractVector) =
+    hvp!(similar(v, float(eltype(v))), t, outidx, v)
+
+function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
     length(v) == n ||
         throw(DimensionMismatch("v has length $(length(v)), expected $n (one per input)"))
+    axes(Hv) == axes(v) ||
+        throw(DimensionMismatch("Hv and v must share indices: $(axes(Hv)) vs $(axes(v))"))
     Base.require_one_based_indexing(v)
     kdecl = findfirst(C -> C isa CoveredPartials, t.Cs)
     kdecl === nothing ||
@@ -66,7 +75,8 @@ function hvp(t::Tape, outidx::Int, v::AbstractVector)
             end
         end
     end
-    return vbardot[1:n]
+    Hv .= view(vbardot, 1:n)
+    return Hv
 end
 
 function hvp(f, x0::AbstractVector, v::AbstractVector)
@@ -76,7 +86,7 @@ end
 
 """
     scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector) -> lambda
-    scaled_spectral_radius(t::Tape, outidx::Int, h::AbstractVector; maxiter=200, tol=1e-6, rng=MersenneTwister(0)) -> lambda
+    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, rtol=cbrt(eps(eltype(h))), rng=Xoshiro(0)) -> lambda
 
 Spectral norm of the scaled Hessian `Hhat = D^-1 H D^-1`, `D = diag(h)`, which measures how loose
 the cover `h` is in the spectral sense: `h` is valid iff every entry of `Hhat` is at most 1 in
@@ -86,7 +96,7 @@ The dense method is exact. Coordinates with `h[i] == 0` are admissible only if r
 vanishes, in which case they are dropped; otherwise `h` does not cover `H` and an error is thrown.
 
 The tape method is matrix-free: power iteration on `Hhat` driven by [`hvp`](@ref), stopped when
-the estimate changes by less than `tol` relative. It requires `h` to be strictly positive. Each
+the estimate changes by less than `rtol` relative. It requires `h` to be strictly positive. Each
 iterate `norm(Hhat*v)` with `norm(v) == 1` is a *lower* bound on `lambda` and the sequence
 converges to it from below, so the estimate must be inflated by a safety factor before it is used
 to shrink a cover (see [`spectral_shrink`](@ref)). Failure to converge within `maxiter` is an
@@ -106,9 +116,10 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
     return opnorm(Hhat, 2)
 end
 
-function scaled_spectral_radius(t::Tape, outidx::Int, h::AbstractVector;
-                                maxiter::Int=200, tol::Real=1e-6,
-                                rng::AbstractRNG=MersenneTwister(0))
+function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
+                                maxiter::Integer=200,
+                                rtol::Real=cbrt(eps(float(real(eltype(h))))),
+                                rng::AbstractRNG=Xoshiro(0))
     n = t.ninputs
     length(h) == n ||
         throw(DimensionMismatch("h has length $(length(h)), expected $n (one per input)"))
@@ -122,7 +133,7 @@ function scaled_spectral_radius(t::Tape, outidx::Int, h::AbstractVector;
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v
         lambdanew == 0 && return 0.0             # the Hessian vanishes on the whole support
-        converged = abs(lambdanew - lambda) <= tol * lambdanew
+        converged = abs(lambdanew - lambda) <= rtol * lambdanew
         lambda = lambdanew
         v = u ./ lambdanew
         converged && return lambda

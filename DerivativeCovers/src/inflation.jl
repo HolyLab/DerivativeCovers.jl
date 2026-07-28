@@ -62,7 +62,7 @@ which coordinates take the looseness.
 struct RampInflation <: InflationPattern end
 
 """
-    inflation_shape(pattern, h::AbstractVector; rng=MersenneTwister(1)) -> w
+    inflation_shape(pattern, h::AbstractVector; rng=Xoshiro(0)) -> w
 
 The pattern's shape over the coordinates of `h`: `0 <= w <= 1` with `maximum(w) == 1`, sharing
 the axes of `h`. `rng` is used only by the random patterns.
@@ -71,11 +71,11 @@ function inflation_shape end
 
 _shape(h::AbstractVector) = fill!(similar(h, float(eltype(h))), 0)
 
-inflation_shape(::UniformInflation, h::AbstractVector; rng::AbstractRNG=MersenneTwister(1)) =
+inflation_shape(::UniformInflation, h::AbstractVector; rng::AbstractRNG=Xoshiro(0)) =
     fill!(_shape(h), 1)
 
 function inflation_shape(p::SpikeInflation, h::AbstractVector;
-                         rng::AbstractRNG=MersenneTwister(1))
+                         rng::AbstractRNG=Xoshiro(0))
     p.index in eachindex(h) ||
         throw(BoundsError(h, p.index))
     w = _shape(h)
@@ -84,7 +84,7 @@ function inflation_shape(p::SpikeInflation, h::AbstractVector;
 end
 
 function inflation_shape(::RampInflation, h::AbstractVector;
-                         rng::AbstractRNG=MersenneTwister(1))
+                         rng::AbstractRNG=Xoshiro(0))
     w = _shape(h)
     n = length(h)
     for (j, i) in enumerate(eachindex(h))
@@ -94,7 +94,7 @@ function inflation_shape(::RampInflation, h::AbstractVector;
 end
 
 function inflation_shape(::LognormalInflation, h::AbstractVector;
-                         rng::AbstractRNG=MersenneTwister(1))
+                         rng::AbstractRNG=Xoshiro(0))
     w = _shape(h)
     for i in eachindex(w)
         w[i] = abs(randn(rng))
@@ -107,8 +107,8 @@ function inflation_shape(::LognormalInflation, h::AbstractVector;
 end
 
 """
-    inflation_factors(pattern, h::AbstractVector, peak; rng=MersenneTwister(1)) -> f
-    inflation_factors(pattern, n::Integer, peak; rng=MersenneTwister(1)) -> f
+    inflation_factors(pattern, h::AbstractVector, peak; rng=Xoshiro(0)) -> f
+    inflation_factors(pattern, n::Integer, peak; rng=Xoshiro(0)) -> f
 
 Per-coordinate inflation factors `f = peak .^ inflation_shape(pattern, h)`, laid out on the axes
 of `h` (or as a length-`n` vector). Every factor lies in `[1, peak]`, and the largest equals
@@ -120,18 +120,18 @@ recompute it from the inflated cover — a cover coordinate that is exactly zero
 [`inflate`](@ref) and reveals nothing about the factor it was multiplied by.
 """
 function inflation_factors(pattern::InflationPattern, h::AbstractVector, peak::Real;
-                           rng::AbstractRNG=MersenneTwister(1))
+                           rng::AbstractRNG=Xoshiro(0))
     peak >= 1 || throw(ArgumentError("peak must be at least 1, got $peak"))
     return peak .^ inflation_shape(pattern, h; rng)
 end
 
 inflation_factors(pattern::InflationPattern, n::Integer, peak::Real;
-                  rng::AbstractRNG=MersenneTwister(1)) =
+                  rng::AbstractRNG=Xoshiro(0)) =
     inflation_factors(pattern, zeros(n), peak; rng)
 
 """
     inflate(h::AbstractVector, f::AbstractVector) -> hd
-    inflate(h::AbstractVector, pattern, peak; rng=MersenneTwister(1)) -> hd
+    inflate(pattern, h::AbstractVector, peak; rng=Xoshiro(0)) -> hd
 
 Loosen the cover `h` coordinatewise by the factors `f` (or by the factors that `pattern` and
 `peak` generate, per [`inflation_factors`](@ref)). Since every factor is at least 1, `hd` covers
@@ -149,8 +149,8 @@ function inflate(h::AbstractVector, f::AbstractVector)
     return h .* f
 end
 
-inflate(h::AbstractVector, pattern::InflationPattern, peak::Real;
-        rng::AbstractRNG=MersenneTwister(1)) =
+inflate(pattern::InflationPattern, h::AbstractVector, peak::Real;
+        rng::AbstractRNG=Xoshiro(0)) =
     inflate(h, inflation_factors(pattern, h, peak; rng))
 
 """

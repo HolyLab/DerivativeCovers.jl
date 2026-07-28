@@ -76,22 +76,22 @@ function nls_loss_tape(r, x0::AbstractVector)
 end
 
 """
-    nls_partition(nnodes, sqidx; ngroups=nothing) -> groups
+    nls_partition(N, sqidx; ngroups=nothing) -> groups
 
 Node partition for the residuals-as-groups hybrid merge of a least-squares loss tape with
-`nnodes` nodes and residual-square nodes `sqidx`. Each residual square is placed in a group of
+`N` nodes and residual-square nodes `sqidx`. Each residual square is placed in a group of
 its own (`ngroups === nothing`, one group per residual, giving the exact Gauss–Newton diagonal in
 quadrature) or spread cyclically across `ngroups` groups (a cheaper upper bound). Every other node
 — the residual-curvature subgraph — is placed in one further group, so its second-order
 contribution is summed there and combined in quadrature with the Gauss–Newton groups.
 """
-function nls_partition(nnodes::Integer, sqidx::AbstractVector{<:Integer}; ngroups=nothing)
+function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups=nothing)
     m = length(sqidx)
     m >= 1 || throw(ArgumentError("need at least one residual"))
     gres = ngroups === nothing ? m : min(Int(ngroups), m)
     gres >= 1 || throw(ArgumentError("ngroups must be positive, got $ngroups"))
     curv = gres + 1
-    groups = fill(curv, nnodes)
+    groups = fill(curv, N)
     for (i, k) in enumerate(sqidx)
         groups[k] = 1 + (i - 1) % gres
     end

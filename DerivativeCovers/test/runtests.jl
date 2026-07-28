@@ -20,7 +20,8 @@ using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, boun
                         declare_submap, submap, cyclic_partition, level_partition, node_levels,
                         nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
                         local_covers, balanced_split, variance_seeds, dependency_sweep,
-                        jacobian_surrogate, marginal_weights, balance_cover
+                        jacobian_surrogate, marginal_weights, balance_cover,
+                        MergeRule, SumMerge, QuadMerge, MaxMerge
 # This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
 using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
                     rowcomponent, colcomponent
@@ -90,7 +91,7 @@ include("paired.jl")
             :CoverOnly, :WithDiagnostics,
             :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
             :SplitRule, :ValueSplit, :SensitivitySplit,
-            :hvp, :jvp, :vjp,
+            :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
         ])
 
         # Addressable by qualification and covered by the compatibility promise, but unexported:
@@ -117,7 +118,7 @@ include("paired.jl")
                    :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
                    :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
                    :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-                   :balance_cover)
+                   :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge)
         for sym in private
             @test isdefined(DerivativeCovers, sym)
             VERSION >= v"1.11" && @test !Base.ispublic(DerivativeCovers, sym)
@@ -161,6 +162,27 @@ include("paired.jl")
         end
         # Elementals outside the supported set fail fast rather than silently linearizing.
         @test_throws MethodError tape_function(x -> abs(x[1]), x0)
+    end
+
+    # Node indices and scalar magnitudes are annotated no more narrowly than the sweeps need, so
+    # any `Integer` indexes an output and any `Real` supplies an absolute adjoint.
+    @testset "index and magnitude arguments accept any Integer/Real" begin
+        f = x -> x[1] * x[2] + exp(x[3])
+        x0 = [2.0, -3.0, 0.5]
+        t, outidx = tape_function(f, x0)
+        oi = Int32(outidx)
+        @test adjoints(t, oi) == adjoints(t, outidx)
+        @test cover_hessian(t, oi).h_sum == cover_hessian(t, outidx).h_sum
+        @test cover_variance(t, oi).h_var == cover_variance(t, outidx).h_var
+        @test cover_hybrid(t, oi, 2) == cover_hybrid(t, outidx, 2)
+        @test hvp(t, oi, [1.0, 0.0, 0.0]) == hvp(t, outidx, [1.0, 0.0, 0.0])
+        h = cover_hessian(t, outidx).h_sum
+        @test scaled_spectral_radius(t, oi, h; maxiter=Int32(50)) ≈
+              scaled_spectral_radius(t, outidx, h; maxiter=50)
+        # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
+        k = something(findfirst(C -> !isempty(C), t.Cs))
+        @test DerivativeCovers.local_cover_slots(t, Int32(k), 1) ==
+              DerivativeCovers.local_cover_slots(t, k, 1.0)
     end
 
     # A program that is one elemental applied straight to the inputs has unit absolute
@@ -471,11 +493,19 @@ include("paired.jl")
         @test resd2.h_sum ≈ res.h_sum ./ d rtol=1e-12
         @test resd2.h_quad ≈ res.h_quad ./ d rtol=1e-12
 
-        # Weights must be one per input, strictly positive and finite: a zero weight could
-        # zero a live slot's scale and falsely certify it dead.
+        # Weights must be strictly positive and finite — a zero weight could zero a live slot's
+        # scale and falsely certify it dead — and a malformed rule cannot be built at all.
+        @test_throws "strictly positive" SensitivitySplit([1.0, 0.0])
+        @test_throws "strictly positive" SensitivitySplit([1.0, Inf])
+        @test_throws "strictly positive" SensitivitySplit([1.0, NaN])
+        # Length is the one requirement that cannot be checked without a tape.
         @test_throws DimensionMismatch cover_hessian(fmul, x0; rule=SensitivitySplit([1.0]))
-        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, 0.0]))
-        @test_throws "strictly positive" cover_hessian(fmul, x0; rule=SensitivitySplit([1.0, Inf]))
+
+        # Every reachable call form builds the same rule.
+        @test SensitivitySplit() === SensitivitySplit(nothing) === SensitivitySplit{Nothing}()
+        let w = [1.0, 2.0]
+            @test SensitivitySplit(w) === SensitivitySplit{typeof(w)}(w)
+        end
 
         # Both channels of the variance pair are seeded from the same splits, so the rule
         # carries through: the hard channel reproduces the sum merge under the same rule.
@@ -686,6 +716,13 @@ include("paired.jl")
         @test hvp(f, x0, v) ≈ H * v rtol=1e-10
         @test hvp(f, x0, zero(x0)) ≈ zero(x0) atol=1e-14
         @test_throws DimensionMismatch hvp(f, x0, [1.0; v])
+
+        # The in-place form writes the caller's destination and returns it.
+        t, outidx = tape_function(f, x0)
+        Hv = fill(NaN, length(x0))
+        @test hvp!(Hv, t, outidx, v) === Hv
+        @test Hv == hvp(t, outidx, v)
+        @test_throws DimensionMismatch hvp!(similar(x0, length(x0) + 1), t, outidx, v)
     end
 
     @testset "spectral shrink — $name" for (name, f, x0) in PROBLEMS
@@ -710,7 +747,7 @@ include("paired.jl")
         # The matrix-free estimate approaches the exact norm from below, where it applies at all:
         # a coordinate the Hessian ignores gets a zero cover, which the power iteration rejects.
         if all(>(0), h)
-            est = scaled_spectral_radius(t, outidx, h; maxiter=1000, tol=1e-10)
+            est = scaled_spectral_radius(t, outidx, h; maxiter=1000, rtol=1e-10)
             @test est <= lambda * GATE
             @test est ≈ lambda rtol=1e-4
         else
@@ -740,7 +777,7 @@ include("paired.jl")
         t, outidx = tape_function(rosenbrock, [-1.2, 1.0])
         @test_throws "strictly positive" scaled_spectral_radius(t, outidx, [1.0, 0.0])
         @test_throws "did not converge" scaled_spectral_radius(t, outidx, [1.0, 1.0];
-                                                               maxiter=1, tol=1e-12)
+                                                               maxiter=1, rtol=1e-12)
         @test_throws ArgumentError spectral_shrink(h, -1.0)
         @test_throws ArgumentError spectral_shrink(h, 1.0; safety=0)
     end
@@ -977,7 +1014,7 @@ include("paired.jl")
             @test tightness(hd, h)[1] ≈ maximum(f)
         end
 
-        @test inflate(h, UniformInflation(), 2.5) ≈ 2.5 .* h
+        @test inflate(UniformInflation(), h, 2.5) ≈ 2.5 .* h
         @test_throws ArgumentError inflate(h, fill(0.5, length(h)))
         @test_throws DimensionMismatch inflate(h, ones(length(h) + 1))
     end
@@ -1023,7 +1060,7 @@ include("paired.jl")
         # A gradient halving each iteration, against a cover held fixed along the path.
         grads = [[2.0^-k, 0.0] for k in 0:10]
         covers = [ones(2) for _ in 0:10]
-        dcovers = [inflate(h, UniformInflation(), 4.0) for h in covers]
+        dcovers = [inflate(UniformInflation(), h, 4.0) for h in covers]
         tol = 0.1
         # 2^-k <= 0.1 first at k = 4, and 2^-k <= 0.4 (the inflated test) first at k = 2.
         @test stopping_index(grads, covers, tol) == 5
@@ -1053,7 +1090,7 @@ include("paired.jl")
         A = Symmetric(randn(rng, 5, 5)) |> Matrix
         g = randn(rng, 5)
         h = abs.(randn(rng, 5)) .+ 0.5
-        hd = inflate(h, LognormalInflation(), 8.0; rng)
+        hd = inflate(LognormalInflation(), h, 8.0; rng)
         b = regularization_bias(A, g, h, hd, 0.5)
         # Variables: x -> D*x sends g -> D*g, A -> D*A*D, and any cover h -> D*h.
         D = Diagonal([1e3, 1e-2, 1.0, 7.0, 1e-4])
@@ -1105,9 +1142,9 @@ include("paired.jl")
         @test exact.iters == 1                      # the scaled system is the identity
 
         # Uniform inflation rescales the metric without reshaping it: still one iteration.
-        @test cover_cg(A, b, inflate(h, UniformInflation(), 5.0)).iters == 1
+        @test cover_cg(A, b, inflate(UniformInflation(), h, 5.0)).iters == 1
         # A spike leaves the scaled system with two distinct eigenvalues.
-        spiked = cover_cg(A, b, inflate(h, SpikeInflation(1), 10.0))
+        spiked = cover_cg(A, b, inflate(SpikeInflation(1), h, 10.0))
         @test spiked.iters == 2
         @test spiked.x ≈ A \ b
 
@@ -1120,11 +1157,11 @@ include("paired.jl")
         A = M * M' + 12I                            # symmetric positive definite
         g = randn(rng, 12)
         h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
-        hd = inflate(h, LognormalInflation(), 1e4; rng)
+        hd = inflate(LognormalInflation(), h, 1e4; rng)
 
         # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
         # reach the target, and the loose cover pays for it in iterations.
-        long = step_degradation(A, g, h, hd; itermax=40)
+        long = step_degradation(A, g, h, hd; maxiter=40)
         @test long.error_ref < 1e-6 && long.error_dist < 1e-6
         @test long.iters_dist > long.iters_ref
 
@@ -1138,7 +1175,7 @@ include("paired.jl")
         @test budget.error_dist > 1e3 * budget.error_ref
 
         # Uniform inflation is invisible here too: only the shape of the metric steers CG.
-        uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); itermax=4)
+        uni = step_degradation(A, g, h, inflate(UniformInflation(), h, 50.0); maxiter=4)
         @test uni.error_dist ≈ uni.error_ref
     end
 

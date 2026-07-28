@@ -26,7 +26,7 @@ programs those instruments are exercised on live in the companion package
 module DerivativeCovers
 
 using LinearAlgebra: Diagonal, dot, norm, opnorm
-using Random: AbstractRNG, MersenneTwister
+using Random: AbstractRNG, Xoshiro
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
@@ -40,7 +40,7 @@ export cover_hybrid, cover_jacobian_hybrid
 export CoverOnly, WithDiagnostics
 export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
-export hvp, jvp, vjp
+export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Addressable by qualification, and covered by the same compatibility promise as the exports,
 # but kept out of the top namespace. Two kinds of name qualify: the contracts outside code
