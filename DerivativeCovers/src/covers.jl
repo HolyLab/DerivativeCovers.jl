@@ -346,9 +346,16 @@ struct SensitivitySplit{W} <: SplitRule
 end
 SensitivitySplit() = SensitivitySplit(nothing)
 
-# Whether a zero scale reference from this rule certifies that the slot's total gradient
-# vanishes identically, so the slot's Hessian contributions are zero and it needs no cover.
-# A zero *value* certifies nothing of the sort.
+"""
+    certifies_dead(rule::SplitRule) -> Bool
+
+Whether a zero scale reference from `rule` certifies that the slot's total gradient vanishes
+identically, so the slot's Hessian contributions are zero and it needs no cover weight. A zero
+*value* certifies nothing of the sort, so [`ValueSplit`](@ref) answers `false`; a zero
+absolute sensitivity does, so [`SensitivitySplit`](@ref) answers `true`.
+
+With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must define.
+"""
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
