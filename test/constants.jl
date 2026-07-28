@@ -105,9 +105,25 @@
         tc, oc = tape_function(wc, x0)
         @test nnodes(tc) == nnodes(first(tape_function(wn, x0)))
         @test isempty(tc.Cs[oc])
-        # Mixing the two states in one operand has no per-vector reading and fails fast.
+    end
+
+    @testset "an operand mixing the two states is split by pair" begin
+        # Only the pairs recording on both sides reach an inner-product node; a constant side is a
+        # coefficient of a linear node. Parity with the scalarized product is in primitives.jl.
+        x0 = [1.0, 2.0, 3.0]
         mixed = x -> dot([TVar(2.0), x[2], TVar(0.5)], x)
-        @test_throws "must be all constant or all recording" tape_function(mixed, x0)
+        t, o = tape_function(mixed, x0)
+        @test t.vals[o] ≈ 2.0 * 1.0 + 2.0 * 2.0 + 0.5 * 3.0
+        @test count(C -> C isa DerivativeCovers.PairedPartials, t.Cs) == 1
+
+        # A pair constant on both sides is an additive offset.
+        withoffset = x -> dot([TVar(2.0), x[1]], [TVar(3.0), x[2]])
+        t2, o2 = tape_function(withoffset, x0)
+        @test t2.vals[o2] ≈ 6.0 + 1.0 * 2.0
+
+        # An all-constant product has nothing to record and is itself a constant.
+        s = dot(TVar[TVar(2.0), TVar(3.0)], TVar[TVar(4.0), TVar(5.0)])
+        @test isconstant(s) && value(s) == 23
     end
 
     @testset "a sum over constants and variables keeps the offset" begin
