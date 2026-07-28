@@ -46,6 +46,34 @@ dot_const_scalar(w0) = z -> 0.5 * scalar_dot(w0, z)^2
 
 const W0_CONST = [1e-2, 0.1, 1.0, 10.0]
 
+"Coefficient vector mixing typed constants with variables, for the split inner product."
+mixed_w(z) = (T = eltype(z); T[T(2.0), z[5], T(-1.5), z[6]])
+
+"f = exp(dot(w, z[1:4])/4) with `w` constant in two of its four slots."
+dot_mixed_prim(z) = exp(dot(mixed_w(z), z[1:4]) / 4)
+dot_mixed_scalar(z) = exp(scalar_dot(mixed_w(z), z[1:4]) / 4)
+
+"""
+Operand pair exercising all four pair states, in slot order: constant×variable,
+variable×constant, variable×variable, constant×constant.
+"""
+function both_mixed(z)
+    T = eltype(z)
+    return T[T(2.0), z[4], z[5], T(-1.5)], T[z[1], T(0.5), z[2], T(3.0)]
+end
+
+"f = exp((dot(w, x) + z[3])/4) with both operands mixed."
+function dot_bothmixed_prim(z)
+    w, x = both_mixed(z)
+    return exp((dot(w, x) + z[3]) / 4)
+end
+
+"Same function as [`dot_bothmixed_prim`](@ref), scalarized."
+function dot_bothmixed_scalar(z)
+    w, x = both_mixed(z)
+    return exp((scalar_dot(w, x) + z[3]) / 4)
+end
+
 "Name, primitive program, scalarized twin, and evaluation point for each parity case."
 const PRIMITIVE_PARITY = [
     ("matvec var x var", matvec_prim, matvec_scalar,
@@ -53,6 +81,10 @@ const PRIMITIVE_PARITY = [
     ("single dot", dot_prim, dot_scalar, [0.3, -1.1, 0.7, 1.2, -0.4, 0.9]),
     ("constant-coefficient dot", dot_const_prim(W0_CONST), dot_const_scalar(W0_CONST),
      [0.3, -1.2, 2.0, -0.5]),
+    ("mixed coefficient operand", dot_mixed_prim, dot_mixed_scalar,
+     [0.3, -1.1, 0.7, 1.2, -0.4, 0.9]),
+    ("both operands mixed", dot_bothmixed_prim, dot_bothmixed_scalar,
+     [0.6, -0.9, 0.4, 1.1, -0.3]),
 ]
 
 "Every primitive program above, paired with a plain-Julia twin usable by ForwardDiff."
@@ -142,6 +174,31 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
+    end
+
+    # The split is over parent slots, so a vector against itself splits pairwise as well: the
+    # constant slot pairs with itself into the offset, the recording slots into the atom set.
+    @testset "repeated parents in a mixed operand" begin
+        f = z -> (T = eltype(z); log(1 + dot(T[z[1], T(2.0), z[2]], T[z[1], T(2.0), z[2]])))
+        x0 = [0.5, -1.2]
+        H = ForwardDiff.hessian(f, x0)
+        res = cover_hessian(f, x0)
+        @test res.grad ≈ ForwardDiff.gradient(f, x0)
+        @test bound_ratio(H, res.B) <= GATE
+        @test cover_ratio(H, res.h_sum) <= GATE
+        @test cover_ratio(H, res.h_quad) <= GATE
+    end
+
+    # However long the operand, the split records the product in a bounded number of nodes; the
+    # scalarized twin grows as 2q.
+    @testset "a mixed operand costs O(1) nodes" begin
+        function mixed_extra(q)
+            x0 = [0.1 * i for i in 1:(q + q ÷ 2)]
+            f = z -> dot(TVar[isodd(j) ? TVar(float(j)) : z[q + (j ÷ 2)] for j in 1:q], z[1:q])
+            t, _ = tape_function(f, x0)
+            return nnodes(t) - length(x0)
+        end
+        @test mixed_extra(4) == mixed_extra(16) == mixed_extra(64)
     end
 
     @testset "constant-x and constant-W matvecs" begin

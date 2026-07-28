@@ -165,19 +165,49 @@ abs2(x::TVar) = isconstant(x) ? TVar(value(x)^2) : unarynode(x, value(x)^2, 2 * 
 # constant-coefficient product records one linear node per output entry, carrying no
 # second-order term (see `dotnode`/`linearnode` in tape.jl).
 # A `Vector{TVar}` may hold constants (`eltype(x)[...]`), and a side that is entirely constant is
-# a coefficient vector: it records as a linear node, exactly as a `Vector{Float64}` would. A side
-# mixing constants with recording entries has no such reading — the node forms are per-vector, not
-# per-entry — so it fails fast rather than scalarizing the product silently.
+# a coefficient vector: it records as a linear node, exactly as a `Vector{Float64}` would. The node
+# forms are per-vector, not per-entry, so an operand that mixes the two states is split by pair
+# instead (`_partitioned_dot`).
 function dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     wconst, xconst = count(isconstant, ws), count(isconstant, xs)
     wconst == 0 && xconst == 0 && return dotnode(ws, xs)
-    wconst == length(ws) && return linearnode(map(value, ws), xs)
-    xconst == length(xs) && return linearnode(map(value, xs), ws)
-    side = wconst > 0 && wconst < length(ws) ? "first" : "second"
-    throw(ArgumentError("the $side operand of an inner product mixes constant and recording " *
-                        "TVars ($wconst and $xconst constants of $(length(ws)) and $(length(xs))); " *
-                        "an inner product records as one node over a whole vector, so each " *
-                        "operand must be all constant or all recording"))
+    xconst == 0 && wconst == length(ws) && return linearnode(map(value, ws), xs)
+    wconst == 0 && xconst == length(xs) && return linearnode(map(value, xs), ws)
+    return _partitioned_dot(ws, xs)
+end
+
+# An inner product whose operands mix constant and recording TVars, split by the state of each
+# pair: pairs recording on both sides form one inner-product node, pairs with one constant side
+# form a linear node against those constants as coefficients, and pairs constant on both sides an
+# additive offset. A pair with a constant side has no second-order term, so it contributes no atom
+# under any reading, and the additions that recombine the parts are transparent to every sweep:
+# the atom set is the one the scalarized product gives, for at most three nodes instead of 2q.
+function _partitioned_dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
+    idxs = eachindex(ws, xs)
+    isempty(idxs) && throw(ArgumentError("cannot record an empty inner product"))
+    wpair, xpair = TVar[], TVar[]     # both sides recording
+    wcoef, wrest = Float64[], TVar[]  # ws[j] constant, xs[j] recording
+    xcoef, xrest = Float64[], TVar[]  # xs[j] constant, ws[j] recording
+    offset = 0.0
+    for j in idxs
+        w, x = ws[j], xs[j]
+        if isconstant(w) && isconstant(x)
+            offset += value(w) * value(x)
+        elseif isconstant(w)
+            push!(wcoef, value(w)); push!(wrest, x)
+        elseif isconstant(x)
+            push!(xcoef, value(x)); push!(xrest, w)
+        else
+            push!(wpair, w); push!(xpair, x)
+        end
+    end
+    parts = TVar[]
+    isempty(wpair) || push!(parts, dotnode(wpair, xpair))
+    isempty(wrest) || push!(parts, linearnode(wcoef, wrest))
+    isempty(xrest) || push!(parts, linearnode(xcoef, xrest))
+    isempty(parts) && return TVar(offset)   # every pair constant on both sides
+    total = length(parts) == 1 ? only(parts) : linearnode(ones(length(parts)), parts)
+    return iszero(offset) ? total : total + offset
 end
 dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = linearnode(w, xs)
 dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = linearnode(x, ws)
