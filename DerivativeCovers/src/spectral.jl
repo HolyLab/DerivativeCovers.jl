@@ -76,7 +76,7 @@ end
 
 """
     scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector) -> lambda
-    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, tol=1e-6, rng=MersenneTwister(0)) -> lambda
+    scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector; maxiter=200, rtol=cbrt(eps(eltype(h))), rng=MersenneTwister(0)) -> lambda
 
 Spectral norm of the scaled Hessian `Hhat = D^-1 H D^-1`, `D = diag(h)`, which measures how loose
 the cover `h` is in the spectral sense: `h` is valid iff every entry of `Hhat` is at most 1 in
@@ -86,7 +86,7 @@ The dense method is exact. Coordinates with `h[i] == 0` are admissible only if r
 vanishes, in which case they are dropped; otherwise `h` does not cover `H` and an error is thrown.
 
 The tape method is matrix-free: power iteration on `Hhat` driven by [`hvp`](@ref), stopped when
-the estimate changes by less than `tol` relative. It requires `h` to be strictly positive. Each
+the estimate changes by less than `rtol` relative. It requires `h` to be strictly positive. Each
 iterate `norm(Hhat*v)` with `norm(v) == 1` is a *lower* bound on `lambda` and the sequence
 converges to it from below, so the estimate must be inflated by a safety factor before it is used
 to shrink a cover (see [`spectral_shrink`](@ref)). Failure to converge within `maxiter` is an
@@ -107,7 +107,8 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
 end
 
 function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
-                                maxiter::Integer=200, tol::Real=1e-6,
+                                maxiter::Integer=200,
+                                rtol::Real=cbrt(eps(float(real(eltype(h))))),
                                 rng::AbstractRNG=MersenneTwister(0))
     n = t.ninputs
     length(h) == n ||
@@ -122,7 +123,7 @@ function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v
         lambdanew == 0 && return 0.0             # the Hessian vanishes on the whole support
-        converged = abs(lambdanew - lambda) <= tol * lambdanew
+        converged = abs(lambdanew - lambda) <= rtol * lambdanew
         lambda = lambdanew
         v = u ./ lambdanew
         converged && return lambda

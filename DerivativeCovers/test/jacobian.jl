@@ -193,7 +193,7 @@
         @test jacobian_minimax(C2 .* M .* D2').excess ≈ jacobian_minimax(M).excess rtol = 1e-9
 
         @test_throws "nonnegative" jacobian_minimax([1.0 -2.0; 3.0 4.0])
-        @test_throws "tol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; tol=0)
+        @test_throws "atol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; atol=0)
     end
 
     @testset "cover_jacobian rejects a scalar program" begin
@@ -275,7 +275,7 @@
                 @test jacobian_ratio(U, a, b) <= GATE              # after the b-step
             end
 
-            # Stationarity: one more full round changes every product by at most ~tol.
+            # Stationarity: one more full round changes every product by at most ~rtol.
             a2 = marginal_weights(t, outidxs, bal.b)
             b2 = vec(sum(U ./ a2; dims=1))
             @test a2 .* b2' ≈ bal.a .* bal.b' rtol=1e-8

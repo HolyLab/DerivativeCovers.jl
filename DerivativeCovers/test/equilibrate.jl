@@ -86,7 +86,7 @@
         b = max.(c.b_sum, eps())            # the power iteration needs strict positivity
 
         exact = scaled_singular_value(J, c.a, b)
-        est = scaled_singular_value(t, outidxs, c.a, b; tol=1e-10, maxiter=2000)
+        est = scaled_singular_value(t, outidxs, c.a, b; rtol=1e-10, maxiter=2000)
         # Every iterate is norm(Jhat*v) at a unit v, hence a lower bound. This direction is what
         # forces `safety > 1` in `jacobian_shrink`; an estimate from above would need no guard.
         @test est <= exact * GATE
@@ -104,7 +104,7 @@
         @test_throws "expected 4 (one per output)" scaled_singular_value(t, outidxs, ones(2), c.b_max)
         # Non-convergence is an error, never a silently returned partial estimate.
         @test_throws "did not converge" scaled_singular_value(t, outidxs, c.a, c.b_max;
-                                                              tol=1e-15, maxiter=2)
+                                                              rtol=1e-15, maxiter=2)
     end
 
     @testset "jacobian_shrink" begin

@@ -42,7 +42,9 @@ Index of the first iterate along a trajectory at which the convergence test
 [`cover_norm`](@ref)`(grads[k], covers[k]) <= tol` fires, or `nothing` if it never does.
 
 `grads` and `covers` are the gradients and covers at successive iterates of an optimization run
-(a single cover may be repeated when it is held fixed along the path).
+(a single cover may be repeated when it is held fixed along the path). `tol` is likewise data
+describing that run — the convergence threshold it was run to test against — not a knob on the
+accuracy of the returned index.
 """
 function stopping_index(grads, covers, tol::Real)
     tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
@@ -63,6 +65,9 @@ An inflated cover shrinks the measured norm, so the distorted test always fires 
 reference one: `shift = k_ref - k_dist >= 0` counts the iterations it stops early, and
 `overshoot >= 1` is the *true* cover-norm at that premature stop divided by `tol` — how far the
 run really was from the requested tolerance when it declared success.
+
+`tol` is data describing the analyzed run, alongside `grads` and `covers` — the convergence
+threshold that run was tested against — not a knob on the accuracy of the returned shift.
 
 Throws if the trajectory is too short for either test to fire; extend it or loosen `tol`.
 """
@@ -172,7 +177,7 @@ function psd_excess(A::AbstractMatrix, h::AbstractVector, hd::AbstractVector)
 end
 
 """
-    cover_cg(A, b, h; x0=zero(b), itermax=length(b), reltol=sqrt(eps()), reset=16)
+    cover_cg(A, b, h; x0=zero(b), maxiter=length(b), reltol=sqrt(eps()), reset=16)
         -> (; x, iters, xs)
 
 Conjugate gradients on `A*x = b`, preconditioned by the cover: the residual is measured in the
@@ -185,7 +190,7 @@ A cover that matches `A`'s curvature scales makes the scaled system well conditi
 iteration count is a direct read on cover quality: an exact cover of a diagonal `A` converges in
 one step, and rescaling that cover by a constant changes nothing, since only the *shape* of the
 metric steers the iteration. Iteration stops when the cover-metric residual norm falls to `reltol`
-times its initial value, or after `itermax` iterations — which is the only backstop, as that norm
+times its initial value, or after `maxiter` iterations — which is the only backstop, as that norm
 is not monotone in the iteration and a badly scaled metric makes it visibly non-monotone. Every
 `reset` iterations the residual is recomputed from `x` rather than updated, to keep rounding error
 from accumulating.
@@ -198,7 +203,7 @@ Requires a strictly positive cover. `A` must be symmetric positive definite for 
 be meaningful.
 """
 function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
-                  x0::AbstractVector = zero(b), itermax::Integer = length(b),
+                  x0::AbstractVector = zero(b), maxiter::Integer = length(b),
                   reltol::Real = sqrt(eps(float(real(eltype(b))))), reset::Integer = 16)
     axes(A, 1) == axes(A, 2) == axes(b, 1) == axes(h, 1) == axes(x0, 1) ||
         throw(DimensionMismatch("A, b, h and x0 must share indices"))
@@ -214,7 +219,7 @@ function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
     xs = [copy(x)]
     dp = similar(p)
     iters = 0
-    while errold > tol && iters < itermax
+    while errold > tol && iters < maxiter
         Ap = A * p
         alpha = errold / dot(p, Ap)
         @. x += alpha * p
@@ -234,7 +239,7 @@ function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
 end
 
 """
-    step_degradation(A, g, h, hd; itermax=length(g), target=1e-6, kwargs...)
+    step_degradation(A, g, h, hd; maxiter=length(g), target=1e-6, kwargs...)
         -> (; iters_ref, iters_dist, error_ref, error_dist)
 
 What an inflated cover costs the preconditioned Newton step of [`cover_cg`](@ref) on `A*x = -g`.
@@ -243,7 +248,7 @@ Both runs are judged in the *reference* cover's metric, against the exact step `
     error(x) = norm(h .* (x - A \\ (-g))) / norm(h .* (A \\ (-g)))
 
 `iters_ref` and `iters_dist` are the iterations each run needs to bring that error below `target`,
-or `nothing` if `itermax` iterations do not suffice — which is itself the degradation, a step
+or `nothing` if `maxiter` iterations do not suffice — which is itself the degradation, a step
 budget the distorted cover cannot deliver on. `error_ref` and `error_dist` are the errors of the
 final iterates, and are the reading to take when the budget, not the accuracy, is what is fixed.
 
@@ -252,7 +257,7 @@ it was handed, so a loose cover would otherwise flatter itself by declaring vict
 Remaining keyword arguments are forwarded to [`cover_cg`](@ref).
 """
 function step_degradation(A::AbstractMatrix, g::AbstractVector, h::AbstractVector,
-                          hd::AbstractVector; itermax::Integer = length(g),
+                          hd::AbstractVector; maxiter::Integer = length(g),
                           target::Real = 1e-6, kwargs...)
     axes(h) == axes(hd) ||
         throw(DimensionMismatch("h and hd must share indices: $(axes(h)) vs $(axes(hd))"))
@@ -265,8 +270,8 @@ function step_degradation(A::AbstractMatrix, g::AbstractVector, h::AbstractVecto
     # `iters` counts steps taken, so iterate k of the history is reached after k-1 of them.
     hit(xs) = (k = findfirst(x -> err(x) <= target, xs); k === nothing ? nothing : k - 1)
 
-    ref = cover_cg(A, b, h; itermax, kwargs...)
-    dist = cover_cg(A, b, hd; itermax, kwargs...)
+    ref = cover_cg(A, b, h; maxiter, kwargs...)
+    dist = cover_cg(A, b, hd; maxiter, kwargs...)
     return (; iters_ref = hit(ref.xs), iters_dist = hit(dist.xs),
             error_ref = err(ref.x), error_dist = err(dist.x))
 end

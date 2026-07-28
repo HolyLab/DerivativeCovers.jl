@@ -252,17 +252,17 @@ end
 
 """
     balance_cover(t::Tape, outidxs; merge=:sum, arule=:marginal, a0=nothing,
-                  maxiter=nothing, tol=1e-10, check=true)
+                  maxiter=nothing, rtol=eps(eltype(t.vals))^(2//3), check=true)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; merge=:sum, arule=:marginal, a0=nothing,
-                  maxiter=nothing, tol=1e-10)
+                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3))
 
 Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
 with the `merge` b-step `b_j = ∑_k Ũ_kj/a_k` (`:sum`; `:quad` and `:max` combine the same terms in
 quadrature or by maximum). Returns `(; a, b, iters, delta)` — the pair (whose `b` is the chosen
 merge for the returned `a`, so it is a valid cover of the surrogate for any `arule`), the number
 of alternation rounds, and the final gauge-invariant change bound
-`delta = max_{kj} |log((a_k b_j)_new / (a_k b_j)_old)|`. Throws when `delta ≤ tol` is not reached
+`delta = max_{kj} |log((a_k b_j)_new / (a_k b_j)_old)|`. Throws when `delta ≤ rtol` is not reached
 within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → diag(c)*r` maps the
 fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
 untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
@@ -289,7 +289,7 @@ alternation, `10000` for the slower `:geomean` fit; pass an explicit count to ov
   converges for **every** sparsity pattern; the intermediate iterates undershoot validity, which
   the final `merge` b-step restores. Convergence is linear and can be slow on ill-conditioned
   supports (chains, wide bands): some sparse patterns need `10^4`–`10^5` rounds, so raise
-  `maxiter` when the non-convergence error reports a delta still well above `tol`.
+  `maxiter` when the non-convergence error reports a delta still well above `rtol`.
 
 For `m ≠ n` the marginal alternation's two normalizations disagree by the factor `m/n`, a pure
 gauge drift that is geometric in the round count; each round therefore renormalizes by the power
@@ -309,13 +309,13 @@ zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
 """
 function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbol=:sum,
                        arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
-                       tol::Real=1e-10, check::Bool=true)
+                       rtol::Real=eps(float(real(eltype(t.vals))))^(2//3), check::Bool=true)
     m, N = length(outidxs), nnodes(t)
     maxiter = _resolve_maxiter(maxiter, arule)
     if merge !== :sum || arule !== :marginal
         # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
         # explicit surrogate instead.
-        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, tol)
+        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol)
     end
     a = _balance_start(a0, m)
 
@@ -345,7 +345,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Symbo
     end
     astep = b -> marginal_weights(t, outidxs, b)
 
-    a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol, _marginal_hint(:sum))
+    a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(:sum))
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         r = jacobian_ratio(Utilde, a, b)
@@ -363,7 +363,8 @@ function balance_cover(r, x0::AbstractVector; kwargs...)
 end
 
 function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol=:marginal,
-                       a0=nothing, maxiter::Union{Nothing,Integer}=nothing, tol::Real=1e-10)
+                       a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
+                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3))
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     merge in (:sum, :quad, :max) ||
@@ -375,9 +376,9 @@ function balance_cover(Utilde::AbstractMatrix; merge::Symbol=:sum, arule::Symbol
 
     if arule === :marginal
         astep = b -> marginal_weights(Utilde, b)
-        a, b, iters, delta = _balance(bstep, astep, a, maxiter, tol, _marginal_hint(merge))
+        a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(merge))
     elseif arule === :geomean
-        a, iters, delta = _geomean_fit(Utilde, a, maxiter, tol)
+        a, iters, delta = _geomean_fit(Utilde, a, maxiter, rtol)
         b = bstep(a)
     else
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
@@ -423,7 +424,7 @@ _marginal_hint(merge::Symbol) =
 
 # Alternating geometric-mean fit of log U_kj ≈ log a_k + log b_j over the nonzero entries:
 # coordinate descent on the two-way least-squares objective, convergent for every pattern.
-function _geomean_fit(U, a, maxiter, tol)
+function _geomean_fit(U, a, maxiter, rtol)
     m, n = size(U)
     gstep = (weights, dim) -> begin
         out = zeros(size(U, dim))
@@ -448,10 +449,10 @@ function _geomean_fit(U, a, maxiter, tol)
         ulo, uhi = _logchange_extrema(a, aprev)
         wlo, whi = _logchange_extrema(b, bprev)
         delta = max(uhi + whi, -(ulo + wlo))
-        delta <= tol && return a, iters, delta
+        delta <= rtol && return a, iters, delta
     end
     error("balance_cover(arule=:geomean) did not converge in $maxiter rounds: product still " *
-          "changing by delta = $delta > tol = $tol. The geometric-mean fit converges for every " *
+          "changing by delta = $delta > rtol = $rtol. The geometric-mean fit converges for every " *
           "pattern but slowly on ill-conditioned supports; raise maxiter (some sparse patterns " *
           "need 1e4–1e5 rounds).")
 end
@@ -471,7 +472,7 @@ end
 # (zero coordinates excluded — their zeros persist), the change of product (k, j) is u_k + w_j,
 # whose extremes are attained at the extremes of u and w. delta bounds |u_k + w_j| exactly and is
 # gauge-invariant, since a uniform shift of u cancels against the opposite shift of w.
-function _balance(bstep, astep, a, maxiter, tol, hint="")
+function _balance(bstep, astep, a, maxiter, rtol, hint="")
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     b = bstep(a)
     _regauge!(a, b)
@@ -479,7 +480,7 @@ function _balance(bstep, astep, a, maxiter, tol, hint="")
     # Limit-cycle guard: the max-merge marginal alternation is non-smooth and can settle into a
     # cycle whose per-round product change plateaus at a positive constant — no larger maxiter
     # helps. When delta goes flat (unchanged to `stall_flat` over `stall_window` rounds) while
-    # still above tol, the run is cycling, not converging; report the stall and point at geomean.
+    # still above rtol, the run is cycling, not converging; report the stall and point at geomean.
     # A genuinely converging alternation shrinks delta geometrically, so it never reads flat.
     stall_window, stall_flat = 128, 1e-6
     last_checked = Inf
@@ -491,17 +492,17 @@ function _balance(bstep, astep, a, maxiter, tol, hint="")
         ulo, uhi = _logchange_extrema(a, aprev)
         wlo, whi = _logchange_extrema(b, bprev)
         delta = max(uhi + whi, -(ulo + wlo))
-        delta <= tol && return a, b, iters, delta
+        delta <= rtol && return a, b, iters, delta
         if iters % stall_window == 0
-            if delta > tol && abs(delta - last_checked) <= stall_flat * delta
+            if delta > rtol && abs(delta - last_checked) <= stall_flat * delta
                 error("balance_cover stalled after $iters rounds: the product change " *
-                      "delta = $delta has plateaued above tol = $tol — a limit cycle, not slow " *
+                      "delta = $delta has plateaued above rtol = $rtol — a limit cycle, not slow " *
                       "convergence$hint")
             end
             last_checked = delta
         end
     end
-    error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > tol = $tol$hint")
+    error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > rtol = $rtol$hint")
 end
 
 function _regauge!(a, b)
@@ -557,7 +558,7 @@ function jacobian_ratio(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
 end
 
 """
-    jacobian_minimax(M; tol=1e-12) -> (; a, b, excess)
+    jacobian_minimax(M; atol=eps(eltype(M))^(3//4)) -> (; a, b, excess)
 
 The exact minimax rank-1 cover of the nonnegative matrix `M`: a pair `a_k * b_j ≥ M_kj` whose
 worst-case excess `max_kj (a_k*b_j)/M_kj` over the nonzero entries of `M` is the smallest any
@@ -576,16 +577,16 @@ dimensionless and the pair is equivariant under `M → diag(c)*M*diag(d)` modulo
 
 Computed by bisection on the log-space excess with Bellman–Ford feasibility (difference
 constraints `log M_kj ≤ log a_k + log b_j ≤ log M_kj + E`), `O(nnz·(m+n))` per probe;
-deterministic, no solver. `tol` is the absolute log-space bisection width — `excess` is exact to
-a relative `tol` and the returned pair attains it. A zero row of `M` gets `a_k = 0`, a zero
+deterministic, no solver. `atol` is the absolute log-space bisection width — `excess` is exact to
+a relative `atol` and the returned pair attains it. A zero row of `M` gets `a_k = 0`, a zero
 column `b_j = 0`; both are exact. Unlike [`balance_cover`](@ref) this minimizes the worst-case
 excess itself, so it is the tightness yardstick — but the optimum is generally non-unique off
 the critical cycles, so prefer `balance_cover`'s rules when covariance-by-uniqueness matters.
 """
-function jacobian_minimax(M::AbstractMatrix; tol::Real=1e-12)
+function jacobian_minimax(M::AbstractMatrix; atol::Real=eps(float(real(eltype(M))))^(3//4))
     Base.require_one_based_indexing(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
-    tol > 0 || throw(ArgumentError("tol must be positive, got $tol"))
+    atol > 0 || throw(ArgumentError("atol must be positive, got $atol"))
     m, n = size(M)
     ks, js, cs = Int[], Int[], Float64[]
     for j in 1:n, k in 1:m
@@ -596,7 +597,7 @@ function jacobian_minimax(M::AbstractMatrix; tol::Real=1e-12)
     lo, hi = 0.0, maximum(cs) - minimum(cs)
     feasible, pot = _minimax_feasible(m, n, ks, js, cs, hi)
     feasible || error("Bellman–Ford infeasible at the row-span upper bound; this cannot happen")
-    while hi - lo > tol
+    while hi - lo > atol
         mid = lo + (hi - lo) / 2
         f, p = _minimax_feasible(m, n, ks, js, cs, mid)
         f ? (hi = mid; pot = p) : (lo = mid)

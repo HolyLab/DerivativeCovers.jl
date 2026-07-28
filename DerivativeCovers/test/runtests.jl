@@ -731,7 +731,7 @@ include("paired.jl")
         # The matrix-free estimate approaches the exact norm from below, where it applies at all:
         # a coordinate the Hessian ignores gets a zero cover, which the power iteration rejects.
         if all(>(0), h)
-            est = scaled_spectral_radius(t, outidx, h; maxiter=1000, tol=1e-10)
+            est = scaled_spectral_radius(t, outidx, h; maxiter=1000, rtol=1e-10)
             @test est <= lambda * GATE
             @test est ≈ lambda rtol=1e-4
         else
@@ -761,7 +761,7 @@ include("paired.jl")
         t, outidx = tape_function(rosenbrock, [-1.2, 1.0])
         @test_throws "strictly positive" scaled_spectral_radius(t, outidx, [1.0, 0.0])
         @test_throws "did not converge" scaled_spectral_radius(t, outidx, [1.0, 1.0];
-                                                               maxiter=1, tol=1e-12)
+                                                               maxiter=1, rtol=1e-12)
         @test_throws ArgumentError spectral_shrink(h, -1.0)
         @test_throws ArgumentError spectral_shrink(h, 1.0; safety=0)
     end
@@ -1145,7 +1145,7 @@ include("paired.jl")
 
         # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
         # reach the target, and the loose cover pays for it in iterations.
-        long = step_degradation(A, g, h, hd; itermax=40)
+        long = step_degradation(A, g, h, hd; maxiter=40)
         @test long.error_ref < 1e-6 && long.error_dist < 1e-6
         @test long.iters_dist > long.iters_ref
 
@@ -1159,7 +1159,7 @@ include("paired.jl")
         @test budget.error_dist > 1e3 * budget.error_ref
 
         # Uniform inflation is invisible here too: only the shape of the metric steers CG.
-        uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); itermax=4)
+        uni = step_degradation(A, g, h, inflate(h, UniformInflation(), 50.0); maxiter=4)
         @test uni.error_dist ≈ uni.error_ref
     end
 

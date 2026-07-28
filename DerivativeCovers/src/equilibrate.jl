@@ -115,7 +115,7 @@ end
 
 """
     scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::AbstractVector) -> sigma
-    scaled_singular_value(t::Tape, outidxs, a::AbstractVector, b::AbstractVector; maxiter=200, tol=1e-6, rng=MersenneTwister(0)) -> sigma
+    scaled_singular_value(t::Tape, outidxs, a::AbstractVector, b::AbstractVector; maxiter=200, rtol=cbrt(eps(promote_type(eltype(a), eltype(b)))), rng=MersenneTwister(0)) -> sigma
 
 Largest singular value of the equilibrated Jacobian `Jhat = diag(a)^-1 J diag(b)^-1` (see
 [`equilibrate`](@ref)), which measures how loose the cover `(a, b)` is in the spectral sense:
@@ -126,7 +126,7 @@ The dense method is exact, and drops zero weights on the same terms as [`equilib
 
 The tape method is matrix-free: power iteration on `Jhat'Jhat` driven by [`jvp`](@ref) and
 [`vjp`](@ref) — about two gradients per iteration, `O(L)` memory — stopped when the estimate
-changes by less than `tol` relative. It requires `a` and `b` to be strictly positive. Each iterate
+changes by less than `rtol` relative. It requires `a` and `b` to be strictly positive. Each iterate
 `norm(Jhat*v)` with `norm(v) == 1` is a *lower* bound on `sigma` and the sequence converges to it
 from below, so the estimate must carry a safety-factor inflation before it may shrink a cover
 (see [`jacobian_shrink`](@ref)). Failure to converge within `maxiter` is an error, not a silently
@@ -142,7 +142,8 @@ end
 
 function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
                                a::AbstractVector, b::AbstractVector;
-                               maxiter::Integer=200, tol::Real=1e-6,
+                               maxiter::Integer=200,
+                               rtol::Real=cbrt(eps(float(real(promote_type(eltype(a), eltype(b)))))),
                                rng::AbstractRNG=MersenneTwister(0))
     n, m = t.ninputs, length(outidxs)
     length(b) == n ||
@@ -160,7 +161,7 @@ function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
         signew = norm(u)                          # <= opnorm(Jhat) for any unit v
         signew == 0 && return 0.0                 # the Jacobian vanishes on the whole support
         w = vjp(t, outidxs, u ./ a) ./ b          # w = Jhat' * u; nonzero since dot(w, v) = signew^2
-        converged = abs(signew - sigma) <= tol * signew
+        converged = abs(signew - sigma) <= rtol * signew
         sigma = signew
         v = w ./ norm(w)
         converged && return sigma
