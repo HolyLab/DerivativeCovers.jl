@@ -273,8 +273,10 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
 
         @test_throws DimensionMismatch dot(xs, xs[1:2])
         @test_throws DimensionMismatch dot(xs[1:2], [1.0, 2.0, 3.0])
+        # The two builders name what they were asked to record: constant coefficients reach
+        # linearnode, recording operands on both sides reach dotnode.
         @test_throws "cannot record an empty inner product" dot(TVar[], TVar[])
-        @test_throws "cannot record an empty inner product" dot(Float64[], TVar[])
+        @test_throws "cannot record an empty linear combination" dot(Float64[], TVar[])
 
         t2, _ = tape_function(x -> x[1] + x[2], [1.0, 2.0])
         ys = [TVar(t2, 1), TVar(t2, 2), TVar(t2, 1)]

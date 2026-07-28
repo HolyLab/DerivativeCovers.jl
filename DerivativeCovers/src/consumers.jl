@@ -169,7 +169,7 @@ function psd_excess(A::AbstractMatrix, h::AbstractVector, hd::AbstractVector)
         # Scaling by a positive diagonal cannot change the sign of the spectrum, so a PSD matrix
         # needs no shift under any cover.
         iszero(tau_dist) ||
-            error("A needs no shift under h but a shift $tau_dist under hd; A is not symmetric?")
+            error("A needs no shift under h but a shift $tau_dist under hd; rescaling by a positive diagonal cannot change the sign of the spectrum, so this is eigmin roundoff on a near-singular A")
         return (; tau_ref, tau_dist, excess = fill!(similar(h, float(eltype(h))), 1))
     end
     excess = @. (tau_dist * hd^2) / (tau_ref * h^2)
