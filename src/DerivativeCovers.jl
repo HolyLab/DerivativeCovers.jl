@@ -38,7 +38,7 @@ export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid
 export CoverOnly, WithDiagnostics
-export CoverResult, JacobianCover, NLSCover, VarianceCover
+export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
 export hvp, jvp, vjp
 

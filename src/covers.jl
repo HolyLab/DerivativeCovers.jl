@@ -17,29 +17,42 @@
 # second-partial matrix and contributes no atom at all.
 
 """
-    CoverResult
+    HessianCover
+
+The gradient and the sum-merge cover of one taped program, as returned by
+[`cover_hessian`](@ref) under [`CoverOnly`](@ref).
+
+- `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
+- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
+"""
+struct HessianCover
+    grad::Vector{Float64}
+    h_sum::Vector{Float64}
+end
+
+"""
+    HessianDiagnostics
 
 Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@ref) under
-[`WithDiagnostics`](@ref).
+[`WithDiagnostics`](@ref). `grad` and `h_sum` are the same quantities a [`HessianCover`](@ref)
+carries.
 
 - `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
 - `B`: the elementwise bound `B >= abs.(H)`. A diagnostic, quadratic in `n`; the production
   path never forms it.
-- `h_sum`: the sum merge, `h = sum_k s_k`.
+- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
 - `h_quad`: the quadrature merge, `h[i] = sqrt(sum_atoms s_atom[i]^2)`, combining per [`atom_slots`](@ref)
   atom rather than per node (see [`cover_hessian`](@ref)).
 - `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic
   ([`abs_reverse`](@ref)), equal to `h_sum` up to roundoff. The production form is
   [`CoverOnly`](@ref), which fuses this sweep with the adjoint sweep.
-- `L`: the tape length (node count), inputs included.
 """
-struct CoverResult
+struct HessianDiagnostics
     grad::Vector{Float64}
     B::Matrix{Float64}
     h_sum::Vector{Float64}
     h_quad::Vector{Float64}
     h_sum_rev::Vector{Float64}
-    L::Int
 end
 
 """
@@ -565,16 +578,16 @@ atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
 """
     CoverOnly()
 
-Ask [`cover_hessian`](@ref) for the gradient and the sum-merge cover alone, `(; grad, h)`, at
-`O(L)`. The default.
+Ask [`cover_hessian`](@ref) for a [`HessianCover`](@ref): the gradient and the sum-merge cover
+alone, at `O(L)`. The default.
 """
 struct CoverOnly end
 
 """
     WithDiagnostics()
 
-Ask [`cover_hessian`](@ref) for a [`CoverResult`](@ref): the gradient and the sum-merge cover
-together with the elementwise bound `B`, the quadrature merge, and the constructive
+Ask [`cover_hessian`](@ref) for a [`HessianDiagnostics`](@ref): the gradient and the sum-merge
+cover together with the elementwise bound `B`, the quadrature merge, and the constructive
 recomputation of the sum merge that cross-checks it. Costs `O(n*L)` time and `O(n^2)` memory.
 """
 struct WithDiagnostics end
@@ -604,8 +617,8 @@ Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` 
 
 # `CoverOnly()`
 
-Returns `(; grad, h)`: the exact gradient and the sum merge, from one forward pass and a single
-reverse sweep carrying a paired adjoint `(vbar[k], abar[k])` per node,
+Returns a [`HessianCover`](@ref): the exact gradient and the sum merge, from one forward pass and
+a single reverse sweep carrying a paired adjoint `(vbar[k], abar[k])` per node,
 
     vbar[p_i] += d_i * vbar[k]                       # signed channel: reverse-mode AD
     abar[p_i] += abs(d_i) * abar[k] + rho_k[i]       # absolute channel: the cover
@@ -625,7 +638,7 @@ per-node covering invariants, as in [`local_covers`](@ref).
 
 # `WithDiagnostics()`
 
-Returns a [`CoverResult`](@ref), which adds `B`, `h_quad`, and `h_sum_rev`. These and the
+Returns a [`HessianDiagnostics`](@ref), which adds `B`, `h_quad`, and `h_sum_rev`. These and the
 forward absolute sensitivities behind them cost `O(n*L)` time and `O(n^2)` memory; they are
 diagnostics, and reaching them takes the constructive two-sweep form (`adjoints`,
 `local_covers`, `abs_reverse`) that defines the covers rather than the fused sweep that
@@ -678,12 +691,12 @@ function cover_hessian(::WithDiagnostics, t::Tape, outidx::Int; check::Bool=true
             abs(vbar[q] - pr.grad[q]) <= 1e-12 * gdenom ||
                 error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
             hdenom = max(abs(h_sum[q]), 1.0)
-            abs(h_sum[q] - pr.h[q]) <= 1e-12 * hdenom ||
-                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h[q])")
+            abs(h_sum[q] - pr.h_sum[q]) <= 1e-12 * hdenom ||
+                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
         end
     end
 
-    return CoverResult(vbar[1:n], B, h_sum, h_quad, h_sum_rev, N)
+    return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
 function cover_hessian(::CoverOnly, t::Tape, outidx::Int; check::Bool=true,
@@ -709,7 +722,7 @@ function cover_hessian(::CoverOnly, t::Tape, outidx::Int; check::Bool=true,
             abar[p] += abs(ds[i]) * ak
         end
     end
-    return (; grad = vbar[1:n], h = abar[1:n])
+    return HessianCover(vbar[1:n], abar[1:n])
 end
 
 function cover_hessian(mode::CoverMode, f, x0::AbstractVector; check::Bool=true,

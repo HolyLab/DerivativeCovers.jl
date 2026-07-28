@@ -9,15 +9,18 @@
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
         @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h ≈ r.h_sum rtol = 1e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
         @test pr.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
 
         H = ForwardDiff.hessian(f, x0)
-        @test all(abs.(H) .<= pr.h * pr.h' .* GATE)
+        @test all(abs.(H) .<= pr.h_sum * pr.h_sum' .* GATE)
 
         # `CoverOnly()` is what an unadorned call returns, from either entry point.
-        @test cover_hessian(t, outidx) == pr
-        @test cover_hessian(f, x0) == pr
+        for c in (cover_hessian(t, outidx), cover_hessian(f, x0))
+            @test c isa HessianCover
+            @test c.grad == pr.grad
+            @test c.h_sum == pr.h_sum
+        end
     end
 
     @testset "primitive tapes — $name" for (name, fp, _, x0) in PRIMITIVE_PARITY
@@ -25,7 +28,7 @@
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
         @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h ≈ r.h_sum rtol = 1e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
     end
 
     @testset "declared sub-map tape" begin
@@ -39,6 +42,6 @@
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
         @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h ≈ r.h_sum rtol = 1e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
     end
 end

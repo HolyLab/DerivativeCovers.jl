@@ -80,7 +80,7 @@ include("paired.jl")
             :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
             :cover_hybrid, :cover_jacobian_hybrid,
             :CoverOnly, :WithDiagnostics,
-            :CoverResult, :JacobianCover, :NLSCover, :VarianceCover,
+            :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
             :SplitRule, :ValueSplit, :SensitivitySplit,
             :hvp, :jvp, :vjp,
         ])

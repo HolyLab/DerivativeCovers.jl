@@ -43,7 +43,7 @@ output weights `a`, each `b` satisfies `a_k * b_j ≥ |J_kj|` for every entry:
 - `b_max`: the exact minimal `b` for this `a`, `b_j = max_k Ũ_kj/a_k`. Always
   `b_max ≤ b_quad ≤ b_sum` coordinatewise.
 - `Utilde`: the `m × n` surrogate `Ũ` (see [`jacobian_surrogate`](@ref)), a diagnostic.
-- `m`, `n`, `L`: output count, input count, and tape length.
+- `m`, `n`: output count and input count.
 """
 struct JacobianCover
     a::Vector{Float64}
@@ -53,7 +53,6 @@ struct JacobianCover
     Utilde::Matrix{Float64}
     m::Int
     n::Int
-    L::Int
 end
 
 """
@@ -70,7 +69,7 @@ Every merge is a valid cover for *any* positive `a` — the choice of `a` trades
 the output and input sides but never validity. `check` verifies that `b_max` covers the surrogate.
 """
 function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
-    m, n, N = length(outidxs), t.ninputs, nnodes(t)
+    m, n = length(outidxs), t.ninputs
     a === nothing && (a = ones(m))
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
@@ -90,7 +89,7 @@ function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, 
         end
     end
 
-    return JacobianCover(collect(float.(a)), b_sum, b_quad, b_max, Utilde, m, n, N)
+    return JacobianCover(collect(float.(a)), b_sum, b_quad, b_max, Utilde, m, n)
 end
 
 function cover_jacobian(r, x0::AbstractVector; a=nothing, check::Bool=true)

@@ -36,7 +36,6 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         J = ForwardDiff.jacobian(rmap, x0)
 
         @test nls.m == m
-        @test nls.L == nnodes(nls_loss_tape(rmap, x0)[1])
         @test nls.grad ≈ ForwardDiff.gradient(f, x0)
         # Full cover of the whole Hessian, Gauss–Newton cover of JᵀJ, with h_gn beneath h.
         @test cover_ratio(H, nls.h) <= GATE
