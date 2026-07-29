@@ -1,27 +1,22 @@
 """
     DerivativeCovers
 
-Rank-1 covers of a program's Hessian at about twice the cost of a gradient.
+Compute certified rank-1 bounds on Hessians and Jacobians without forming either matrix.
 
-A scalar program is recorded on a [`Tape`](@ref) by running it on [`TVar`](@ref) inputs;
-[`cover_hessian`](@ref) then returns nonnegative vectors `h` with `abs(H[i,j]) <= h[i]*h[j]`,
-without ever forming the Hessian `H`. The covers are deterministic, guaranteed, and exactly
-covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of the objective
-(`h -> sqrt(c)*h` when `f -> c*f`). Input covariance holds as stated for the default
-[`ValueSplit`](@ref) rule; under [`SensitivitySplit`](@ref) it holds when the input weights are
-rescaled alongside (`w -> D*w`).
+A Hessian cover is a nonnegative vector `h` satisfying
+`abs(H[i,j]) <= h[i] * h[j]` for every entry of `H`. [`cover_hessian`](@ref) records a scalar
+function on a [`Tape`](@ref) and computes such a cover, together with the gradient, in `O(L)`
+work for a tape of length `L`. The result is deterministic and certified.
 
-`using DerivativeCovers` brings in the entry points and the types they return, and nothing else.
-The quantities defined on a cover (`cover_ratio`, `tightness`, `equilibrate`, …) and the surface
-for adding a new elemental (`pushnode!`, `unarynode`, …) are public but unexported, so they are
-reached by qualification. Tape methods for `MatrixCovers.support_components`,
-`MatrixCovers.gramcover`, and `MatrixCovers.gramcover!` are defined here, but those functions
-belong to MatrixCovers: calling them unqualified takes `using MatrixCovers` as well.
+The default [`ValueSplit`](@ref) rule is covariant under rescaling: if `x -> D*x`, then
+`h -> inv(D)*h`; if `f -> c*f`, then `h -> sqrt(c)*h`.
+[`SensitivitySplit`](@ref) has the same input covariance when its weights are rescaled as
+`w -> D*w`.
 
-The [`DerivativeCovers.Diagnostics`](@ref) submodule serves the study of cover quality rather than
-its use: it supplies the instruments that measure what a loose cover costs a consumer of it. The
-programs those instruments are exercised on live in the companion package
-`DerivativeCoverProblems`, which depends on nothing here.
+`using DerivativeCovers` imports the main entry points and result types. Public utilities such as
+`cover_ratio`, `tightness`, and `equilibrate` are not exported; call them with the
+`DerivativeCovers.` prefix. The [`DerivativeCovers.Diagnostics`](@ref) submodule provides tools
+for studying how cover looseness affects downstream algorithms.
 """
 module DerivativeCovers
 
@@ -30,10 +25,7 @@ using Random: AbstractRNG, Xoshiro
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
-# The entry points a caller needs after `using DerivativeCovers`: the tape, the four cover
-# constructors and the two that trade cost against tightness, the modes that select how much
-# `cover_hessian` returns, the types they return, the split rules that parameterize them, and the
-# matrix-free products.
+# Main entry points and result types.
 export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid
@@ -42,14 +34,8 @@ export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
-# Addressable by qualification, and covered by the same compatibility promise as the exports,
-# but kept out of the top namespace. Two kinds of name qualify: the contracts outside code
-# implements or records against, and the quantities that are defined independently of how any
-# sweep computes them. Neither can be disturbed by a reimplementation of the sweeps themselves,
-# which is why they carry the promise and the sweep machinery does not.
-#
-# `public` is 1.11+ syntax and would be a parse error on the 1.10 given in `[compat]`, so the
-# declaration goes through `eval` where the parser never sees the keyword.
+# Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
+# so construct the declaration dynamically on Julia 1.11 and later.
 @static if VERSION >= v"1.11"
     # Tape construction and the invariants a new elemental must satisfy.
     eval(

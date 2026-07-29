@@ -1,7 +1,4 @@
-# Tests for the array-level additions in overloads.jl (`Base.broadcastable(::TVar)`, `sum`) and
-# for the composite programs in composites.jl (`softmax`, `layernorm`). As in primitives.jl, the
-# core claim is parity with a hand-scalarized twin, plus validity of every cover against
-# ForwardDiff's exact Hessian.
+# Array operations must match their scalarized equivalents and cover ForwardDiff's Hessian.
 
 "f = sum(abs2, z ./ (1 + dot(z, z))), exercising a scalar TVar as a broadcast divisor."
 scaled_sumabs2(z) = sum(abs2, z ./ (1 + dot(z, z)))

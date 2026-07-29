@@ -4,10 +4,12 @@ CurrentModule = DerivativeCovers
 
 # Quantities and extension points
 
-Names that are `public` but not exported: reached by qualification
-(`DerivativeCovers.cover_ratio`), and covered by the same compatibility promise as the exports.
-Two kinds of name qualify — the quantities defined on a cover from any source, and the contracts
-that outside code implements — and neither can be disturbed by a reimplementation of the sweeps.
+These names are public but not exported. Call them with the module prefix, for example
+`DerivativeCovers.cover_ratio`. Like exported names, they are covered by the package's
+compatibility guarantees.
+
+This part of the API contains utilities that operate on covers from any source, along with
+interfaces for extending the package.
 
 ```@index
 Pages = ["reference.md"]

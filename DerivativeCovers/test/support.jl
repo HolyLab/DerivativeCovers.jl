@@ -1,6 +1,5 @@
-# Tests for the tape route to a matrix's bipartite support components. The claim is that the O(L)
-# sweep off the tape reproduces MatrixCovers' O(mn) reading of the materialized surrogate exactly,
-# down to component ids, and that inputs and outputs no live path connects fall out as component 0.
+# Tape-derived support components must exactly match MatrixCovers on the materialized surrogate.
+# Unreachable inputs and outputs belong to component zero.
 
 @testset "support.jl" begin
 

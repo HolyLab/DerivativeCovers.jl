@@ -1,14 +1,10 @@
-# Controlled distortions of a cover, for measuring what a consumer of covers tolerates.
+# Controlled cover inflation for sensitivity studies.
 #
-# Every distortion here is an inflation: it multiplies a cover coordinatewise by factors that are
-# never below 1. Inflation can only weaken the bound h[i]*h[j] >= abs(H[i,j]), so a distorted
-# cover of H is still a cover of H, and a consumer's degradation under one is attributable to
-# looseness alone.
+# All factors are at least one, so an inflated cover remains valid. Any downstream degradation
+# can therefore be attributed to looseness rather than invalidity.
 #
-# A pattern supplies a *shape* w with 0 <= w <= 1 and max(w) == 1; the factors are peak.^w. So
-# `peak` is the inflation of the worst coordinate under every pattern, and the patterns differ
-# only in how the remaining coordinates are spread beneath it. That separates the magnitude of a
-# distortion from its anisotropy, which is what a tolerance study varies independently.
+# A pattern supplies weights 0 <= w <= 1 with max(w) = 1; the factors are `peak .^ w`. Thus
+# `peak` fixes the largest inflation while the pattern controls its anisotropy.
 
 """
     InflationPattern
@@ -106,7 +102,7 @@ function inflation_shape(
         w[i] = abs(randn(rng))
     end
     peak = maximum(w)
-    # A draw of all-exact-zeros has probability zero, but its shape would be 0/0.
+    # Guard the measure-zero all-zero draw to avoid 0/0 normalization.
     peak > 0 || throw(ArgumentError("degenerate lognormal draw: every log-factor is zero"))
     w ./= peak
     return w

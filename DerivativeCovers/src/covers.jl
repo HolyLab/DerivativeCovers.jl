@@ -1,29 +1,24 @@
-# Rank-1 covers of a program's Hessian, computed from its tape without forming the Hessian.
+# Rank-1 Hessian covers computed from a tape.
 #
 # A symmetric cover of a symmetric matrix H is a nonnegative vector h with |H[i,j]| <= h[i]h[j].
 # The construction rests on the exact identity
 #
 #     H = sum_k vbar_k * sum_{i,j in P_k} (d²φ_k/dv_i dv_j) * ∇v_i (∇v_j)',
 #
-# where node k = φ_k(v_{P_k}) has reverse-mode adjoint vbar_k and ∇v_i is the total gradient of
-# intermediate v_i with respect to the inputs. Bounding every factor in absolute value gives the
-# elementwise bound B >= |H|; a per-node rank-1 cover s_k with s_k s_k' dominating node k's
-# contribution to B then yields covers of H under either merge (see [`cover_hessian`](@ref)).
+# Here vbar_k is the reverse-mode adjoint of node k and ∇v_i is an intermediate's input
+# gradient. Taking absolute values gives B >= |H|. Each node contributes a rank-1 cover of its
+# term in B; the merge determines how those local covers are combined.
 #
-# An inner-product node (`dotnode` in tape.jl) has a block-diagonal second-partial matrix
-# (`PairedPartials`) that splits into q independent 2x2 blocks, one per parent pair; it is
-# covered by q rank-1 atoms rather than one, and the quadrature merge combines atoms rather than
-# whole nodes (see `atom_slots`). A linear n-ary node (`linearnode`) carries an empty
-# second-partial matrix and contributes no atom at all.
+# An inner-product node contributes one atom per independent parent pair. A linear node has no
+# second partials and contributes no atoms.
 
 """
     HessianCover
 
-The gradient and the sum-merge cover of one taped program, as returned by
-[`cover_hessian`](@ref) under [`CoverOnly`](@ref).
+The standard result returned by [`cover_hessian`](@ref).
 
-- `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
-- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
+- `grad`: gradient of the scalar function at the evaluation point.
+- `h_sum`: certified Hessian cover computed with the sum merge.
 """
 struct HessianCover
     grad::Vector{Float64}
@@ -33,19 +28,15 @@ end
 """
     HessianDiagnostics
 
-Covers and diagnostics for one taped program, as returned by [`cover_hessian`](@ref) under
-[`WithDiagnostics`](@ref). `grad` and `h_sum` are the same quantities a [`HessianCover`](@ref)
-carries.
+The extended result returned by `cover_hessian(WithDiagnostics(), ...)`.
 
-- `grad`: the gradient, i.e. the reverse-mode adjoints at the input nodes.
-- `B`: the elementwise bound `B >= abs.(H)`. A diagnostic, quadratic in `n`; the production
-  path never forms it.
-- `h_sum`: the sum merge, `h_sum = sum_k s_k`.
-- `h_quad`: the quadrature merge, `h[i] = sqrt(sum_atoms s_atom[i]^2)`, combining per [`atom_slots`](@ref)
-  atom rather than per node (see [`cover_hessian`](@ref)).
-- `h_sum_rev`: `h_sum` recomputed by a single reverse sweep in absolute-value arithmetic
-  ([`abs_reverse`](@ref)), equal to `h_sum` up to roundoff. The production form is
-  [`CoverOnly`](@ref), which fuses this sweep with the adjoint sweep.
+- `grad`: gradient of the scalar function.
+- `B`: explicit elementwise bound satisfying `B >= abs.(H)`.
+- `h_sum`: cover computed with the sum merge.
+- `h_quad`: tighter cover computed by combining cover atoms in quadrature.
+- `h_sum_rev`: independent reverse-sweep computation of `h_sum`, used as a consistency check.
+
+Forming these diagnostics costs `O(n * L)` time and `O(n^2)` memory.
 """
 struct HessianDiagnostics
     grad::Vector{Float64}
@@ -65,7 +56,7 @@ function adjoints(t::Tape, outidx::Integer)
     N = nnodes(t)
     vbar = zeros(N)
     vbar[outidx] = 1.0
-    # Tape order is topological, so N:-1:1 fully accumulates vbar[k] before k feeds its parents.
+    # Reverse topological order finalizes each adjoint before propagating it.
     for k in N:-1:1
         vk = vbar[k]
         vk == 0 && continue
@@ -94,7 +85,7 @@ function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
     for (k, o) in enumerate(outidxs)
         Vbar[k, o] += 1.0
     end
-    # Tape order is topological, so N:-1:1 fully accumulates each Vbar[:, j] before j feeds parents.
+    # Reverse topological order finalizes each adjoint column before propagation.
     for j in N:-1:1
         for (i, p) in enumerate(t.parents[j])
             d = t.ds[j][i]
@@ -266,10 +257,8 @@ function balanced_split(c11, c12, c22, z1, z2)
     else
         oftype(lo, NaN)
     end
-    # Clamp before validating: an infinite or zero target is the correct limit whenever the
-    # segment bounds it on that side, so only a target the bounds fail to resolve — NaN, or one
-    # running off an unbounded end — falls through to the endpoint-based choices. Those are
-    # clamped in turn, since neither is confined to the segment on its own.
+    # Clamping resolves zero or infinite limiting targets when the feasible interval has a finite
+    # endpoint. Only an unresolved NaN or unbounded target reaches the fallback.
     rho1 = clamp(target, lo, hi)
     if !(isfinite(rho1) && rho1 > 0)
         g = sqrt(lo * hi)
@@ -281,32 +270,25 @@ end
 """
     SplitRule
 
-Supertype of the policies that choose among the valid rank-1 covers of a single node. An
-off-diagonal-active 2×2 block confines its cover to a one-parameter family (see
-[`balanced_split`](@ref)), and no function of the block can select within it; a `SplitRule`
-supplies the scale reference for each parent slot that makes the selection. Concrete rules:
-[`ValueSplit`](@ref) (the default) and [`SensitivitySplit`](@ref).
+Policy for choosing among the valid rank-1 covers of a single tape node.
 
-The rule enters every cover construction through [`local_cover_slots`](@ref); pass it via the
-`rule` keyword of [`cover_hessian`](@ref), [`local_covers`](@ref), or [`cover_hybrid`](@ref).
-Every rule yields valid covers everywhere — the rules differ in which member of the family they
-pick, hence in tightness and in continuity with respect to the evaluation point.
+Some 2×2 second-derivative blocks admit a one-parameter family of covers. A `SplitRule` supplies
+the scale used to choose one member of that family. The built-in rules are [`ValueSplit`](@ref),
+the default, and [`SensitivitySplit`](@ref). Pass a rule with the `rule` keyword to cover
+functions. The choice can affect tightness, but not validity.
 """
 abstract type SplitRule end
 
 """
     ValueSplit()
 
-The [`SplitRule`](@ref) whose scale references are the parent value magnitudes
-`abs(v_{p_i})`: the split equalizes `rho1*abs(v_{p_1}) == rho2*abs(v_{p_2})`, clamped to the
-feasible segment. This is the default rule.
+Choose local covers using the magnitudes of their parent values. This is the default
+[`SplitRule`](@ref).
 
-The value channel is empty at a parent whose value is exactly zero, and the fallbacks for
-that case are documented in [`balanced_split`](@ref)'s extended help. A multiplication node
-whose operands both vanish is the canonical failure: one ulp of input perturbation turns the
-exact zeros into roundoff residue, and the split is then decided by the ratio of two
-roundoff-sized values — the cover stays valid but is discontinuous in the evaluation point.
-[`SensitivitySplit`](@ref) has no such seam there.
+The rule tries to equalize `rho1 * abs(v₁)` and `rho2 * abs(v₂)`, subject to the feasible range.
+At nodes whose relevant parent values are zero, the cover remains valid but may vary
+discontinuously with the evaluation point. Use [`SensitivitySplit`](@ref) to avoid this
+value-based discontinuity.
 """
 struct ValueSplit <: SplitRule end
 
@@ -373,9 +355,7 @@ With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must 
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
-# Lazy elementwise absolute value of the tape's value vector: ValueSplit's scale references
-# as an O(1) view, so neither a cover sweep nor a single three-argument local_cover_slots
-# call pays an O(L) copy for them.
+# Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
 struct AbsValues <: AbstractVector{Float64}
     vals::Vector{Float64}
 end
@@ -519,8 +499,7 @@ function local_cover_slots(
             a, b = balanced_split(0.0, c, 0.0, s1, s2)
             if check
                 check_finite_partials(t, k, av, (c,))
-                # sqrt(eps): the entries compared here carry roundoff accumulated over an
-                # operation count set by the tape, not by this expression.
+                # Allow for roundoff accumulated across the tape, not just this comparison.
                 rtol = sqrt(eps(float(real(eltype(t.vals)))))
                 a * b >= c * (1 - rtol) ||
                     error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
@@ -545,9 +524,8 @@ function local_cover_slots(
         (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
         s1, s2 = scales[ps[1]], scales[ps[2]]
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
-            # A dead slot needs no cover and gets none; its partner covers only its own
-            # diagonal. The off-diagonal invariant is deliberately not enforced here — the
-            # entries it would cover vanish identically (see the docstring).
+            # A dead slot contributes no diagonal or cross term; only its live partner needs
+            # cover weight.
             return [s1 == 0 ? 0.0 : sqrt(c11), s2 == 0 ? 0.0 : sqrt(c22)]
         end
         if c12^2 <= c11 * c22
@@ -607,17 +585,16 @@ atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
 """
     CoverOnly()
 
-Ask [`cover_hessian`](@ref) for a [`HessianCover`](@ref): the gradient and the sum-merge cover
-alone, at `O(L)`. The default.
+Return only the gradient and sum-merge cover from [`cover_hessian`](@ref). This is the default
+mode and costs `O(L)`.
 """
 struct CoverOnly end
 
 """
     WithDiagnostics()
 
-Ask [`cover_hessian`](@ref) for a [`HessianDiagnostics`](@ref): the gradient and the sum-merge
-cover together with the elementwise bound `B`, the quadrature merge, and the constructive
-recomputation of the sum merge that cross-checks it. Costs `O(n*L)` time and `O(n^2)` memory.
+Return a [`HessianDiagnostics`](@ref), including the elementwise bound, quadrature merge, and an
+independent consistency check. This mode costs `O(n * L)` time and `O(n^2)` memory.
 """
 struct WithDiagnostics end
 
@@ -627,12 +604,17 @@ const CoverMode = Union{CoverOnly, WithDiagnostics}
     cover_hessian([mode], t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
     cover_hessian([mode], f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
 
-Rank-1 covers of the Hessian of the taped program with output node `outidx`, or of the scalar
-program `f` at `x0`. `mode` is [`CoverOnly`](@ref)`()`, the default, or
-[`WithDiagnostics`](@ref)`()`; see below for what each returns. `rule` selects the
-[`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks; every rule yields valid
-covers. Both merges of the per-node covers `s_k = sum_{i in P_k} rho_k[i] * utilde_i` are valid
-covers of the Hessian:
+Compute a certified rank-1 cover of a scalar function's Hessian.
+
+Pass either a tape and scalar output node, or a function and evaluation point. The default
+[`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient and the
+sum-merge cover. [`WithDiagnostics`](@ref) additionally computes an explicit elementwise bound
+and a tighter quadrature cover.
+
+The `rule` keyword chooses how local covers are scaled; see [`SplitRule`](@ref). Every rule
+produces a valid cover. `check=true` verifies the local covering conditions.
+
+Two merges are available:
 
 - **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
   nonnegative slack;
@@ -642,12 +624,12 @@ covers of the Hessian:
   an inner-product node, so an inner-product node contributes `q` separate terms to the
   quadrature merge rather than one.
 
-Together they give the chain `abs.(H) <= B <= sum_atoms s_atom s_atom' <= h*h'` for either `h`.
+Both satisfy `abs.(H) <= h * h'`.
 
 # `CoverOnly()`
 
-Returns a [`HessianCover`](@ref): the exact gradient and the sum merge, from one forward pass and
-a single reverse sweep carrying a paired adjoint `(vbar[k], abar[k])` per node,
+This mode takes one forward pass and one reverse sweep, or `O(L)` time and memory. The reverse
+sweep carries the ordinary adjoint and the absolute cover channel together:
 
     vbar[p_i] += d_i * vbar[k]                       # signed channel: reverse-mode AD
     abar[p_i] += abs(d_i) * abar[k] + rho_k[i]       # absolute channel: the cover
@@ -658,21 +640,12 @@ on the tape and are processed first. That makes `rho_k` — which needs the fini
 computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:ninputs]` up to
 roundoff.
 
-Each node's update consumes only its own partials, its paired adjoint, and the forward-carried
-scale references of its parents (their values under [`ValueSplit`](@ref), one extra absolute
-forward sweep under [`SensitivitySplit`](@ref)), so the sweep has the shape of a reverse-mode
-rule set with a widened cotangent — the form a compiled AD backend can implement, yielding
-cover and gradient together at about twice the cost of a gradient. `check` verifies the
-per-node covering invariants, as in [`local_covers`](@ref).
+[`SensitivitySplit`](@ref) requires one additional forward sweep.
 
 # `WithDiagnostics()`
 
-Returns a [`HessianDiagnostics`](@ref), which adds `B`, `h_quad`, and `h_sum_rev`. These and the
-forward absolute sensitivities behind them cost `O(n*L)` time and `O(n^2)` memory; they are
-diagnostics, and reaching them takes the constructive two-sweep form (`adjoints`,
-`local_covers`, `abs_reverse`) that defines the covers rather than the fused sweep that
-computes them. `check` additionally verifies that the absolute-value reverse sweep reproduces
-`h_sum`, and that the `CoverOnly()` sweep reproduces both the gradient and `h_sum`.
+This mode returns a [`HessianDiagnostics`](@ref) and costs `O(n * L)` time and `O(n^2)` memory.
+With `check=true`, it also verifies that the diagnostic and fused computations agree.
 
 # Examples
 
@@ -733,15 +706,14 @@ function cover_hessian(
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
-        # Two routes to the same quantity, so their errors are correlated and the gap they may
-        # legitimately show is far below the accumulated roundoff of either route alone.
+        # These two computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(eltype(t.vals))))^(3 // 4)
         for q in 1:n
             denom = max(abs(h_sum[q]), 1.0)
             abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
-        # invariants already checked in local_covers
+        # local_covers already checked the node invariants.
         pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)

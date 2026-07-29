@@ -1,9 +1,6 @@
-# Scalar test programs, written generically so the same source runs on `TVar` inputs (recording a
-# tape) and on `ForwardDiff.Dual` inputs (supplying reference gradients and Hessians).
+# Generic scalar fixtures shared by TVar recording and ForwardDiff.
 #
-# Each is built only from the elementals DerivativeCovers overloads. Accumulators are seeded from the
-# inputs (`0.0 * x[1]`, or a `first` flag) rather than from a literal zero, so that every value
-# that reaches the output is a tape node.
+# Seed accumulators from inputs so every output remains attached to the tape.
 
 using Random
 

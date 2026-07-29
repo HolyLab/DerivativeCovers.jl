@@ -1,8 +1,5 @@
-# Tests for the asymmetric Jacobian covers of jacobian.jl. Residual maps are synthetic and small;
-# ground truth is ForwardDiff's exact Jacobian. The claims specific to this construction are that
-# every merge is a valid cover of the Jacobian for any positive output weights `a`, that the merges
-# fall in the chain b_max ≤ b_quad ≤ b_sum with the group-max hybrid interpolating between the
-# endpoints, and that the surrogate Ũ bounds |J| entrywise.
+# Compare Jacobian covers with ForwardDiff. Every merge must remain valid for positive output
+# weights, with b_max <= b_quad <= b_sum and grouped merges between the endpoints.
 
 @testset "jacobian.jl" begin
 
@@ -453,11 +450,8 @@
     end
 
     @testset "balance_cover: max-merge limit cycle fails fast to geomean" begin
-        # This support pattern has total support — the sum-merge Sinkhorn alternation converges —
-        # but the non-smooth max-merge b-step drives the marginal alternation into a limit cycle:
-        # the per-round product change plateaus at a positive constant no larger maxiter reduces.
-        # It is detected as a stall (well under maxiter) and reported as a limit cycle, and the
-        # geomean rule is the convergent escape.
+        # This pattern has total support, but max-merge marginal balancing enters a limit cycle.
+        # Stall detection should fail early and recommend the convergent geomean rule.
         Ucyc = [
             0.0 0.5 0.0 0.0
             2.0 0.5 0.0 0.0
@@ -485,10 +479,7 @@
     end
 
     @testset "balance_cover: geomean round budget on slow supports" begin
-        # A tridiagonal staircase makes the two-way log fit ill-conditioned: geomean converges
-        # (it converges for every pattern) but needs more than the marginal rule's 1000-round
-        # budget, so the geomean default budget is larger. A tiny explicit budget must fail with a
-        # message that names maxiter as the lever.
+        # This ill-conditioned support converges under geomean but needs its larger default budget.
         L = 20
         Uslow = zeros(L, L)
         for k in 1:L

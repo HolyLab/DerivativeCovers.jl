@@ -1,18 +1,9 @@
-# An `AbstractArray` annotation promises the function works for any array, so the promise is
-# tested rather than assumed: every entry point that takes a user array is run on the plain data
-# and on the same data behind `OffsetArray` and `view` wrappers, and the results are required to
-# agree. The package's axes fall into three groups, and each gets a different assertion here.
+# Run array-facing APIs on vectors, views, and OffsetArrays. The expected behavior depends on the
+# role of each axis:
 #
-#   - Dense covers, matrices, and weight vectors supplied by the caller carry *data* axes. These
-#     functions must be axis-agnostic in value and must propagate the input axes to any
-#     index-matched result.
-#   - Tape node indices, input slots, and output positions are *enumeration* axes: they count
-#     interchangeable items and are 1-based by construction (`Tape` stores concrete `Vector`s).
-#     The entry points that consume them declare `Base.require_one_based_indexing`, and the test
-#     is that an offset input is rejected cleanly rather than silently mis-indexed.
-#   - `outidxs` names tape nodes but is itself just a container of them, so it may carry any
-#     axes. `jvp` propagates those axes to its result; everywhere else the outputs are numbered
-#     by position and the axes of `outidxs` do not show through.
+#   - Data axes propagate to index-matched results but do not affect values.
+#   - Tape enumeration axes are one-based; offset inputs must fail explicitly.
+#   - outidxs may have arbitrary axes. Only jvp propagates them to its result.
 
 @testset "genericaxes.jl" begin
 

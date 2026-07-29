@@ -1,16 +1,10 @@
-# Asymmetric rank-1 covers of a Jacobian.
+# Asymmetric rank-1 Jacobian covers.
 #
-# For a vector-valued program r: Rⁿ → Rᵐ with Jacobian J = ∂r/∂x, an asymmetric cover is a pair
-# (a, b) of nonnegative vectors — a over outputs, b over inputs — with a_k*b_j ≥ |J_kj| for every
-# entry. Unlike the Hessian case, validity constrains each entry on its own, so the merge that
-# produces b from the absolute sensitivities is a max, not a sum: for fixed a the minimal valid b
-# is b_j = max_k Ũ_kj/a_k, and the cheaper sweep-friendly merges (sum, quadrature, group-max) are
-# upper bounds on it. There are no local 2×2 cover problems and no ρ tie-break; the whole object is
-# first-order.
+# A cover `(a, b)` satisfies a_k b_j >= |J_kj|. For fixed positive `a`, the smallest valid input
+# factor is b_j = max_k Ũ_kj/a_k, where Ũ bounds the absolute Jacobian. Sum, quadrature, and
+# group-max merges trade tightness for cheaper sweeps.
 #
-# Ũ is the m×n surrogate of absolute sensitivities, Ũ_kj ≥ |J_kj|, one row per output — the
-# first-order analog of the Hessian bound B, and loose by exactly the signed path cancellation
-# between an output and an input.
+# The gap Ũ_kj - |J_kj| comes from signed cancellation among paths from input j to output k.
 
 """
     jacobian_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> Utilde
@@ -33,17 +27,17 @@ end
 """
     JacobianCover
 
-Asymmetric rank-1 covers of a Jacobian, as returned by [`cover_jacobian`](@ref). For the fixed
-output weights `a`, each `b` satisfies `a_k * b_j ≥ |J_kj|` for every entry:
+Result of [`cover_jacobian`](@ref). Each pair `(a, b)` satisfies
+`a[k] * b[j] >= abs(J[k,j])`.
 
-- `a`: the output weights the covers were built for (`ones(m)` by default).
-- `b_sum`: the sum merge `b_j = ∑_k Ũ_kj/a_k` — the loosest, obtainable at `O(L)` from one
-  reverse sweep (see [`cover_jacobian_hybrid`](@ref) with one group).
+- `a`: output weights; `ones(m)` by default.
+- `b_sum`: sum merge, computed in one `O(L)` reverse sweep.
 - `b_quad`: the quadrature merge `b_j = √(∑_k (Ũ_kj/a_k)²)`.
-- `b_max`: the exact minimal `b` for this `a`, `b_j = max_k Ũ_kj/a_k`. Always
-  `b_max ≤ b_quad ≤ b_sum` coordinatewise.
-- `Utilde`: the `m × n` surrogate `Ũ` (see [`jacobian_surrogate`](@ref)), a diagnostic.
-- `m`, `n`: output count and input count.
+- `b_max`: smallest valid `b` for the fixed `a` and the surrogate `Utilde`.
+- `Utilde`: `m × n` absolute-sensitivity surrogate satisfying `Utilde >= abs.(J)`.
+- `m`, `n`: numbers of outputs and inputs.
+
+The merges satisfy `b_max <= b_quad <= b_sum` coordinatewise.
 """
 struct JacobianCover
     a::Vector{Float64}
@@ -59,14 +53,15 @@ end
     cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check=true) -> JacobianCover
     cover_jacobian(r, x0::AbstractVector; a=nothing, check=true) -> JacobianCover
 
-Asymmetric rank-1 covers of the Jacobian of a vector-valued program: either a tape `t` with output
-nodes `outidxs`, or a program `r` mapping a vector of [`TVar`](@ref)s to a vector of `TVar`s,
-evaluated at `x0`. Returns a [`JacobianCover`](@ref) carrying the sum, quadrature, and exact
-(max) merges of the absolute sensitivities for the fixed output weights `a`.
+Compute asymmetric rank-1 covers of a vector-valued function's Jacobian.
 
-`a` must be strictly positive with one entry per output; `nothing` (the default) uses `ones(m)`.
-Every merge is a valid cover for *any* positive `a` — the choice of `a` trades tightness between
-the output and input sides but never validity. `check` verifies that `b_max` covers the surrogate.
+Pass either a tape and output nodes, or a function and evaluation point. The result contains sum,
+quadrature, and max merges of the absolute sensitivities. For each returned `b`,
+`a[k] * b[j] >= abs(J[k,j])`.
+
+`a` must contain one strictly positive weight per output; the default is `ones(m)`. Changing `a`
+redistributes scale between the output and input factors without affecting validity.
+`check=true` verifies the max merge against the absolute-sensitivity surrogate.
 
 # Examples
 
@@ -88,8 +83,7 @@ true
 function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a = nothing, check::Bool = true)
     m, n = length(outidxs), t.ninputs
     a === nothing && (a = ones(m))
-    # `a` and every field of the result are indexed by output position, `1:m`, whatever the
-    # indices of `outidxs` itself.
+    # Result fields use output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
@@ -126,19 +120,17 @@ end
     cover_jacobian_hybrid(t::Tape, outidxs, groups::AbstractVector{<:Integer}; a=nothing, check=true) -> b
     cover_jacobian_hybrid(t::Tape, outidxs, ngroups::Integer; a=nothing, check=true) -> b
 
-Group-max merge of the absolute sensitivities: partition the `m` outputs into groups, sum
-`Ũ_kj/a_k` within each group, and combine the groups by `max`. The group partial sums come from a
-`maximum(groups)`-channel absolute-value reverse sweep seeded `1/a_k` at the output nodes, so the
-cost is `O(G*L)` without ever forming the `m × n` surrogate.
+Compute a Jacobian cover by grouping outputs.
 
-`b_j = max_g ∑_{k ∈ group g} Ũ_kj/a_k` is a valid cover for every partition: each group sum already
-dominates every one of its terms `Ũ_kj/a_k`, and the max preserves that. One group reproduces the
-sum merge `b_sum`; one output per group reproduces the exact merge `b_max`; intermediate partitions
-interpolate, tightening as the partition is refined. An integer `ngroups` selects the cyclic
-partition `1 + (k-1) % ngroups` over the outputs.
+`groups[k]` assigns output `k` to a group. Absolute sensitivities are summed within each group,
+then the group totals are combined with `max`. Alternatively, pass `ngroups` to assign outputs
+cyclically.
 
-`a` is the fixed output weights (`nothing` uses `ones(m)`). `check` verifies `b` covers the
-surrogate.
+Every grouping is valid. One group reproduces `b_sum`; one group per output reproduces `b_max`.
+The cost is `O(G * L)` for `G = maximum(groups)`, without forming the full surrogate.
+
+`a` supplies the output weights and defaults to `ones(m)`. `check=true` verifies the result
+against the surrogate.
 
 # Examples
 
@@ -167,7 +159,7 @@ function cover_jacobian_hybrid(
         groups::AbstractVector{<:Integer}; a = nothing, check::Bool = true
     )
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
-    # `groups` and `a` are indexed by output position, `1:m`, whatever the indices of `outidxs`.
+    # groups and a use output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(groups)
     length(groups) == m ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $m (one per output)"))
@@ -270,8 +262,7 @@ function marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::Abstra
         end
     end
     if anydead
-        # A zero b[j] is only coverable when input j is dead: check reachability with an
-        # indicator sweep before silently dropping its contribution.
+        # A zero input weight is valid only for an input that reaches no output.
         ind = zeros(N)
         for j in 1:t.ninputs
             b[j] == 0 && (ind[j] = 1.0)
@@ -283,8 +274,7 @@ function marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::Abstra
         end
     end
     s = abs_forward(t, theta)
-    # The weights are indexed by output position, `1:length(outidxs)`, whatever the indices of
-    # `outidxs`: `balance_cover`'s alternation pairs them against a 1-based iterate.
+    # The balancing iteration indexes weights by output position.
     a = Vector{eltype(s)}(undef, length(outidxs))
     for (k, o) in enumerate(outidxs)
         a[k] = s[o]
@@ -422,8 +412,7 @@ function balance_cover(
     m, N = length(outidxs), nnodes(t)
     maxiter = _resolve_maxiter(maxiter, arule)
     if !(merge isa SumMerge) || arule !== :marginal
-        # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
-        # explicit surrogate instead.
+        # Other strategies need separate output channels; materialize the surrogate once.
         return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol, check)
     end
     a = _balance_start(a0, m)
@@ -439,7 +428,7 @@ function balance_cover(
             end
         end
         if anydead
-            # A zero a[k] is only coverable when output k is dead: check with an indicator sweep.
+            # A zero output weight is valid only for an output with no live input path.
             ind = zeros(N)
             for (k, o) in enumerate(outidxs)
                 a[k] == 0 && (ind[o] = 1.0)
@@ -501,9 +490,7 @@ function balance_cover(
     return (; a, b, iters, delta)
 end
 
-# One rule-specific step of the b-step accumulation, and the pass the rule needs once its column
-# is complete. Methods rather than a branch: `merge` is concrete, so the doubly-nested loop below
-# specializes on it instead of testing per entry.
+# Merge-specific accumulation methods keep branches out of the inner loop.
 _merge_accum(::SumMerge, bj, tkj) = bj + tkj
 _merge_accum(::QuadMerge, bj, tkj) = bj + tkj^2
 _merge_accum(::MaxMerge, bj, tkj) = max(bj, tkj)
@@ -524,8 +511,7 @@ function _merge_bstep(U, a, merge::MergeRule)
     return _merge_finalize!(merge, b)
 end
 
-# Per-rule default iteration budget: the marginal alternation converges in a few hundred rounds
-# when it converges at all, while the geomean fit is linearly convergent and can need many more.
+# The linearly convergent geometric-mean fit needs a larger default budget.
 _resolve_maxiter(maxiter, arule::Symbol) =
     maxiter === nothing ? (arule === :geomean ? 10_000 : 1_000) : maxiter
 
@@ -535,8 +521,7 @@ _marginal_hint(::MergeRule) =
 _marginal_hint(::MaxMerge) =
     "; the max merge's marginal alternation can enter a limit cycle — arule=:geomean converges for every pattern"
 
-# Alternating geometric-mean fit of log U_kj ≈ log a_k + log b_j over the nonzero entries:
-# coordinate descent on the two-way least-squares objective, convergent for every pattern.
+# Coordinate descent for log U_kj ≈ log a_k + log b_j over nonzero entries.
 function _geomean_fit(U, a, maxiter, rtol)
     m, n = size(U)
     gstep = (weights, dim) -> begin
@@ -580,23 +565,16 @@ function _balance_start(a0, m)
     return collect(float.(a0))
 end
 
-# The alternation loop shared by the tape and matrix forms. Each round runs the a-step from the
-# current b and the b-step from the new a, then renormalizes the gauge by the power of two
-# nearest a's geometric mean (exact in floating point, so every product a_k*b_j is untouched).
-# Convergence is judged on the products: with u = log.(a ./ a_prev) and w = log.(b ./ b_prev)
-# (zero coordinates excluded — their zeros persist), the change of product (k, j) is u_k + w_j,
-# whose extremes are attained at the extremes of u and w. delta bounds |u_k + w_j| exactly and is
-# gauge-invariant, since a uniform shift of u cancels against the opposite shift of w.
+# Shared balancing loop. Renormalizing by a power of two preserves every product exactly in
+# floating point. Convergence is measured on products, making `delta` invariant to the gauge
+# transformation `(a, b) -> (γa, b/γ)`.
 function _balance(bstep, astep, a, maxiter, rtol, hint = "")
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     b = bstep(a)
     _regauge!(a, b)
     delta = Inf
-    # Limit-cycle guard: the max-merge marginal alternation is non-smooth and can settle into a
-    # cycle whose per-round product change plateaus at a positive constant — no larger maxiter
-    # helps. When delta goes flat (unchanged to `stall_flat` over `stall_window` rounds) while
-    # still above rtol, the run is cycling, not converging; report the stall and point at geomean.
-    # A genuinely converging alternation shrinks delta geometrically, so it never reads flat.
+    # Max-merge alternation can enter a limit cycle. A flat, positive delta identifies a stall;
+    # increasing maxiter cannot resolve it.
     stall_window, stall_flat = 128, 1.0e-6
     last_checked = Inf
     for iters in 1:maxiter
@@ -734,12 +712,8 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(
     return (; a, b, excess)
 end
 
-# Difference-constraint feasibility for the minimax excess E: potentials pot = (u; y) with
-# u_k - y_j ∈ [c_kj, c_kj + E] on the support exist iff the constraint digraph — arc u_k → y_j of
-# weight -c_kj and arc y_j → u_k of weight c_kj + E per support entry — has no negative cycle.
-# Multi-source Bellman–Ford from all-zero potentials: a pass with no relaxation certifies
-# feasibility (and yields valid potentials); relaxation still occurring after m+n passes
-# certifies a negative cycle.
+# The minimax constraints are feasible iff their difference-constraint graph has no negative
+# cycle. Multi-source Bellman–Ford both tests feasibility and returns valid potentials.
 function _minimax_feasible(m, n, ks, js, cs, E)
     pot = zeros(m + n)
     for _ in 1:(m + n)

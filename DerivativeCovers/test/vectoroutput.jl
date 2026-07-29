@@ -1,14 +1,9 @@
-# Tests for vector-output recording: `tape_function` on programs returning a vector of TVars, and
-# the vector-mode signed `adjoints` that reads the Jacobian off such a tape. Ground truth is
-# `ForwardDiff.jacobian`. The two things worth pinning are that the Jacobian matches on both
-# scalarized and array-native (dot/linear-node) programs, and that repeated or input-node outputs
-# are handled as distinct rows rather than collapsed.
+# Vector-output tapes must reproduce ForwardDiff's Jacobian for scalar and array operations.
+# Repeated and input-node outputs remain distinct rows.
 
 @testset "vector output" begin
 
-    # Jacobian read off the tape against ForwardDiff, over programs that exercise scalar elementals,
-    # array-native matvec rows (dot nodes), constant-matrix rows (linear nodes), and outputs that
-    # are inputs or duplicates.
+    # Exercise scalar nodes, dot nodes, linear nodes, input outputs, and duplicates.
     W = [0.5 -1.0 2.0; 1.5 0.0 -0.5; -1.0 1.0 1.0; 0.25 0.5 -2.0]
     @testset "adjoints Jacobian matches ForwardDiff — $name" for (name, f, x0) in [
             (

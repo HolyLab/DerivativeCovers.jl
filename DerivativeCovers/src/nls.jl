@@ -1,38 +1,32 @@
-# Gauss–Newton / least-squares covers.
+# Covers for nonlinear least-squares objectives.
 #
 # For a residual map r: Rⁿ → Rᵐ the least-squares loss f = ½∑ₖ rₖ² has Hessian
 #
 #     H = JᵀJ + ∑ₖ rₖ ∇²rₖ,     J = ∂r/∂x,
 #
-# the Gauss–Newton term plus the residual-weighted curvature. Taping f directly makes each
-# residual a node of an ordinary scalar program, so no multi-output tape is needed: the square
-# node rₖ² is unary with second partial 2, and on the loss tape its adjoint is exactly ½, so its
-# local cover contributes one atom of weight √(½·2) = 1 seeded at rₖ. That atom's cover vector is
-# the residual's absolute sensitivity ũ_{rₖ} (Bauer's first-order graph), so combining the
-# residual atoms in quadrature — each residual its own group in the hybrid merge — reproduces
+# The first term is Gauss–Newton; the second is residual-weighted curvature. On the loss tape,
+# each residual square contributes a unit-weight atom seeded at the residual. Combining these
+# atoms in quadrature gives
 #
 #     h_gn[j] = √(∑ₖ ũ_{rₖ,j}²) ≥ √(diag(JᵀJ))[j],
 #
-# a symmetric cover of JᵀJ and the certified analog of the Gauss–Newton (GGN) diagonal. The
-# remaining nonlinear nodes (the ∑ₖ rₖ ∇²rₖ term) ride along in one further group, so the full
-# merge stays a valid cover of the whole Hessian while isolating the Gauss–Newton contribution.
+# a symmetric cover of JᵀJ. All residual-curvature nodes share one additional group, preserving a
+# cover of the full Hessian while keeping the Gauss–Newton contribution separate.
 
 """
     NLSCover
 
-Covers and diagnostics for a least-squares loss `f = ½∑ₖ rₖ²`, as returned by [`cover_nls`](@ref).
+Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`.
 
-- `grad`: the gradient of the loss at the inputs.
-- `h`: a valid cover of the full loss Hessian `H = JᵀJ + ∑ₖ rₖ ∇²rₖ`, obtained by the
-  residuals-as-groups hybrid merge (each residual's Gauss–Newton atom in its own quadrature
-  group, the residual-curvature nodes summed in one further group).
-- `h_gn`: a valid symmetric cover of the Gauss–Newton matrix `JᵀJ`, `h_gn[j] = √(∑ₖ ũ_{rₖ,j}²)`.
-  It bounds `√(diag(JᵀJ))` entrywise — the certified analog of the GGN diagonal — with equality
-  when no path cancellation occurs (`ũ = |J|`). Always `h_gn[j] ≤ h[j]`.
-- `Utilde`: the `m × n` matrix of residual absolute sensitivities, `Utilde[k, j] = ũ_{rₖ,j} ≥
-  |J_{kj}|`. A diagnostic, `O(m·L)` to form; the accessor [`gn_ab`](@ref) reads a rank-1
-  Jacobian cover off it.
+- `grad`: gradient of the loss.
+- `h`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
+- `h_gn`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
+- `Utilde`: `m × n` matrix of absolute residual sensitivities, satisfying
+  `Utilde[k,j] >= abs(J[k,j])`.
 - `m`: the number of residuals.
+
+Forming `Utilde` costs `O(m * L)`. When no signed paths cancel,
+`h_gn == sqrt.(diag(J'J))`.
 """
 struct NLSCover
     grad::Vector{Float64}
@@ -101,22 +95,18 @@ end
 """
     cover_nls(r, x0; ngroups=nothing, check=true, rule=ValueSplit()) -> NLSCover
 
-Rank-1 covers of the least-squares loss `f = ½∑ₖ rₖ(x)²` at `x0`, where `r` maps a vector of
-[`TVar`](@ref)s to the residual vector. Builds the loss tape itself (see [`nls_loss_tape`](@ref)),
-so no vector-output recording is required: the residuals are ordinary intermediate nodes.
+Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
-Returns an [`NLSCover`](@ref) carrying both a cover `h` of the full Hessian and a cover `h_gn` of
-the Gauss–Newton matrix `JᵀJ`. `h` comes from [`cover_hybrid`](@ref) over the
-[`nls_partition`](@ref); `ngroups` controls how finely the residual atoms are separated
-(`nothing`, the default, gives one group per residual and the tightest Gauss–Newton diagonal at
-`O(m·L)`; a smaller integer trades tightness for fewer channels). `h_gn` is formed independently
-from the residual absolute sensitivities and satisfies `h_gn[j] ≤ h[j]`; on residuals that are
-linear in `x` the two coincide and equal `√(diag(JᵀJ))` exactly.
+`r` must map a vector of [`TVar`](@ref)s to a vector of residuals. The returned
+[`NLSCover`](@ref) contains a cover `h` of the full loss Hessian and a cover `h_gn` of the
+Gauss–Newton matrix `JᵀJ`.
 
-`rule` selects the [`SplitRule`](@ref) behind the per-node covers of `h`. `h_gn` and `Utilde` are
-seeded at the residual nodes rather than at the per-node splits, so they do not depend on it.
+By default, each residual receives its own group, giving the tightest available Gauss–Newton
+cover at `O(m * L)` cost. Set `ngroups` to a smaller positive integer to use fewer channels at
+the cost of a potentially looser full-Hessian cover.
 
-`check` is forwarded to [`cover_hybrid`](@ref) to verify the per-node cover invariants.
+`rule` controls the local covers used for `h`; it does not affect `h_gn` or `Utilde`.
+`check=true` verifies the local covering conditions.
 
 # Examples
 
@@ -147,8 +137,7 @@ function cover_nls(
     n, N = t.ninputs, nnodes(t)
     m = length(residx)
 
-    # Residual absolute sensitivities ũ_{rₖ}: one channel per residual, seeded 1 at its node, in a
-    # single vector-mode absolute reverse sweep. Reading the input columns gives the m×n Ũ.
+    # One reverse channel per residual produces the m×n absolute-sensitivity surrogate.
     Theta = zeros(m, N)
     for k in 1:m
         Theta[k, residx[k]] = 1.0

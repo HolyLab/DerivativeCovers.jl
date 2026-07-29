@@ -4,10 +4,8 @@ using LinearAlgebra
 using Random
 using Test
 
-# The programs are ordinary Julia functions, so what has to hold here is that each one is the
-# function it claims to be: the twin agrees, the analytic derivative agrees, and the program is
-# differentiable at `x0`. How tightly a cover of that derivative can be built is measured against
-# this corpus in DerivativeCovers, which these tests deliberately do not load.
+# Validate the problem definitions independently of DerivativeCovers: twins, analytic derivatives,
+# and ForwardDiff results must agree at each evaluation point.
 @testset "DerivativeCoverProblems.jl" begin
 
     GENERATED = [
@@ -41,9 +39,7 @@ using Test
     end
 
     @testset "cancellation pairs" begin
-        # The two members of a pair differ only in the sign of the constants multiplying the
-        # quartet squares: they share every node value and every elemental-data magnitude, and
-        # so agree at first order, while their Hessians differ by construction.
+        # The pair shares values and derivative magnitudes but differs in curvature through signs.
         pc = cancellation(6; m = 3, delta = 1.0e-2, aligned = false, rng = MersenneTwister(7))
         pa = cancellation(6; m = 3, delta = 1.0e-2, aligned = true, rng = MersenneTwister(7))
         @test exact_hessian(pc) ≈ ForwardDiff.hessian(pc.f, pc.x0)

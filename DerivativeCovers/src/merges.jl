@@ -1,10 +1,8 @@
-# Merges of the per-node covers that interpolate between the two extremes of `cover_hessian`.
+# Grouped merges interpolate between sum and quadrature covers.
 #
-# Writing s_k for node k's cover vector, the sum merge takes sum_k s_k and the quadrature merge
-# takes sqrt(sum_k s_k.^2). Partition the nodes into G groups, sum within a group and combine
-# groups in quadrature, and the two extremes become the endpoints G = 1 and one-node-per-group.
-# Every group's partial sum comes out of one channel of a vector-mode absolute-value reverse
-# sweep, so the cost is O(G*L) rather than the O(n*L) of the exact quadrature merge.
+# Sum node covers within each of G groups, then combine the group totals in quadrature. One group
+# gives the sum merge; one group per node gives the per-node quadrature merge. A vector-mode
+# reverse sweep computes all group totals in O(G L).
 
 """
     cyclic_partition(t::Tape, ngroups::Integer) -> groups
@@ -123,24 +121,19 @@ end
     cover_hybrid(t::Tape, outidx::Integer, ngroups::Integer; check::Bool=true, rule=ValueSplit()) -> h
     cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, rule=ValueSplit()) -> h
 
-Cover of the Hessian obtained by summing the per-node covers within each group of `groups` and
-combining the groups in quadrature. An integer `spec` selects a [`cyclic_partition`](@ref) with
-that many groups. `rule` selects the [`SplitRule`](@ref) behind the per-node covers.
+Compute a Hessian cover by grouping node contributions.
 
-The result is a valid cover for *any* partition: the group partial sums `S_g = sum_{k in g} s_k`
-are nonnegative, so `sum_g S_g S_g' >= sum_k s_k s_k'` entrywise, and Cauchy–Schwarz makes
-`h[i] = sqrt(sum_g S_g[i]^2)` a cover of the left-hand side. Refining a partition can only
-tighten `h`, since `sqrt((a+b)^2) >= sqrt(a^2 + b^2)` for nonnegative `a`, `b`; one group
-reproduces the sum merge and one node per group reproduces the quadrature merge.
+`groups[k]` assigns tape node `k` to a group. Contributions are summed within each group, then
+the group totals are combined in quadrature. Alternatively, pass an integer `ngroups` to assign
+nodes cyclically.
 
-Costs one adjoint sweep and one `maximum(groups)`-channel absolute-value reverse sweep, i.e.
-`O(G*L)` time and memory — independent of the input dimension, unlike the exact quadrature merge.
+Every partition produces a valid cover. One group gives the sum merge; finer partitions can only
+tighten the result. With `G = maximum(groups)`, the computation costs `O(G * L)` time and
+memory. `rule` selects the [`SplitRule`](@ref), and `check=true` verifies local covers.
 
-A partition assigns whole *nodes* to groups, so an inner-product node's atoms (see
-[`atom_slots`](@ref)) always travel together within one channel. The finest-partition endpoint
-on a tape with inner-product nodes is therefore the per-node quadrature merge, bounded below by
-`h_quad` from [`cover_hessian`](@ref) rather than equal to it; validity for every partition, and
-the interpolation between the sum and quadrature extremes, are unaffected.
+Groups contain whole nodes. For an inner-product node, all of its cover atoms therefore remain
+in the same group. As a result, the finest possible grouping may be slightly looser than the
+atomwise `h_quad` returned by diagnostic [`cover_hessian`](@ref).
 
 # Examples
 
@@ -167,8 +160,7 @@ function cover_hybrid(
     return _cover_hybrid(t, adjoints(t, outidx), groups; check, rule)
 end
 
-# The merge itself, taking the adjoints as an argument: a caller that needs the gradient too
-# (`cover_nls`) passes the sweep it already ran instead of paying for a second one.
+# Accept precomputed adjoints so callers such as cover_nls can reuse their gradient sweep.
 function _cover_hybrid(
         t::Tape, vbar::AbstractVector, groups::AbstractVector{<:Integer};
         check::Bool = true, rule::SplitRule = ValueSplit()

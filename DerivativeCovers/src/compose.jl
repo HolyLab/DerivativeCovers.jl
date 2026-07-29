@@ -1,11 +1,8 @@
-# Function-level composition of covers, and the recursive route to a sub-map declaration.
+# Composition of covers and declared sub-maps.
 #
-# Covers compose on magnitudes: (a2*b2')*(a1*b1') = (b2⋅a1) * a2*b1', so a pipeline's cover
-# follows from its stages' covers with no joint tape. The tape-level counterpart is `submapnode`
-# (tape.jl): recorded nodes carrying a sub-map's exact Jacobian rows and declared curvature
-# covers, so the outer program's sweeps run over a tape whose length is independent of the
-# sub-map's internal node count. `declare_submap` builds such a declaration by running the
-# existing cover machinery on the sub-map's own scratch tape.
+# Magnitude covers compose without a joint tape:
+# (a₂b₂')(a₁b₁') = (b₂⋅a₁)a₂b₁'. A `submapnode` records exact Jacobian rows and declared
+# curvature covers, keeping the outer tape independent of the sub-map's internal node count.
 
 """
     compose_jacobian_cover(a2, b2, a1, b1) -> (; a, b)
@@ -117,8 +114,8 @@ function declare_submap(F, x0::AbstractVector; rule::SplitRule = ValueSplit())
     outidxs = out isa Integer ? [out] : out
     q, n = length(outidxs), t.ninputs
     y = t.vals[outidxs]
-    # Row k of the vector-mode sweep is the adjoint vector of output k, so one traversal serves
-    # both the Jacobian and the per-output local covers.
+    # Each sweep row belongs to one output, so the same traversal provides its Jacobian row and
+    # local covers.
     Vbar = adjoints(t, outidxs)
     J = Vbar[:, 1:n]
     S = Matrix{Float64}(undef, q, n)

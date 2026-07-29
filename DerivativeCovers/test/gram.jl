@@ -1,7 +1,5 @@
-# Tests for the tape forms of the Gram-matrix cover. The construction, its gauge invariance, and
-# the roundoff guarantee are MatrixCovers'; what is DC's is that the O(L) tape form — which never
-# forms the surrogate — reproduces MatrixCovers' matrix form bit for bit, and that the pair it is
-# fed genuinely covers the Jacobian the program has. Ground truth is the formed J'*W*J.
+# Tape-based Gram covers must match MatrixCovers without materializing the surrogate. Formed
+# J'WJ matrices provide ground truth.
 
 @testset "gram.jl" begin
 

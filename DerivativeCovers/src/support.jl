@@ -1,16 +1,10 @@
-# Connected components of a program's bipartite output/input support graph, read
-# straight off the tape.
+# Connected components of the tape's output-input support graph.
 #
-# Outputs and inputs are the vertices, a nonzero surrogate entry Ũ_kj an edge. No
-# product a_k*b_j of an asymmetric cover spans two components, so the gauge
-# (a, b) -> (γa, γ⁻¹b) acts independently on each: a convention that pins the
-# split is well posed only when imposed componentwise, and a single global
-# constraint leaves ncomp-1 directions to the alternation's internals. This is why
-# [`gramcover`](@ref) accumulates per component rather than globally.
+# Outputs and inputs are vertices; a nonzero surrogate entry is an edge. The cover gauge acts
+# independently on each component, so scaling conventions and Gram-cover accumulation must also
+# be componentwise.
 #
-# MatrixCovers computes the same components from a materialized Ũ in O(mn); the
-# tape route below never forms Ũ and costs O(L), and hands its result to
-# MatrixCovers as a `SupportComponents` so the two share one downstream path.
+# This O(L) tape traversal avoids materializing Ũ. MatrixCovers handles the resulting components.
 
 struct UnionFind
     parent::Vector{Int}
@@ -34,7 +28,7 @@ function _union!(uf::UnionFind, p::Int, q::Int)
     return rp
 end
 
-# Number the touched vertices 1:ncomp by first-encounter order of their roots.
+# Number nonempty components by first encounter.
 function _label_components(uf::UnionFind, touched::AbstractVector{Bool})
     ids = zeros(Int, length(touched))
     seen = Dict{Int, Int}()
@@ -83,7 +77,7 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
         1 <= k <= N || throw(BoundsError(1:N, k))
     end
 
-    # Depends on an input: forward sweep, parents precede children in tape order.
+    # Forward reachability from inputs.
     dep = falses(N)
     dep[1:n] .= true
     for k in (n + 1):N
@@ -95,7 +89,7 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
             end
         end
     end
-    # Reaches an output: reverse sweep, every child of k precedes k in this order.
+    # Reverse reachability from outputs.
     reach = falses(N)
     for k in outidxs
         reach[k] = true
@@ -120,8 +114,7 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
     end
     ids, ncomp = _label_components(uf, live)
     m = length(outidxs)
-    # Rows are numbered by output *position*, so the labels are collected 1:m however `outidxs`
-    # itself is indexed.
+    # Component rows follow output position, not the axes of outidxs.
     rowcomp = Vector{Int}(undef, m)
     for (p, k) in enumerate(outidxs)
         rowcomp[p] = ids[k]

@@ -1,14 +1,11 @@
-# Task-level harnesses: what a consumer of a cover actually experiences when the cover is loose.
+# Measure how cover looseness affects downstream algorithms.
 #
-# Each consumer here uses a cover as a metric on the variables — as a stopping test, a
-# regularizer, a positive-definite shift, or a preconditioner — and each is scale-invariant:
-# rescaling the variables (x -> D*x, g -> D*g, A -> D*A*D, h -> D*h) leaves every reported
-# quantity unchanged, as does rescaling the objective. The degradation a loose cover causes is
-# therefore a property of the looseness alone, not of the units the problem is written in.
+# Each consumer uses the cover as a stopping metric, regularizer, shift, or preconditioner.
+# Reported quantities are invariant to rescaling the variables or objective, so they measure
+# cover quality rather than the units of the problem.
 #
-# The pattern is uniform: a function of one cover implements the task, and a paired function of
-# two covers (a reference `h` and a distortion `hd` of it, see inflation.jl) reports what the
-# distortion cost.
+# Single-cover functions implement a task; paired functions compare a reference cover `h` with
+# an inflated cover `hd`.
 
 """
     cover_norm(g, h) -> r
@@ -277,7 +274,7 @@ function step_degradation(
     den > 0 ||
         throw(ArgumentError("the exact step vanishes in the cover metric; degradation is undefined"))
     err(x) = norm(h .* (x .- xexact)) / den
-    # `iters` counts steps taken, so iterate k of the history is reached after k-1 of them.
+    # History entry k is the state before step k.
     hit(xs) = (k = findfirst(x -> err(x) <= target, xs); k === nothing ? nothing : k - 1)
 
     ref = cover_cg(A, b, h; maxiter, kwargs...)

@@ -1,6 +1,4 @@
-# Tests for the `mlp` generator in problems.jl. As in arrayops.jl, the core claim is parity
-# between the array-notation program and its scalar-loop twin, plus validity of every cover
-# against ForwardDiff's exact Hessian.
+# The array and scalar-loop MLPs must agree, and both covers must bound ForwardDiff's Hessian.
 
 @testset "mlp.jl" begin
 
@@ -40,17 +38,8 @@
     end
 
     @testset "tape economy" begin
-        # sizes = (n0, n1, n2) = (3, 4, 2), so K = 2 layers, one hidden (l=1) and one linear
-        # output (l=2). Per batch column:
-        #   hidden layer:  n1 matvec rows (linearnode, TVar weights x Real data) +
-        #                  n1 bias adds (binarynode) + n1 activations (unarynode) = 3*n1 nodes
-        #   output layer:  n2 matvec rows (dotnode, TVar x TVar) +
-        #                  n2 bias adds (binarynode) = 2*n2 nodes
-        #   residual:      n2 subtracts + n2 abs2 (unarynode each) +
-        #                  1 linear sum over the n2 terms = 2*n2 + 1 nodes
-        # giving 3*n1 + 4*n2 + 1 nodes per column. Across `batch` columns, plus the parameters
-        # as inputs, plus one linear node summing the batch, plus one unary node for the final
-        # `/2`:
+        # Per batch column: 3n1 hidden-layer nodes, 2n2 output-layer nodes, and 2n2+1 loss nodes.
+        # Add parameter inputs and two final reduction nodes.
         n0, n1, n2 = sizes
         nparams = n1 * (n0 + 1) + n2 * (n1 + 1)
         per_column = 3 * n1 + 4 * n2 + 1

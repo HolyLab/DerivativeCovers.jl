@@ -1,10 +1,6 @@
 using DerivativeCovers
 using DerivativeCovers.Diagnostics
-# The problem corpus is the sibling package in this repository. It depends on nothing here — the
-# sweeps tape its programs by virtue of their being written in generic Julia — so it is loaded
-# from source rather than declared a dependency: it is unregistered, and a path dependency of a
-# test target cannot be expressed in `Project.toml`. `Problems` is the qualifier the tests use
-# where a generator's name collides with a fixture in `programs.jl`.
+# Load the unregistered sibling package directly; test targets cannot declare path dependencies.
 include(
     joinpath(
         @__DIR__, "..", "..", "DerivativeCoverProblems", "src",
@@ -13,9 +9,7 @@ include(
 )
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
-# The tests exercise the sweeps and their intermediates, most of which are deliberately not in the
-# top namespace. Naming them here keeps the call sites readable while leaving the export list —
-# pinned in the "public API boundary" testset — as the only thing `using DerivativeCovers` grants.
+# Import internal helpers explicitly to keep test call sites readable without expanding exports.
 using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, bound_ratio,
     rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
     jacobian_minimax, dependency_severity, scaled_spectral_radius,
@@ -67,10 +61,8 @@ include("genericaxes.jl")
     end
 
     @testset "ExplicitImports" begin
-        # `Base.broadcastable` is the documented way to opt a type into broadcasting, but Base
-        # does not mark it public. The two public-ness checks read `Base.ispublic` only from
-        # Julia 1.11; before that they fall back to `isexported` and flag public-but-unexported
-        # names, so they run only where they are accurate.
+        # Julia 1.10 cannot distinguish public, unexported names, so public-access checks would
+        # incorrectly reject Base.broadcastable.
         public_ok = VERSION >= v"1.11"
         test_explicit_imports(
             DerivativeCovers;
@@ -87,10 +79,7 @@ include("genericaxes.jl")
         @test !(TVar <: Real)
         @test supertype(TVar) === Any
 
-        # What `using DerivativeCovers` grants, in full. Pinned exactly, so that a name cannot
-        # drift into the top namespace as a side effect of adding one somewhere in `src/`.
-        # `names` reports `public` declarations alongside exports from 1.11 on, and includes the
-        # module's own name, so neither can be read off it directly.
+        # Pin the export set so internal names cannot drift into the top-level namespace.
         exported = filter(s -> Base.isexported(DerivativeCovers, s), names(DerivativeCovers))
         @test Set(setdiff(exported, [:DerivativeCovers])) == Set(
             [
@@ -104,9 +93,7 @@ include("genericaxes.jl")
             ]
         )
 
-        # Addressable by qualification and covered by the compatibility promise, but unexported:
-        # the contracts a new elemental implements, the quantities defined on a cover from any
-        # source, and the adapters between the result types and the bare-vector functions.
+        # Public extension points and utilities remain available only by qualification.
         internals = (
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
@@ -243,9 +230,7 @@ include("genericaxes.jl")
             DerivativeCovers.local_cover_slots(t, k, 1.0)
     end
 
-    # A program that is one elemental applied straight to the inputs has unit absolute
-    # sensitivities, so its elementwise bound `B` is exactly `abs.(H)`. Both partials of each
-    # elemental are therefore pinned against ForwardDiff: the first by `grad`, the second by `B`.
+    # For a single elemental, B = abs.(H), exposing both recorded derivative orders directly.
     @testset "elemental partials — $name" for (name, f, x0) in [
             ("exp", x -> exp(x[1]), [0.7]),
             ("log", x -> log(x[1]), [1.7]),
@@ -294,10 +279,7 @@ include("genericaxes.jl")
     end
 
     @testset "an already-tight pair needs no balancing" begin
-        # A power node's off-diagonal carries the factor (1 + z*log(x)), which a base below 1 can
-        # drive small enough that C12^2 <= C11*C22. Such a pair covers itself: each slot takes the
-        # square root of its own diagonal, and the product of the two still dominates C12, so no
-        # balancing against the parent scales is needed.
+        # When C12² <= C11*C22, the diagonal square roots already cover the block.
         f = x -> x[1]^x[2]
         x0 = [0.5, 1.6]
         t, outidx = tape_function(f, x0)
@@ -539,11 +521,8 @@ include("genericaxes.jl")
             @test cover_hybrid(f, x0, 1; rule = SensitivitySplit()) ≈ res.h_sum rtol = 1.0e-12
         end
 
-        # A multiplication node with both operands exactly zero: the value channel is empty
-        # (both scale references vanish), so ValueSplit's split at a nearby point is decided
-        # by the ratio of the two now-tiny values, while the sensitivity channel sees
-        # sigma = 1 on both sides at every point. The perturbations are dyadic, so the
-        # parent values at the displaced point are exact and the value ratio is exactly 4.
+        # At a zero-zero product, ValueSplit is discontinuous while SensitivitySplit retains unit
+        # scales. Dyadic perturbations make the expected 4:1 value ratio exact.
         fmul = x -> (x[1] - 1) * (x[2] - 1)
         x0 = [1.0, 1.0]
         xp = [1.0 + 2.0^-40, 1.0 + 2.0^-38]
@@ -552,17 +531,14 @@ include("genericaxes.jl")
         @test cover_hessian(WithDiagnostics(), fmul, x0; rule = ValueSplit()).h_sum == [1.0, 1.0]
         @test cover_hessian(WithDiagnostics(), fmul, xp; rule = ValueSplit()).h_sum == [2.0, 0.5]
 
-        # Dead channel: sigma == 0 certifies that the slot's total gradient vanishes, so the
-        # multiplication node deposits nothing there and its partner covers only its own
-        # (zero) diagonal; the whole cover on that side comes from the x[1]^2 node.
+        # A zero sensitivity certifies a dead slot; only the x[1]^2 node contributes here.
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
         resd = cover_hessian(WithDiagnostics(), fdead, xd; rule = SensitivitySplit())
         @test resd.h_sum ≈ [sqrt(6), 0.0]
         @test cover_ratio(Hd, resd.h_sum) <= GATE
-        # Approaching the dead point, the response of h is bounded by the sqrt(sigma1*sigma2)
-        # envelope — a square-root cusp, not a jump.
+        # The cover approaches a dead point through a square-root cusp, not a jump.
         rese = cover_hessian(WithDiagnostics(), fdead, [2.0^-20, 3.0]; rule = SensitivitySplit())
         @test maximum(abs, rese.h_sum .- resd.h_sum) <= 2.0^-8
 
@@ -1003,12 +979,8 @@ include("genericaxes.jl")
     end
 
     @testset "random_dag keeps every derivative alive at scale" begin
-        # tanh saturates: `1 - tanh(v)^2` evaluates to exactly zero in Float64 for |v| ≳ 19,
-        # and a derivative-dead node erases its whole subtree from the gradient and the
-        # Hessian. At sharing = 0 the program's tail is a single unary chain (binary ops need
-        # two unconsumed nodes and run out), so one saturated tanh there zeroes *every*
-        # derivative of the program. The generator normalizes tanh inputs to prevent this;
-        # small-n spot checks miss it because the chance of an untamed input grows with nops.
+        # Large random DAGs expose tanh saturation and multiplicative underflow that small cases
+        # miss. The generator must keep every nonlinear derivative active.
         function tanhderivs(r, x0)
             v = Vector{Float64}(undef, r.ninputs + length(r.ops))
             v[1:r.ninputs] = x0
@@ -1025,9 +997,7 @@ include("genericaxes.jl")
             g = ForwardDiff.gradient(p.f, p.x0)
             H = ForwardDiff.hessian(p.f, p.x0)
             @test any(!iszero, H)
-            # An input can be genuinely dead — consumed only through linear paths whose unit
-            # weights cancel exactly in the output sum — but then it must be dead at second
-            # order too, and deadness stays the rare exception.
+            # A zero gradient is acceptable only when the same input is also dead at second order.
             dead = findall(iszero, g)
             @test all(i -> all(iszero, view(H, i, :)), dead)
             @test length(dead) <= max(1, n ÷ 8)
@@ -1053,10 +1023,8 @@ include("genericaxes.jl")
     end
 
     @testset "sigma widens the coefficient dynamic range" begin
-        # `sigma` is defined as the standard deviation of the coefficients' log-magnitudes, so
-        # read the dynamic range the same way. A `maximum(abs) / minimum(abs)` ratio instead
-        # tracks the single smallest entry, a near-cancellation artifact that swings by orders
-        # of magnitude between draws and says little about the bulk.
+        # Measure spread in log magnitude, matching the definition of sigma and avoiding
+        # sensitivity to one near-zero coefficient.
         function logspread(A)
             l = log.(abs.(vec(A)))
             m = sum(l) / length(l)
