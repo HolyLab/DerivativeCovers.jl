@@ -2,7 +2,7 @@
 # its second partials; a program built from anything outside this set hits a MethodError.
 
 import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
-             transpose
+    transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 
 # A TVar is a broadcast scalar: `xs ./ s` with `s::TVar` broadcasts `s` against every entry of
@@ -31,11 +31,11 @@ eitherconstant(x::TVar, y::TVar) = isconstant(x) | isconstant(y)
 
 # --- binary, both TVar ---
 +(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) + unfold(y)) :
-                      binarynode(x, y, value(x) + value(y), 1.0, 1.0, 0, 0, 0)
+    binarynode(x, y, value(x) + value(y), 1.0, 1.0, 0, 0, 0)
 -(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) - unfold(y)) :
-                      binarynode(x, y, value(x) - value(y), 1.0, -1.0, 0, 0, 0)
+    binarynode(x, y, value(x) - value(y), 1.0, -1.0, 0, 0, 0)
 *(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) * unfold(y)) :
-                      binarynode(x, y, value(x) * value(y), value(y), value(x), 0, 1, 0)
+    binarynode(x, y, value(x) * value(y), value(y), value(x), 0, 1, 0)
 function /(x::TVar, y::TVar)
     eitherconstant(x, y) && return fold(unfold(x) / unfold(y))
     u, w = value(x), value(y)
@@ -92,7 +92,7 @@ function ^(x::TVar, p::Real)
     return unarynode(x, v^p, d, C)
 end
 # Disambiguate from Base's `x^n` integer-literal path.
-^(x::TVar, p::Integer) = invoke(^, Tuple{TVar,Real}, x, p)
+^(x::TVar, p::Integer) = invoke(^, Tuple{TVar, Real}, x, p)
 
 # --- power with a variable exponent ---
 # `u^w = exp(w*log(u))` is real-differentiable only for `u > 0`; a nonpositive base is a domain
@@ -102,8 +102,10 @@ function ^(x::TVar, y::TVar)
     u, w = value(x), value(y)
     u > 0 || throw(DomainError(u, "x^y with a variable exponent requires a positive base"))
     v, lu = u^w, log(u)
-    return binarynode(x, y, v, w * u^(w - 1), v * lu,
-                      w * (w - 1) * u^(w - 2), u^(w - 1) * (1 + w * lu), v * lu^2)
+    return binarynode(
+        x, y, v, w * u^(w - 1), v * lu,
+        w * (w - 1) * u^(w - 2), u^(w - 1) * (1 + w * lu), v * lu^2
+    )
 end
 function ^(c::Real, x::TVar)
     isconstant(x) && return TVar(float(c)^value(x))
@@ -255,12 +257,18 @@ end
 # matrix-vector products, which are `AbstractMatrix` and so tie with the three methods above:
 # an adjoint/transpose row vector times a vector is the same dot product `dot` already records,
 # and a diagonal matrix times a vector is the elementwise product the scalar `*` already records.
-*(W::Union{Adjoint{TVar,<:AbstractVector},Transpose{TVar,<:AbstractVector}},
-  x::AbstractVector{TVar}) = dot(parent(W), x)
-*(W::Union{Adjoint{TVar,<:AbstractVector},Transpose{TVar,<:AbstractVector}},
-  x::AbstractVector{<:Real}) = dot(parent(W), x)
-*(W::Union{Adjoint{<:Real,<:AbstractVector},Transpose{<:Real,<:AbstractVector}},
-  x::AbstractVector{TVar}) = dot(parent(W), x)
+*(
+    W::Union{Adjoint{TVar, <:AbstractVector}, Transpose{TVar, <:AbstractVector}},
+    x::AbstractVector{TVar}
+) = dot(parent(W), x)
+*(
+    W::Union{Adjoint{TVar, <:AbstractVector}, Transpose{TVar, <:AbstractVector}},
+    x::AbstractVector{<:Real}
+) = dot(parent(W), x)
+*(
+    W::Union{Adjoint{<:Real, <:AbstractVector}, Transpose{<:Real, <:AbstractVector}},
+    x::AbstractVector{TVar}
+) = dot(parent(W), x)
 
 # Elementwise product, not a row-by-row one: routing a `Diagonal` through `matvecnodes` would
 # record n dense linear nodes at O(n²) cost. Broadcasting expands a length-1 or otherwise

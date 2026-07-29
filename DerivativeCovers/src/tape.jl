@@ -58,7 +58,7 @@ struct Tape
     vals::Vector{Float64}
     parents::Vector{Vector{Int}}
     ds::Vector{Vector{Float64}}
-    Cs::Vector{Union{Matrix{Float64},PairedPartials,CoveredPartials}}
+    Cs::Vector{Union{Matrix{Float64}, PairedPartials, CoveredPartials}}
     ninputs::Int
 end
 
@@ -85,11 +85,13 @@ julia> DerivativeCovers.nnodes(t), y.idx
 function Tape(x0::AbstractVector)
     Base.require_one_based_indexing(x0)
     n = length(x0)
-    return Tape(Float64[float(x) for x in x0],
-                [Int[] for _ in 1:n],
-                [Float64[] for _ in 1:n],
-                Union{Matrix{Float64},PairedPartials,CoveredPartials}[Matrix{Float64}(undef, 0, 0) for _ in 1:n],
-                n)
+    return Tape(
+        Float64[float(x) for x in x0],
+        [Int[] for _ in 1:n],
+        [Float64[] for _ in 1:n],
+        Union{Matrix{Float64}, PairedPartials, CoveredPartials}[Matrix{Float64}(undef, 0, 0) for _ in 1:n],
+        n
+    )
 end
 
 """
@@ -130,7 +132,7 @@ julia> DerivativeCovers.isconstant(c * TVar(4.0)), DerivativeCovers.value(c * TV
 ```
 """
 struct TVar
-    tape::Union{Tape,Nothing}
+    tape::Union{Tape, Nothing}
     idx::Int
     val::Float64
 end
@@ -220,8 +222,10 @@ function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     tx, ix = noderef(x)
     ty, iy = noderef(y)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
-    return pushnode!(tx, val, [ix, iy], [float(d1), float(d2)],
-                     Float64[c11 c12; c12 c22])
+    return pushnode!(
+        tx, val, [ix, iy], [float(d1), float(d2)],
+        Float64[c11 c12; c12 c22]
+    )
 end
 
 """
@@ -300,9 +304,11 @@ cover scales as the square root of its output's scale); [`declare_submap`](@ref)
 declarations with both properties. The covers are then invariant to the output gauge `C`, which
 cancels between each output's adjoint and its declared curvature.
 """
-function submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
-                    J::AbstractMatrix{<:Real},
-                    S::Union{Nothing,AbstractMatrix{<:Real}}=nothing)
+function submapnode(
+        xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
+        J::AbstractMatrix{<:Real},
+        S::Union{Nothing, AbstractMatrix{<:Real}} = nothing
+    )
     Base.require_one_based_indexing(xs, y, J)
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
     isempty(y) && throw(ArgumentError("cannot record a sub-map call with no outputs"))
@@ -319,14 +325,16 @@ function submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
     all(x -> first(noderef(x)) === t, xs) ||
         throw(ArgumentError("cannot combine TVars from different tapes"))
     parents = [last(noderef(x)) for x in xs]   # shared by all q nodes; parent lists are never mutated
-    return [begin
+    return [
+        begin
                 C = if S === nothing || all(iszero, view(S, k, :))
                     Matrix{Float64}(undef, 0, 0)
-                else
+            else
                     CoveredPartials([float(S[k, i]) for i in 1:p])
-                end
+            end
                 pushnode!(t, float(y[k]), parents, [float(J[k, i]) for i in 1:p], C)
-            end for k in 1:q]
+            end for k in 1:q
+    ]
 end
 
 """

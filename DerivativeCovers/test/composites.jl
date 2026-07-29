@@ -28,7 +28,7 @@ end
 tape rather than detached. `epsilon` defaults to `0`, so a constant input yields a non-finite
 result rather than a silently ill-scaled one.
 """
-function layernorm(x::AbstractVector; epsilon::Real=0)
+function layernorm(x::AbstractVector; epsilon::Real = 0)
     n = length(x)
     n >= 2 || throw(ArgumentError("layernorm needs at least 2 entries"))
     mu = sum(x) / n

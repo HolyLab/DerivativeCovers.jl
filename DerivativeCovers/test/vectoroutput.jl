@@ -11,16 +11,20 @@
     # are inputs or duplicates.
     W = [0.5 -1.0 2.0; 1.5 0.0 -0.5; -1.0 1.0 1.0; 0.25 0.5 -2.0]
     @testset "adjoints Jacobian matches ForwardDiff — $name" for (name, f, x0) in [
-        ("scalarized",
-         xs -> [xs[1] * xs[2], sin(xs[3]), xs[1] + xs[3], exp(xs[2])],
-         [0.7, -0.4, 1.1]),
-        ("array-native matvec", xs -> W * xs, [0.7, -0.4, 1.1]),
-        ("nonlinear rows", xs -> [tanh(y) for y in W * xs], [0.3, -0.2, 0.5]),
-        ("identity", xs -> xs, [0.7, -0.4, 1.1]),
-        ("duplicated and input outputs",
-         xs -> [xs[1], xs[1], xs[2] * xs[3], xs[3]],
-         [0.7, -0.4, 1.1]),
-    ]
+            (
+                "scalarized",
+                xs -> [xs[1] * xs[2], sin(xs[3]), xs[1] + xs[3], exp(xs[2])],
+                [0.7, -0.4, 1.1],
+            ),
+            ("array-native matvec", xs -> W * xs, [0.7, -0.4, 1.1]),
+            ("nonlinear rows", xs -> [tanh(y) for y in W * xs], [0.3, -0.2, 0.5]),
+            ("identity", xs -> xs, [0.7, -0.4, 1.1]),
+            (
+                "duplicated and input outputs",
+                xs -> [xs[1], xs[1], xs[2] * xs[3], xs[3]],
+                [0.7, -0.4, 1.1],
+            ),
+        ]
         t, outidxs = tape_function(f, x0)
         @test outidxs isa Vector{Int}
         m = length(f([1.0, 1.0, 1.0] .* x0))   # number of outputs, independent of the tape
@@ -70,7 +74,7 @@
         end
         Utilde = abs_reverse(t, Theta)[:, 1:n]
         J = ForwardDiff.jacobian(f, x0)
-        @test all(Utilde .>= abs.(J) .- 1e-12)
+        @test all(Utilde .>= abs.(J) .- 1.0e-12)
         # No path cancellation in these residuals, so the absolute sweep is tight to |J|.
         @test Utilde ≈ abs.(J)
     end
@@ -101,7 +105,7 @@
         Utilde = jacobian_surrogate(t, outidxs)
         @test all(iszero, Utilde[1, :]) && all(iszero, Utilde[3, :])
 
-        bal = balance_cover(Utilde; arule=:geomean)
+        bal = balance_cover(Utilde; arule = :geomean)
         @test bal.a[1] == 0 && bal.a[3] == 0
         @test jacobian_ratio(Utilde, bal.a, bal.b) <= GATE
     end

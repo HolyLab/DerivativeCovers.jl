@@ -8,9 +8,9 @@
         t, outidx = tape_function(f, x0)
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
-        @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
-        @test pr.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
+        @test pr.grad ≈ r.grad rtol = 1.0e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1.0e-12
+        @test pr.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1.0e-8
 
         H = ForwardDiff.hessian(f, x0)
         @test all(abs.(H) .<= pr.h_sum * pr.h_sum' .* GATE)
@@ -27,8 +27,8 @@
         t, outidx = tape_function(fp, x0)
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
-        @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
+        @test pr.grad ≈ r.grad rtol = 1.0e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1.0e-12
     end
 
     @testset "declared sub-map tape" begin
@@ -41,7 +41,7 @@
         t, outidx = tape_function(f, x0)
         r = cover_hessian(WithDiagnostics(), t, outidx)
         pr = cover_hessian(CoverOnly(), t, outidx)
-        @test pr.grad ≈ r.grad rtol = 1e-12
-        @test pr.h_sum ≈ r.h_sum rtol = 1e-12
+        @test pr.grad ≈ r.grad rtol = 1.0e-12
+        @test pr.h_sum ≈ r.h_sum rtol = 1.0e-12
     end
 end

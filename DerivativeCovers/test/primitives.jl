@@ -44,7 +44,7 @@ dot_scalar(z) = exp(scalar_dot(z[1:3], z[4:6]))
 dot_const_prim(w0) = z -> 0.5 * dot(w0, z)^2
 dot_const_scalar(w0) = z -> 0.5 * scalar_dot(w0, z)^2
 
-const W0_CONST = [1e-2, 0.1, 1.0, 10.0]
+const W0_CONST = [1.0e-2, 0.1, 1.0, 10.0]
 
 "Coefficient vector mixing typed constants with variables, for the split inner product."
 mixed_w(z) = (T = eltype(z); T[T(2.0), z[5], T(-1.5), z[6]])
@@ -76,15 +76,23 @@ end
 
 "Name, primitive program, scalarized twin, and evaluation point for each parity case."
 const PRIMITIVE_PARITY = [
-    ("matvec var x var", matvec_prim, matvec_scalar,
-     [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4]),
+    (
+        "matvec var x var", matvec_prim, matvec_scalar,
+        [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4],
+    ),
     ("single dot", dot_prim, dot_scalar, [0.3, -1.1, 0.7, 1.2, -0.4, 0.9]),
-    ("constant-coefficient dot", dot_const_prim(W0_CONST), dot_const_scalar(W0_CONST),
-     [0.3, -1.2, 2.0, -0.5]),
-    ("mixed coefficient operand", dot_mixed_prim, dot_mixed_scalar,
-     [0.3, -1.1, 0.7, 1.2, -0.4, 0.9]),
-    ("both operands mixed", dot_bothmixed_prim, dot_bothmixed_scalar,
-     [0.6, -0.9, 0.4, 1.1, -0.3]),
+    (
+        "constant-coefficient dot", dot_const_prim(W0_CONST), dot_const_scalar(W0_CONST),
+        [0.3, -1.2, 2.0, -0.5],
+    ),
+    (
+        "mixed coefficient operand", dot_mixed_prim, dot_mixed_scalar,
+        [0.3, -1.1, 0.7, 1.2, -0.4, 0.9],
+    ),
+    (
+        "both operands mixed", dot_bothmixed_prim, dot_bothmixed_scalar,
+        [0.6, -0.9, 0.4, 1.1, -0.3],
+    ),
 ]
 
 "Every primitive program above, paired with a plain-Julia twin usable by ForwardDiff."
@@ -95,22 +103,22 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     @testset "parity with scalarized twin — $name" for (name, fp, fs, x0) in PRIMITIVE_PARITY
         rp = cover_hessian(WithDiagnostics(), fp, x0)
         rs = cover_hessian(WithDiagnostics(), fs, x0)
-        @test rp.grad ≈ rs.grad rtol=1e-12
-        @test rp.B ≈ rs.B rtol=1e-12
-        @test rp.h_sum ≈ rs.h_sum rtol=1e-12
-        @test rp.h_sum_rev ≈ rs.h_sum_rev rtol=1e-12
-        @test rp.h_quad ≈ rs.h_quad rtol=1e-12
+        @test rp.grad ≈ rs.grad rtol = 1.0e-12
+        @test rp.B ≈ rs.B rtol = 1.0e-12
+        @test rp.h_sum ≈ rs.h_sum rtol = 1.0e-12
+        @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
+        @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
         # The primitive form's inner-product nodes carry `PairedPartials`, the scalarized twin's
         # multiply nodes a dense 2x2, so this pins the two curvature branches of `hvp!` together.
         v = Float64[cos(3i) for i in eachindex(x0)]
-        @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol=1e-12
+        @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol = 1.0e-12
 
         vp = cover_variance(fp, x0)
         vs = cover_variance(fs, x0)
-        @test vp.h_sum ≈ vs.h_sum rtol=1e-12
-        @test vp.h_var ≈ vs.h_var rtol=1e-12
-        @test vp.severity ≈ vs.severity rtol=1e-12
+        @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
+        @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
+        @test vp.severity ≈ vs.severity rtol = 1.0e-12
     end
 
     @testset "validity vs ForwardDiff — $name" for (name, f, x0) in PRIMITIVE_VALIDITY
@@ -120,15 +128,15 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
-        @test res.h_sum_rev ≈ res.h_sum rtol=1e-12
+        @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
     end
 
     @testset "exact cover of the factored quadratic with constant weights" begin
         f = dot_const_prim(W0_CONST)
         x0 = [0.3, -1.2, 2.0, -0.5]
         res = cover_hessian(WithDiagnostics(), f, x0)
-        @test res.h_sum ≈ abs.(W0_CONST) rtol=1e-12
-        @test res.h_quad ≈ abs.(W0_CONST) rtol=1e-12
+        @test res.h_sum ≈ abs.(W0_CONST) rtol = 1.0e-12
+        @test res.h_quad ≈ abs.(W0_CONST) rtol = 1.0e-12
 
         # The entrywise expansion of the same function loses the factored structure and is
         # strictly looser, as METHODS.md's tightness study predicts.
@@ -161,8 +169,8 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         zW = randn(rng, p * q)
         res = cover_hessian(WithDiagnostics(), f, zW)
         pattern = vec(repeat(abs.(x0v)', p, 1))    # each row's weights get |x0v|
-        @test res.h_sum ≈ pattern rtol=1e-12
-        @test res.h_quad ≈ pattern rtol=1e-12
+        @test res.h_sum ≈ pattern rtol = 1.0e-12
+        @test res.h_quad ≈ pattern rtol = 1.0e-12
 
         H = ForwardDiff.hessian(f, zW)
         @test bound_ratio(H, res.B) <= GATE
@@ -239,7 +247,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         t, outidx = tape_function(f, x0)
         N = nnodes(t)
 
-        @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol=1e-12
+        @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol = 1.0e-12
 
         h_nodewise = cover_hybrid(t, outidx, collect(1:N))
         @test all(>=(0), h_nodewise)
@@ -254,21 +262,27 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     end
 
     @testset "covariance — dot and matvec" begin
-        cases = [("single dot", dot_prim, [0.3, -1.1, 0.7, 1.2, -0.4, 0.9],
-                  [1e-6, 1e3, 1.0, 1e-2, 1e4, 1.0]),
-                 ("matvec", matvec_prim, [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4],
-                  [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3, 1.0])]
+        cases = [
+            (
+                "single dot", dot_prim, [0.3, -1.1, 0.7, 1.2, -0.4, 0.9],
+                [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4, 1.0],
+            ),
+            (
+                "matvec", matvec_prim, [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4],
+                [1.0e-3, 1.0e2, 1.0, 1.0e-1, 1.0e4, 1.0e-2, 1.0e1, 1.0e3, 1.0],
+            ),
+        ]
         @testset "$name" for (name, f, x0, d) in cases
             res = cover_hessian(WithDiagnostics(), f, x0)
 
             resd = cover_hessian(WithDiagnostics(), xt -> f(xt ./ d), d .* x0)
-            @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-12
-            @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-12
+            @test resd.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
+            @test resd.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
 
             c = 7.3
             resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
-            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
-            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
+            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol = 1.0e-12
+            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol = 1.0e-12
         end
     end
 
@@ -311,7 +325,8 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         DerivativeCovers.pushnode!(t3, 6.0, [1, 2, 3], ones(3), ones(3, 3))
         vbar = [0.0, 0.0, 0.0, 1.0]
         @test_throws "node 4 has 3 parents; only unary and binary elementals are supported" (
-            local_covers(t3, vbar))
+            local_covers(t3, vbar)
+        )
     end
 
     @testset "PairedPartials entries" begin

@@ -190,11 +190,13 @@ function scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::Abstract
     return opnorm(Jhat[rows, cols], 2)
 end
 
-function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
-                               a::AbstractVector, b::AbstractVector;
-                               maxiter::Integer=200,
-                               rtol::Real=cbrt(eps(float(real(promote_type(eltype(a), eltype(b)))))),
-                               rng::AbstractRNG=Xoshiro(0))
+function scaled_singular_value(
+        t::Tape, outidxs::AbstractVector{<:Integer},
+        a::AbstractVector, b::AbstractVector;
+        maxiter::Integer = 200,
+        rtol::Real = cbrt(eps(float(real(promote_type(eltype(a), eltype(b)))))),
+        rng::AbstractRNG = Xoshiro(0)
+    )
     n = t.ninputs
     Base.require_one_based_indexing(b)
     length(b) == n ||
@@ -237,7 +239,7 @@ inflated, which would be valid but looser.
 upper bound on the true spectral norm: with an exact `sigma` the default `1` is correct, but the
 power-iteration estimate converges from below and needs `safety > 1`.
 """
-function jacobian_shrink(a::AbstractVector, b::AbstractVector, sigma::Real; safety::Real=1)
+function jacobian_shrink(a::AbstractVector, b::AbstractVector, sigma::Real; safety::Real = 1)
     sigma >= 0 || throw(ArgumentError("sigma must be nonnegative, got $sigma"))
     safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
     scale = sqrt(min(one(float(sigma)), safety * sigma))

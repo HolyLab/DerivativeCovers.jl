@@ -21,8 +21,10 @@ rescaling of either factor.
 Equality holds entrywise for sign-definite rank-1 factors covered exactly; in general the rule
 pays the same signed-cancellation looseness as any magnitude-level bound on a product.
 """
-function compose_jacobian_cover(a2::AbstractVector, b2::AbstractVector,
-                                a1::AbstractVector, b1::AbstractVector)
+function compose_jacobian_cover(
+        a2::AbstractVector, b2::AbstractVector,
+        a1::AbstractVector, b1::AbstractVector
+    )
     axes(b2, 1) == axes(a1, 1) ||
         throw(DimensionMismatch("b2 and a1 must share the middle space: $(axes(b2)) vs $(axes(a1))"))
     for (name, v) in (("a2", a2), ("b2", b2), ("a1", a1), ("b1", b1))
@@ -54,11 +56,17 @@ For `g = 0.5*norm(r)^2` this generic rule gives `norm(a, 1)*b` for the Gauss–N
 weaker than the `norm(a, 2)*b` of [`gn_ab`](@ref), which exploits the repeated `J` in `J'J` —
 so NLS consumers should prefer the specialized object.
 """
-function compose_hessian_cover(hg::AbstractVector, gamma::AbstractVector, a::AbstractVector,
-                               b::AbstractVector, S::Union{Nothing,AbstractMatrix}=nothing)
+function compose_hessian_cover(
+        hg::AbstractVector, gamma::AbstractVector, a::AbstractVector,
+        b::AbstractVector, S::Union{Nothing, AbstractMatrix} = nothing
+    )
     axes(hg, 1) == axes(gamma, 1) == axes(a, 1) ||
-        throw(DimensionMismatch("hg, gamma, and a must share the output space: " *
-                                "$(axes(hg)) vs $(axes(gamma)) vs $(axes(a))"))
+        throw(
+        DimensionMismatch(
+            "hg, gamma, and a must share the output space: " *
+                "$(axes(hg)) vs $(axes(gamma)) vs $(axes(a))"
+        )
+    )
     for (name, v) in (("hg", hg), ("gamma", gamma), ("a", a), ("b", b))
         all(>=(0), v) || throw(ArgumentError("cover vectors must be nonnegative; $name is not"))
     end
@@ -104,7 +112,7 @@ cover rule are independent: the recording tape consumes `S` as a fixed bound, so
 remain valid whatever rule stands behind the declaration, but the exact-minimizer property of
 [`SensitivitySplit`](@ref) holds within each tape separately, not across the boundary.
 """
-function declare_submap(F, x0::AbstractVector; rule::SplitRule=ValueSplit())
+function declare_submap(F, x0::AbstractVector; rule::SplitRule = ValueSplit())
     t, out = tape_function(F, x0)
     outidxs = out isa Integer ? [out] : out
     q, n = length(outidxs), t.ninputs
@@ -131,7 +139,7 @@ price that exact Hessian-vector products ([`hvp`](@ref)) become unavailable on t
 scalar-valued `F` yields a one-element vector. `rule` is passed to [`declare_submap`](@ref)
 and governs only the declaration's curvature covers.
 """
-function submap(F, xs::AbstractVector{TVar}; rule::SplitRule=ValueSplit())
+function submap(F, xs::AbstractVector{TVar}; rule::SplitRule = ValueSplit())
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
     d = declare_submap(F, [value(x) for x in xs]; rule)
     return submapnode(xs, d.y, d.J, d.S)

@@ -23,7 +23,7 @@ using Random: AbstractRNG, Xoshiro
 export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
 export inflation_shape, inflation_factors, inflate, anisotropy
 export cover_norm, stopping_index, stopping_shift, regularized_step, regularization_bias,
-       psd_shift, psd_excess, cover_cg, step_degradation
+    psd_shift, psd_excess, cover_cg, step_degradation
 
 include("inflation.jl")
 include("consumers.jl")

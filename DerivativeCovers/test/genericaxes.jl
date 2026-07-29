@@ -51,10 +51,14 @@
             ("equilibrate", equilibrate, (J, av, bv), 1),
             ("dependency_severity", dependency_severity, (h, href), 1),
             ("jacobian_shrink", (a, b) -> jacobian_shrink(a, b, 0.5)[1], (av, bv), 1),
-            ("compose_jacobian_cover", (a2, b2, a1, b1) ->
-                 compose_jacobian_cover(a2, b2, a1, b1).a, (av, bv, bv, av), 1),
-            ("compose_hessian_cover", (hg, g, a, b) ->
-                 compose_hessian_cover(hg, g, a, b).h_sum, (av, av, av, bv), 4),
+            (
+                "compose_jacobian_cover", (a2, b2, a1, b1) ->
+                compose_jacobian_cover(a2, b2, a1, b1).a, (av, bv, bv, av), 1,
+            ),
+            (
+                "compose_hessian_cover", (hg, g, a, b) ->
+                compose_hessian_cover(hg, g, a, b).h_sum, (av, av, av, bv), 4,
+            ),
             ("inflate", (h, f) -> inflate(h, f), (h, fill(2.0, 3)), 1),
             ("inflation_factors", h -> inflation_factors(RampInflation(), h, 4.0), (h,), 1),
             ("inflation_shape", h -> inflation_shape(LognormalInflation(), h), (h,), 1),
@@ -92,8 +96,10 @@
         @test_throws "offset arrays are not supported" hvp(f, offsetcopy(x0), v)
         @test_throws "offset arrays are not supported" hvp(t, outidx, offsetcopy(v))
         @test_throws "offset arrays are not supported" cover_hessian(f, offsetcopy(x0))
-        @test_throws "offset arrays are not supported" scaled_spectral_radius(t, outidx,
-                                                                             offsetcopy(h))
+        @test_throws "offset arrays are not supported" scaled_spectral_radius(
+            t, outidx,
+            offsetcopy(h)
+        )
         @test_throws "offset arrays are not supported" jacobian_minimax(offsetcopy(B))
         @test_throws "offset arrays are not supported" jacobian_representability(offsetcopy(B))
 
@@ -145,11 +151,13 @@
         @test [rowcomponent(sc, k) for k in 1:3] == [rowcomponent(scref, k) for k in 1:3]
 
         @test scaled_singular_value(t, oidx, offsetcopy(ones(3)), ones(3)) ==
-              scaled_singular_value(t, outidxs, ones(3), ones(3))
+            scaled_singular_value(t, outidxs, ones(3), ones(3))
 
         # The weights are indexed by output position, not by outidxs, so an offset one is refused.
-        @test_throws "offset arrays are not supported" cover_jacobian(t, outidxs;
-                                                                     a=offsetcopy(ones(3)))
+        @test_throws "offset arrays are not supported" cover_jacobian(
+            t, outidxs;
+            a = offsetcopy(ones(3))
+        )
     end
 
     # Arrays built inside a taped program carry their own axes through the recording rules: a
@@ -168,7 +176,7 @@
         @test hvp(x -> sum(Wrows * x), x0, v) == hvp(x -> sum(W * x), x0, v)
         @test hvp(x -> dot(Wrows * x, Wrows * x), x0, v) == hvp(x -> dot(W * x, W * x), x0, v)
         @test cover_hessian(x -> sum(Wrows * x), x0).h_sum ==
-              cover_hessian(x -> sum(W * x), x0).h_sum
+            cover_hessian(x -> sum(W * x), x0).h_sum
 
         # The column axis indexes the tape's inputs, which are 1-based, so a mismatch there is a
         # dimension error rather than something to carry through.

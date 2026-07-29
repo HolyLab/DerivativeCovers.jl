@@ -109,9 +109,9 @@ end
 
 "Terms whose coefficients span 10^-8 to 10^6, so the Hessian's rows differ wildly in scale."
 function mixed_scales(x)
-    t1 = (1e6 * x[1] * x[2] - 3)^2
-    t2 = exp(x[3] * 1e3)
-    t3 = x[4]^4 / 1e8
+    t1 = (1.0e6 * x[1] * x[2] - 3)^2
+    t2 = exp(x[3] * 1.0e3)
+    t3 = x[4]^4 / 1.0e8
     return t1 + t2 + t3
 end
 
@@ -170,7 +170,7 @@ end
 
 # ---- fixed problem instances --------------------------------------------------------------
 
-const WQ = [1e-2, 1e-1, 1e0, 1e1, 1e2]     # rank-1 quadratic: A = WQ*WQ'
+const WQ = [1.0e-2, 1.0e-1, 1.0e0, 1.0e1, 1.0e2]     # rank-1 quadratic: A = WQ*WQ'
 const AQ = WQ * WQ'
 const XQ = [1.0, -2.0, 0.5, -1.5, 3.0]
 
@@ -185,14 +185,16 @@ const TREE_X = [0.7, -1.3, 0.4, 2.0, -0.6, 1.1]
 "Name, program, and evaluation point for each test problem."
 const PROBLEMS = [
     ("rosenbrock n=2", rosenbrock, [-1.2, 1.0]),
-    ("rosenbrock n=16", rosenbrock,
-     Float64[isodd(i) ? -1.2 + 0.05i : 1.0 - 0.03i for i in 1:16]),
+    (
+        "rosenbrock n=16", rosenbrock,
+        Float64[isodd(i) ? -1.2 + 0.05i : 1.0 - 0.03i for i in 1:16],
+    ),
     ("quad entrywise", quad_entrywise(AQ), XQ),
     ("quad matvec", quad_matvec(AQ), XQ),
     ("quad factored", quad_factored(WQ), XQ),
     ("logsumexp n=8", logsumexp, [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0]),
     ("mlp 2-4-1", mlp_loss(MLP_XIN, MLP_YTAR), MLP_P),
-    ("mixed scales", mixed_scales, [2e-3, 2e-3, 1e-3, 100.0]),
+    ("mixed scales", mixed_scales, [2.0e-3, 2.0e-3, 1.0e-3, 100.0]),
     ("cancellation n=8", cancellation, CANCEL_X),
     ("cancel-summed n=8", cancellation_summed, CANCEL_X),
 ]

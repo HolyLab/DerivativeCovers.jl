@@ -15,8 +15,8 @@
     @testset "compose_jacobian_cover" begin
         rng = MersenneTwister(30)
         J2, J1 = randn(rng, 4, 3), randn(rng, 3, 5)
-        a2, b2 = ones(4), vec(maximum(abs.(J2); dims=1))
-        a1, b1 = ones(3), vec(maximum(abs.(J1); dims=1))
+        a2, b2 = ones(4), vec(maximum(abs.(J2); dims = 1))
+        a1, b1 = ones(3), vec(maximum(abs.(J1); dims = 1))
         @test jacobian_ratio(J2, a2, b2) <= GATE     # the factors are covered...
         @test jacobian_ratio(J1, a1, b1) <= GATE
         pair = compose_jacobian_cover(a2, b2, a1, b1)
@@ -26,7 +26,7 @@
         u2, w2 = [2.0, 0.25, 1.0], [4.0, 1.0]
         u1, w1 = [1.0, 2.0], [0.5, 3.0, 1.0]
         pr = compose_jacobian_cover(u2, w2, u1, w1)
-        @test pr.a * pr.b' ≈ (u2 * w2') * (u1 * w1') rtol = 1e-14
+        @test pr.a * pr.b' ≈ (u2 * w2') * (u1 * w1') rtol = 1.0e-14
 
         # A rescaling of the middle space (b2 → b2 ./ c alongside a1 → c .* a1) leaves the
         # composed pair bit-identical: the inner product is invariant.
@@ -40,8 +40,8 @@
 
     @testset "declare_submap: exact first order, covered curvature" begin
         d = declare_submap(Fsub, x0)
-        @test d.y ≈ Fsub(x0) rtol = 1e-14
-        @test d.J ≈ ForwardDiff.jacobian(Fsub, x0) rtol = 1e-12
+        @test d.y ≈ Fsub(x0) rtol = 1.0e-14
+        @test d.J ≈ ForwardDiff.jacobian(Fsub, x0) rtol = 1.0e-12
         for k in 1:4
             Hk = ForwardDiff.hessian(v -> Fsub(v)[k], x0)
             @test cover_ratio(Hk, d.S[k, :]) <= GATE
@@ -51,7 +51,7 @@
         # A scalar-valued sub-map is declared as one output.
         ds = declare_submap(v -> v[1] * exp(v[2]), x0[1:2])
         @test size(ds.J) == (1, 2) && size(ds.S) == (1, 2)
-        @test vec(ds.J) ≈ ForwardDiff.gradient(v -> v[1] * exp(v[2]), x0[1:2]) rtol = 1e-12
+        @test vec(ds.J) ≈ ForwardDiff.gradient(v -> v[1] * exp(v[2]), x0[1:2]) rtol = 1.0e-12
     end
 
     @testset "compose_hessian_cover vs ForwardDiff" begin
@@ -85,21 +85,25 @@
     end
 
     @testset "declared call on the tape — $name" for (name, fdecl, ftraced) in [
-        ("inputs as arguments",
-         xs -> gout(submap(Fsub, xs)),
-         x -> gout(Fsub(x))),
-        ("intermediates as arguments",
-         xs -> gout(submap(Fsub, [xs[1] * xs[2], xs[3] + xs[1], xs[2]])),
-         x -> gout(Fsub([x[1] * x[2], x[3] + x[1], x[2]]))),
-    ]
+            (
+                "inputs as arguments",
+                xs -> gout(submap(Fsub, xs)),
+                x -> gout(Fsub(x)),
+            ),
+            (
+                "intermediates as arguments",
+                xs -> gout(submap(Fsub, [xs[1] * xs[2], xs[3] + xs[1], xs[2]])),
+                x -> gout(Fsub([x[1] * x[2], x[3] + x[1], x[2]])),
+            ),
+        ]
         t, o = tape_function(fdecl, x0)
         res = cover_hessian(WithDiagnostics(), t, o)
         ttr, otr = tape_function(ftraced, x0)
         rtr = cover_hessian(WithDiagnostics(), ttr, otr)
         H = ForwardDiff.hessian(ftraced, x0)
 
-        @test res.grad ≈ ForwardDiff.gradient(ftraced, x0) rtol = 1e-12
-        @test res.grad ≈ rtr.grad rtol = 1e-12
+        @test res.grad ≈ ForwardDiff.gradient(ftraced, x0) rtol = 1.0e-12
+        @test res.grad ≈ rtr.grad rtol = 1.0e-12
         @test cover_ratio(H, res.h_sum) <= GATE
         @test cover_ratio(H, res.h_quad) <= GATE
         @test all(abs.(H) .<= res.B .* GATE .+ eps())
@@ -107,8 +111,8 @@
 
         # The variance channel runs through the declared node and shares the hard channel.
         vres = cover_variance(t, o)
-        @test vres.h_sum ≈ res.h_sum rtol = 1e-12
-        @test all(vres.severity .>= 1 - 1e-12)
+        @test vres.h_sum ≈ res.h_sum rtol = 1.0e-12
+        @test all(vres.severity .>= 1 - 1.0e-12)
 
         # Exact Hessian-vector products are impossible through a declared call.
         @test_throws "declared sub-map output" hvp(t, o, ones(length(x0)))
@@ -125,7 +129,7 @@
         end
         J = ForwardDiff.jacobian(progt, x0)
         t, outidxs = tape_function(progd, x0)
-        @test adjoints(t, outidxs)[:, 1:t.ninputs] ≈ J rtol = 1e-12
+        @test adjoints(t, outidxs)[:, 1:t.ninputs] ≈ J rtol = 1.0e-12
         jc = cover_jacobian(t, outidxs)
         @test jacobian_ratio(J, jc.a, jc.b_max) <= GATE
         bal = balance_cover(t, outidxs)
@@ -144,7 +148,7 @@
             [y[1] + y[2]^2, y[3] * y[4]]
         end
         d = declare_submap(G, x0)
-        @test d.J ≈ ForwardDiff.jacobian(Gtwin, x0) rtol = 1e-12
+        @test d.J ≈ ForwardDiff.jacobian(Gtwin, x0) rtol = 1.0e-12
         for k in 1:2
             Hk = ForwardDiff.hessian(x -> Gtwin(x)[k], x0)
             @test cover_ratio(Hk, d.S[k, :]) <= GATE
@@ -176,9 +180,9 @@
         c = 4.0
         tc, oc = tape_function(xt -> c * base(xt ./ (1 ./ dvec)), x0 ./ dvec)
         rc = cover_hessian(WithDiagnostics(), tc, oc)
-        @test rc.grad ≈ c .* dvec .* re.grad rtol = 1e-12
-        @test rc.h_sum ≈ sqrt(c) .* dvec .* re.h_sum rtol = 1e-12
-        @test rc.h_quad ≈ sqrt(c) .* dvec .* re.h_quad rtol = 1e-12
+        @test rc.grad ≈ c .* dvec .* re.grad rtol = 1.0e-12
+        @test rc.h_sum ≈ sqrt(c) .* dvec .* re.h_sum rtol = 1.0e-12
+        @test rc.h_quad ≈ sqrt(c) .* dvec .* re.h_quad rtol = 1.0e-12
 
         # Declaration-gauge invariance: rescaling the declared outputs y → C*y (with J → C*J,
         # S → sqrt.(C)*S, and the consumer reading ys ./ C) leaves the covers unchanged — the

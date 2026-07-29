@@ -344,11 +344,15 @@ Cost: one extra `O(L)` forward sweep per cover.
 struct SensitivitySplit{W} <: SplitRule
     w::W
 
-    function SensitivitySplit{W}(w) where W
+    function SensitivitySplit{W}(w) where {W}
         w === nothing || all(wi -> isfinite(wi) && wi > 0, w) ||
-            throw(ArgumentError("SensitivitySplit weights must be strictly positive and finite: " *
-                                "a zero weight could zero a live slot's scale and falsely " *
-                                "certify it dead"))
+            throw(
+            ArgumentError(
+                "SensitivitySplit weights must be strictly positive and finite: " *
+                    "a zero weight could zero a live slot's scale and falsely " *
+                    "certify it dead"
+            )
+        )
         return new{W}(w)
     end
 end
@@ -427,8 +431,10 @@ against, so `check` cannot audit these nodes — validity is conditional on the 
 `rule` selects the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks.
 `check` verifies the covering invariant at every recorded node.
 """
-function local_covers(t::Tape, vbar::AbstractVector; check::Bool=true,
-                      rule::SplitRule=ValueSplit())
+function local_covers(
+        t::Tape, vbar::AbstractVector; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     N = nnodes(t)
     scales = split_scales(rule, t)
     rhos = [Float64[] for _ in 1:N]
@@ -468,7 +474,7 @@ multiplied by a total gradient that vanishes identically, so the bound
 A node whose covering entries are not finite is reported by
 [`check_finite_partials`](@ref) rather than by the invariant test.
 """
-local_cover_slots(t::Tape, k::Integer, av::Real; check::Bool=true) =
+local_cover_slots(t::Tape, k::Integer, av::Real; check::Bool = true) =
     local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
 
 """
@@ -487,13 +493,17 @@ partials the adjoint has already passed through.
 function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
     (isfinite(av) && all(isfinite, c)) && return nothing
     cause = isfinite(av) ? "node $k has non-finite second partials c=$c" :
-                           "the absolute adjoint reaching node $k is $av, from a node downstream"
-    error("$cause; the program is not twice-differentiable at this point (node value " *
-          "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))")
+        "the absolute adjoint reaching node $k is $av, from a node downstream"
+    error(
+        "$cause; the program is not twice-differentiable at this point (node value " *
+            "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))"
+    )
 end
 
-function local_cover_slots(rule::SplitRule, t::Tape, k::Integer, av::Real,
-                           scales::AbstractVector; check::Bool=true)
+function local_cover_slots(
+        rule::SplitRule, t::Tape, k::Integer, av::Real,
+        scales::AbstractVector; check::Bool = true
+    )
     ps, C = t.parents[k], t.Cs[k]
     if C isa PairedPartials
         c = av
@@ -548,8 +558,10 @@ function local_cover_slots(rule::SplitRule, t::Tape, k::Integer, av::Real,
         if check
             check_finite_partials(t, k, av, (c11, c12, c22))
             rtol = sqrt(eps(float(real(eltype(t.vals)))))
-            (rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-             rho1 * rho2 >= c12 * (1 - rtol)) ||
+            (
+                rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
+                    rho1 * rho2 >= c12 * (1 - rtol)
+            ) ||
                 error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
         end
         return [rho1, rho2]
@@ -609,7 +621,7 @@ recomputation of the sum merge that cross-checks it. Costs `O(n*L)` time and `O(
 """
 struct WithDiagnostics end
 
-const CoverMode = Union{CoverOnly,WithDiagnostics}
+const CoverMode = Union{CoverOnly, WithDiagnostics}
 
 """
     cover_hessian([mode], t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
@@ -685,8 +697,10 @@ julia> all(abs.(H) .<= c.h_sum * c.h_sum')
 true
 ```
 """
-function cover_hessian(::WithDiagnostics, t::Tape, outidx::Integer; check::Bool=true,
-                       rule::SplitRule=ValueSplit())
+function cover_hessian(
+        ::WithDiagnostics, t::Tape, outidx::Integer; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     n, N = t.ninputs, nnodes(t)
     vbar = adjoints(t, outidx)
     utilde = sensitivities(t)
@@ -721,14 +735,14 @@ function cover_hessian(::WithDiagnostics, t::Tape, outidx::Integer; check::Bool=
     if check
         # Two routes to the same quantity, so their errors are correlated and the gap they may
         # legitimately show is far below the accumulated roundoff of either route alone.
-        rtol = eps(float(real(eltype(t.vals))))^(3//4)
+        rtol = eps(float(real(eltype(t.vals))))^(3 // 4)
         for q in 1:n
             denom = max(abs(h_sum[q]), 1.0)
             abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
         # invariants already checked in local_covers
-        pr = cover_hessian(CoverOnly(), t, outidx; check=false, rule)
+        pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)
             abs(vbar[q] - pr.grad[q]) <= rtol * gdenom ||
@@ -742,8 +756,10 @@ function cover_hessian(::WithDiagnostics, t::Tape, outidx::Integer; check::Bool=
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
-function cover_hessian(::CoverOnly, t::Tape, outidx::Integer; check::Bool=true,
-                       rule::SplitRule=ValueSplit())
+function cover_hessian(
+        ::CoverOnly, t::Tape, outidx::Integer; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     n, N = t.ninputs, nnodes(t)
     scales = split_scales(rule, t)
     vbar = zeros(N)
@@ -768,13 +784,15 @@ function cover_hessian(::CoverOnly, t::Tape, outidx::Integer; check::Bool=true,
     return HessianCover(vbar[1:n], abar[1:n])
 end
 
-function cover_hessian(mode::CoverMode, f, x0::AbstractVector; check::Bool=true,
-                       rule::SplitRule=ValueSplit())
+function cover_hessian(
+        mode::CoverMode, f, x0::AbstractVector; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     t, outidx = tape_function(f, x0)
     return cover_hessian(mode, t, outidx; check, rule)
 end
 
-cover_hessian(t::Tape, outidx::Integer; check::Bool=true, rule::SplitRule=ValueSplit()) =
+cover_hessian(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit()) =
     cover_hessian(CoverOnly(), t, outidx; check, rule)
-cover_hessian(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit()) =
+cover_hessian(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit()) =
     cover_hessian(CoverOnly(), f, x0; check, rule)

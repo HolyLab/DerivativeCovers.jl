@@ -8,7 +8,7 @@ Base.show(io::IO, ::MIME"text/plain", t::Tape) =
     print(io, "Tape: ", nnodes(t), " nodes, ", t.ninputs, " inputs")
 
 function Base.show(io::IO, x::TVar)
-    if isconstant(x)
+    return if isconstant(x)
         print(io, "TVar(", x.val, ")")
     else
         print(io, "TVar(node ", x.idx, ", ", x.val, ")")
@@ -16,7 +16,7 @@ function Base.show(io::IO, x::TVar)
 end
 
 function Base.show(io::IO, ::MIME"text/plain", x::TVar)
-    if isconstant(x)
+    return if isconstant(x)
         print(io, "TVar: ", x.val, " (constant)")
     else
         print(io, "TVar: ", x.val, " (node ", x.idx, " of ", nnodes(x.tape), ")")
@@ -32,8 +32,10 @@ Base.show(io::IO, c::HessianDiagnostics) =
     print(io, "HessianDiagnostics(", length(c.grad), " inputs)")
 
 Base.show(io::IO, ::MIME"text/plain", c::HessianDiagnostics) =
-    print(io, "HessianDiagnostics: ", length(c.grad),
-          " inputs; grad, B, h_sum, h_quad, h_sum_rev")
+    print(
+    io, "HessianDiagnostics: ", length(c.grad),
+    " inputs; grad, B, h_sum, h_quad, h_sum_rev"
+)
 
 Base.show(io::IO, c::JacobianCover) = print(io, "JacobianCover(", c.m, "x", c.n, ")")
 

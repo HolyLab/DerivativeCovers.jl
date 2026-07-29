@@ -52,7 +52,7 @@ A scalar program together with the references needed to judge a cover of its Hes
 - `hessian`: `x -> H`, the analytic Hessian, or `nothing` when no closed form is available. Use
   [`exact_hessian`](@ref) rather than the field.
 """
-struct CoverProblem{F,G,H}
+struct CoverProblem{F, G, H}
     name::String
     f::F
     x0::Vector{Float64}
@@ -60,7 +60,7 @@ struct CoverProblem{F,G,H}
     hessian::H
 end
 
-CoverProblem(name::AbstractString, f, x0::AbstractVector; twin=nothing, hessian=nothing) =
+CoverProblem(name::AbstractString, f, x0::AbstractVector; twin = nothing, hessian = nothing) =
     CoverProblem(String(name), f, Vector{Float64}(x0), twin, hessian)
 
 """
@@ -91,7 +91,7 @@ has_twin(p::CoverProblem) = p.twin !== nothing
 The analytic Hessian of `p` at `x`. Errors when `p` has none; test with
 [`has_exact_hessian`](@ref) first.
 """
-function exact_hessian(p::CoverProblem, x::AbstractVector=p.x0)
+function exact_hessian(p::CoverProblem, x::AbstractVector = p.x0)
     has_exact_hessian(p) ||
         throw(ArgumentError("problem \"$(p.name)\" has no analytic Hessian; differentiate `p.f` instead"))
     return p.hessian(x)
@@ -167,8 +167,10 @@ For `rank = 1` the factored form's minimal cover is known exactly: `H = w*w'` fo
 Two calls that agree in `n`, `rank`, `sigma`, and `rng` state produce the same `A` and the same
 `x0` in every form, so a comparison across forms isolates the effect of program structure.
 """
-function quadratic(n::Integer; rank::Integer=n, form::Symbol=:entrywise, sigma::Real=0.0,
-                   rng::AbstractRNG=MersenneTwister(1))
+function quadratic(
+        n::Integer; rank::Integer = n, form::Symbol = :entrywise, sigma::Real = 0.0,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
     n >= 1 || throw(ArgumentError("n must be positive, got $n"))
     1 <= rank <= n || throw(ArgumentError("rank must lie in 1:$n, got $rank"))
     form in (:entrywise, :matvec, :factored) ||
@@ -192,7 +194,7 @@ function quadratic(n::Integer; rank::Integer=n, form::Symbol=:entrywise, sigma::
     end
 
     name = "quad $form n=$n r=$rank"
-    return CoverProblem(name, f, x0; twin=x -> dot(x, A * x) / 2, hessian=_ -> A)
+    return CoverProblem(name, f, x0; twin = x -> dot(x, A * x) / 2, hessian = _ -> A)
 end
 
 # ---- deep compositions -----------------------------------------------------------------------
@@ -220,15 +222,17 @@ where `sigma` puts them.
 
 No closed-form Hessian; differentiate `p.f`.
 """
-function deep_composition(n::Integer; depth::Integer=4, width::Integer=4, sigma::Real=0.0,
-                          rng::AbstractRNG=MersenneTwister(1))
+function deep_composition(
+        n::Integer; depth::Integer = 4, width::Integer = 4, sigma::Real = 0.0,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
     n >= 1 || throw(ArgumentError("n must be positive, got $n"))
     depth >= 1 || throw(ArgumentError("depth must be positive, got $depth"))
     width >= 1 || throw(ArgumentError("width must be positive, got $width"))
     W = _coeffs(rng, width, n; sigma) ./ sqrt(n)
     b = _coeffs(rng, width; sigma)
-    a = _coeffs(rng, depth, width; sigma=0) ./ sqrt(width)
-    c = _coeffs(rng, depth, width; sigma=0)
+    a = _coeffs(rng, depth, width; sigma = 0) ./ sqrt(width)
+    c = _coeffs(rng, depth, width; sigma = 0)
     x0 = randn(rng, n)
 
     function f(x)
@@ -265,7 +269,7 @@ const _DAG_PUNARY = 0.4
 # — collapse to an exactly zero derivative from below, since squaring a sub-unit value a dozen
 # times underflows and leaves a program that is constant to second order. Normalizing is linear,
 # so unlike a `tanh` squash it leaves the second-order structure of the program intact.
-const _DAG_BAND = 1e3
+const _DAG_BAND = 1.0e3
 
 # tanh must see a tame input: `1 - tanh(v)^2` evaluates to exactly zero in Float64 for
 # |v| ≳ 19, and a derivative-dead node erases its whole subtree from the gradient and the
@@ -283,18 +287,18 @@ derivatives, and the plain evaluation.
 """
 struct DagRecipe
     ninputs::Int
-    ops::Vector{Tuple{Symbol,Vector{Int},Vector{Float64}}}
+    ops::Vector{Tuple{Symbol, Vector{Int}, Vector{Float64}}}
     outputs::Vector{Int}
 end
 
 _apply(op::Symbol, v, ps::Vector{Int}, cs::Vector{Float64}) =
-    op === :add   ? v[ps[1]] + v[ps[2]] :
-    op === :sub   ? v[ps[1]] - v[ps[2]] :
-    op === :mul   ? v[ps[1]] * v[ps[2]] :
+    op === :add ? v[ps[1]] + v[ps[2]] :
+    op === :sub ? v[ps[1]] - v[ps[2]] :
+    op === :mul ? v[ps[1]] * v[ps[2]] :
     op === :scale ? cs[1] * v[ps[1]] :
-    op === :tanh  ? tanh(v[ps[1]]) :
-    op === :sqr   ? v[ps[1]]^2 :
-    op === :sin   ? sin(v[ps[1]]) :
+    op === :tanh ? tanh(v[ps[1]]) :
+    op === :sqr ? v[ps[1]]^2 :
+    op === :sin ? sin(v[ps[1]]) :
     throw(ArgumentError("unknown DAG op :$op"))
 
 function (r::DagRecipe)(x::AbstractVector)
@@ -354,15 +358,17 @@ what make the recipe safe to replay at points other than `x0`.
 
 No closed-form Hessian; differentiate `p.f`.
 """
-function random_dag(n::Integer; nops::Integer=4n, sharing::Real=0.5, sigma::Real=0.0,
-                    rng::AbstractRNG=MersenneTwister(1))
+function random_dag(
+        n::Integer; nops::Integer = 4n, sharing::Real = 0.5, sigma::Real = 0.0,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
     n >= 1 || throw(ArgumentError("n must be positive, got $n"))
     nops >= 1 || throw(ArgumentError("nops must be positive, got $nops"))
     0 <= sharing <= 1 || throw(ArgumentError("sharing must lie in 0..1, got $sharing"))
     x0 = randn(rng, n)
 
     vals = copy(x0)                             # values at x0, used only to keep magnitudes tame
-    ops = Tuple{Symbol,Vector{Int},Vector{Float64}}[]
+    ops = Tuple{Symbol, Vector{Int}, Vector{Float64}}[]
     frontier = collect(1:n)
 
     function emit!(op, ps, cs, v)
@@ -418,7 +424,7 @@ function random_dag(n::Integer; nops::Integer=4n, sharing::Real=0.5, sigma::Real
     end
 
     recipe = DagRecipe(n, ops, sort!(frontier))
-    name = "dag n=$n share=$(round(sharing; digits=2))"
+    name = "dag n=$n share=$(round(sharing; digits = 2))"
     return CoverProblem(name, recipe, x0)
 end
 
@@ -460,8 +466,10 @@ so a wider input layer does not by itself inflate the initial activations.
 
 No closed-form Hessian; differentiate `p.f`.
 """
-function mlp(sizes; batch::Integer=4, sigma::Real=0.0, activation=tanh,
-             rng::AbstractRNG=MersenneTwister(1))
+function mlp(
+        sizes; batch::Integer = 4, sigma::Real = 0.0, activation = tanh,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
     ns = collect(Int, sizes)
     length(ns) >= 2 ||
         throw(ArgumentError("sizes must have at least 2 entries (n0 and n1), got $(length(ns))"))
@@ -579,8 +587,10 @@ state draw the same `x0`, `q`, and quartets regardless of `aligned`, so a cancel
 from fresh, identically seeded rngs shares every random draw and differs only in the program's
 two constants.
 """
-function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=false,
-                      support=1:n, sigma::Real=0.0, rng::AbstractRNG=MersenneTwister(1))
+function cancellation(
+        n::Integer; m::Integer = n, delta::Real = 1.0e-3, aligned::Bool = false,
+        support = 1:n, sigma::Real = 0.0, rng::AbstractRNG = MersenneTwister(1)
+    )
     n >= 2 || throw(ArgumentError("n must be at least 2, got $n"))
     m >= 1 || throw(ArgumentError("m must be positive, got $m"))
     delta > 0 || throw(ArgumentError("delta must be positive, got $delta"))
@@ -602,7 +612,7 @@ function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=
             v = _coeffs(rng, length(supp); sigma)
             nv = norm(v)
             vperp = v .- (dot(v, x0S) / nx2) .* x0S
-            norm(vperp) >= 1e-8 * nv && return vperp
+            norm(vperp) >= 1.0e-8 * nv && return vperp
         end
         error("failed to draw a quartet vector orthogonal to x0[support] after 100 attempts")
     end
@@ -624,7 +634,7 @@ function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=
         acc = (delta / 2) * _lincomb(q, x)^2
         for j in 1:m
             acc = acc + 0.5 * _lincomb(as_[j], xS)^2 + 0.5 * _lincomb(bs_[j], xS)^2 +
-                  s * _lincomb(cs_[j], xS)^2 + s * _lincomb(ds_[j], xS)^2
+                s * _lincomb(cs_[j], xS)^2 + s * _lincomb(ds_[j], xS)^2
         end
         return acc
     end
@@ -649,7 +659,7 @@ function cancellation(n::Integer; m::Integer=n, delta::Real=1e-3, aligned::Bool=
 
     name = (aligned ? "aligned" : "cancel") * " n=$n m=$m delta=$delta"
     length(supp) < n && (name *= " S=$(length(supp))")
-    return CoverProblem(name, f, x0; twin, hessian=_ -> H)
+    return CoverProblem(name, f, x0; twin, hessian = _ -> H)
 end
 
 # ---- vector-output cancellation pairs --------------------------------------------------------
@@ -670,7 +680,7 @@ Jacobian — the vector-output counterpart of [`CoverProblem`](@ref).
 - `jacobian`: `x -> J`, the analytic `nout × n` Jacobian, or `nothing` when no closed form is
   available. Use [`exact_jacobian`](@ref) rather than the field.
 """
-struct JacobianProblem{F,G,J}
+struct JacobianProblem{F, G, J}
     name::String
     r::F
     x0::Vector{Float64}
@@ -679,8 +689,10 @@ struct JacobianProblem{F,G,J}
     jacobian::J
 end
 
-JacobianProblem(name::AbstractString, r, x0::AbstractVector, nout::Integer;
-                twin=nothing, jacobian=nothing) =
+JacobianProblem(
+    name::AbstractString, r, x0::AbstractVector, nout::Integer;
+    twin = nothing, jacobian = nothing
+) =
     JacobianProblem(String(name), r, Vector{Float64}(x0), Int(nout), twin, jacobian)
 
 nvars(p::JacobianProblem) = length(p.x0)
@@ -707,7 +719,7 @@ has_exact_jacobian(p::JacobianProblem) = p.jacobian !== nothing
 The analytic Jacobian of `p` at `x`. Errors when `p` has none; test with
 [`has_exact_jacobian`](@ref) first.
 """
-function exact_jacobian(p::JacobianProblem, x::AbstractVector=p.x0)
+function exact_jacobian(p::JacobianProblem, x::AbstractVector = p.x0)
     has_exact_jacobian(p) ||
         throw(ArgumentError("problem \"$(p.name)\" has no analytic Jacobian; differentiate `p.r` instead"))
     return p.jacobian(x)
@@ -753,9 +765,11 @@ output multiplicity, `nout` at `sigma = 0` and approaching 1 as one output domin
 that agree in everything but `aligned` share every random draw and differ only in the program's
 one constant.
 """
-function jacobian_cancellation(n::Integer; nout::Integer=4, m::Integer=n, delta::Real=1e-3,
-                               aligned::Bool=false, support=1:n, sigma::Real=0.0,
-                               rng::AbstractRNG=MersenneTwister(1))
+function jacobian_cancellation(
+        n::Integer; nout::Integer = 4, m::Integer = n, delta::Real = 1.0e-3,
+        aligned::Bool = false, support = 1:n, sigma::Real = 0.0,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
     n >= 2 || throw(ArgumentError("n must be at least 2, got $n"))
     nout >= 1 || throw(ArgumentError("nout must be positive, got $nout"))
     m >= 1 || throw(ArgumentError("m must be positive, got $m"))
@@ -849,7 +863,7 @@ function jacobian_cancellation(n::Integer; nout::Integer=4, m::Integer=n, delta:
 
     name = (aligned ? "aligned" : "cancel") * " jac n=$n nout=$nout m=$m delta=$delta"
     length(supp) < n && (name *= " S=$(length(supp))")
-    return JacobianProblem(name, r, x0, nout; twin, jacobian=_ -> J)
+    return JacobianProblem(name, r, x0, nout; twin, jacobian = _ -> J)
 end
 
 # ---- transformations and sweeps --------------------------------------------------------------
@@ -871,11 +885,13 @@ function rescale(p::CoverProblem, d::AbstractVector)
     dv = Vector{Float64}(d)
     f, tw, hs = p.f, p.twin, p.hessian
     D = Diagonal(inv.(dv))
-    return CoverProblem(p.name * " rescaled",
-                        y -> f(y ./ dv),
-                        dv .* p.x0,
-                        tw === nothing ? nothing : y -> tw(y ./ dv),
-                        hs === nothing ? nothing : y -> D * hs(y ./ dv) * D)
+    return CoverProblem(
+        p.name * " rescaled",
+        y -> f(y ./ dv),
+        dv .* p.x0,
+        tw === nothing ? nothing : y -> tw(y ./ dv),
+        hs === nothing ? nothing : y -> D * hs(y ./ dv) * D
+    )
 end
 
 """
@@ -888,14 +904,14 @@ at fixed problem size, or sweep `n` within one to measure how a cover's loosenes
 The three quadratic forms are seeded alike, so at a given `n` they carry the *same* Hessian and
 differ only as programs.
 """
-function families(; sigma::Real=0.0, seed::Integer=1)
+function families(; sigma::Real = 0.0, seed::Integer = 1)
     return [
-        "quad entrywise" => n -> quadratic(n; form=:entrywise, sigma, rng=MersenneTwister(seed)),
-        "quad matvec" => n -> quadratic(n; form=:matvec, sigma, rng=MersenneTwister(seed)),
-        "quad factored" => n -> quadratic(n; form=:factored, sigma, rng=MersenneTwister(seed)),
-        "deep w=4" => n -> deep_composition(n; depth=4, width=4, sigma, rng=MersenneTwister(seed)),
-        "dag tree" => n -> random_dag(n; sharing=0.0, sigma, rng=MersenneTwister(seed)),
-        "dag shared" => n -> random_dag(n; sharing=0.6, sigma, rng=MersenneTwister(seed)),
+        "quad entrywise" => n -> quadratic(n; form = :entrywise, sigma, rng = MersenneTwister(seed)),
+        "quad matvec" => n -> quadratic(n; form = :matvec, sigma, rng = MersenneTwister(seed)),
+        "quad factored" => n -> quadratic(n; form = :factored, sigma, rng = MersenneTwister(seed)),
+        "deep w=4" => n -> deep_composition(n; depth = 4, width = 4, sigma, rng = MersenneTwister(seed)),
+        "dag tree" => n -> random_dag(n; sharing = 0.0, sigma, rng = MersenneTwister(seed)),
+        "dag shared" => n -> random_dag(n; sharing = 0.6, sigma, rng = MersenneTwister(seed)),
     ]
 end
 

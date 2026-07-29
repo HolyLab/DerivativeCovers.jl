@@ -5,26 +5,30 @@ using DerivativeCovers.Diagnostics
 # from source rather than declared a dependency: it is unregistered, and a path dependency of a
 # test target cannot be expressed in `Project.toml`. `Problems` is the qualifier the tests use
 # where a generator's name collides with a fixture in `programs.jl`.
-include(joinpath(@__DIR__, "..", "..", "DerivativeCoverProblems", "src",
-                 "DerivativeCoverProblems.jl"))
+include(
+    joinpath(
+        @__DIR__, "..", "..", "DerivativeCoverProblems", "src",
+        "DerivativeCoverProblems.jl"
+    )
+)
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # The tests exercise the sweeps and their intermediates, most of which are deliberately not in the
 # top namespace. Naming them here keeps the call sites readable while leaving the export list —
 # pinned in the "public API boundary" testset — as the only thing `using DerivativeCovers` grants.
 using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, bound_ratio,
-                        rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
-                        jacobian_minimax, dependency_severity, scaled_spectral_radius,
-                        scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
-                        compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
-                        declare_submap, submap, cyclic_partition, level_partition, node_levels,
-                        nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
-                        local_covers, balanced_split, variance_seeds, dependency_sweep,
-                        jacobian_surrogate, marginal_weights, balance_cover,
-                        MergeRule, SumMerge, QuadMerge, MaxMerge
+    rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
+    jacobian_minimax, dependency_severity, scaled_spectral_radius,
+    scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
+    compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
+    declare_submap, submap, cyclic_partition, level_partition, node_levels,
+    nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
+    local_covers, balanced_split, variance_seeds, dependency_sweep,
+    jacobian_surrogate, marginal_weights, balance_cover,
+    MergeRule, SumMerge, QuadMerge, MaxMerge
 # This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
 using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
-                    rowcomponent, colcomponent
+    rowcomponent, colcomponent
 using Aqua
 using ExplicitImports
 using ForwardDiff
@@ -37,7 +41,7 @@ include("programs.jl")
 
 # The covering chain abs.(H) <= B <= sum_k s_k s_k' <= h*h' is exact in exact arithmetic;
 # roundoff can push a measured ratio a hair above 1.
-const GATE = 1 + 1e-10
+const GATE = 1 + 1.0e-10
 
 include("constants.jl")
 include("primitives.jl")
@@ -68,10 +72,12 @@ include("genericaxes.jl")
         # Julia 1.11; before that they fall back to `isexported` and flag public-but-unexported
         # names, so they run only where they are accurate.
         public_ok = VERSION >= v"1.11"
-        test_explicit_imports(DerivativeCovers;
-                              all_explicit_imports_are_public=public_ok,
-                              all_qualified_accesses_are_public=public_ok ?
-                                  (; ignore=(:broadcastable,)) : false)
+        test_explicit_imports(
+            DerivativeCovers;
+            all_explicit_imports_are_public = public_ok,
+            all_qualified_accesses_are_public = public_ok ?
+                (; ignore = (:broadcastable,)) : false
+        )
     end
 
     @testset "public API boundary" begin
@@ -86,28 +92,32 @@ include("genericaxes.jl")
         # `names` reports `public` declarations alongside exports from 1.11 on, and includes the
         # module's own name, so neither can be read off it directly.
         exported = filter(s -> Base.isexported(DerivativeCovers, s), names(DerivativeCovers))
-        @test Set(setdiff(exported, [:DerivativeCovers])) == Set([
-            :Tape, :TVar, :tape_function,
-            :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
-            :cover_hybrid, :cover_jacobian_hybrid,
-            :CoverOnly, :WithDiagnostics,
-            :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
-            :SplitRule, :ValueSplit, :SensitivitySplit,
-            :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
-        ])
+        @test Set(setdiff(exported, [:DerivativeCovers])) == Set(
+            [
+                :Tape, :TVar, :tape_function,
+                :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
+                :cover_hybrid, :cover_jacobian_hybrid,
+                :CoverOnly, :WithDiagnostics,
+                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
+                :SplitRule, :ValueSplit, :SensitivitySplit,
+                :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
+            ]
+        )
 
         # Addressable by qualification and covered by the compatibility promise, but unexported:
         # the contracts a new elemental implements, the quantities defined on a cover from any
         # source, and the adapters between the result types and the bare-vector functions.
-        internals = (:pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-                     :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
-                     :submapnode, :split_scales, :value, :isconstant, :nnodes,
-                     :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
-                     :jacobian_representability, :jacobian_minimax, :dependency_severity,
-                     :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
-                     :jacobian_shrink, :equilibrate,
-                     :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
-                     :declare_submap, :submap)
+        internals = (
+            :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
+            :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
+            :submapnode, :split_scales, :value, :isconstant, :nnodes,
+            :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
+            :jacobian_representability, :jacobian_minimax, :dependency_severity,
+            :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
+            :jacobian_shrink, :equilibrate,
+            :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
+            :declare_submap, :submap,
+        )
         for sym in internals
             @test isdefined(DerivativeCovers, sym)
             @test !Base.isexported(DerivativeCovers, sym)
@@ -116,11 +126,13 @@ include("genericaxes.jl")
 
         # The sweep machinery and the partition policies behind `cover_hybrid`'s integer argument
         # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
-        private = (:cyclic_partition, :level_partition, :node_levels, :nls_partition,
-                   :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
-                   :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
-                   :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-                   :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge)
+        private = (
+            :cyclic_partition, :level_partition, :node_levels, :nls_partition,
+            :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
+            :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+            :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
+            :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
+        )
         for sym in private
             @test isdefined(DerivativeCovers, sym)
             VERSION >= v"1.11" && @test !Base.ispublic(DerivativeCovers, sym)
@@ -128,18 +140,22 @@ include("genericaxes.jl")
 
         # MatrixCovers' functions, which this package extends with `Tape` methods rather than
         # owning. Reaching them takes `using MatrixCovers`.
-        for sym in (:support_components, :gramcover, :gramcover!, :SupportComponents,
-                    :ncomponents, :rowcomponent, :colcomponent)
+        for sym in (
+                :support_components, :gramcover, :gramcover!, :SupportComponents,
+                :ncomponents, :rowcomponent, :colcomponent,
+            )
             @test !Base.isexported(DerivativeCovers, sym)
         end
 
         # The study instruments live in their own namespace, reached by
         # `using DerivativeCovers.Diagnostics`, and are not re-exported by the parent.
-        diagnostics = (:InflationPattern, :UniformInflation, :LognormalInflation,
-                       :SpikeInflation, :RampInflation, :inflation_shape, :inflation_factors,
-                       :inflate, :anisotropy, :cover_norm, :stopping_index, :stopping_shift,
-                       :regularized_step, :regularization_bias, :psd_shift, :psd_excess,
-                       :cover_cg, :step_degradation)
+        diagnostics = (
+            :InflationPattern, :UniformInflation, :LognormalInflation,
+            :SpikeInflation, :RampInflation, :inflation_shape, :inflation_factors,
+            :inflate, :anisotropy, :cover_norm, :stopping_index, :stopping_shift,
+            :regularized_step, :regularization_bias, :psd_shift, :psd_excess,
+            :cover_cg, :step_degradation,
+        )
         for sym in diagnostics
             @test Base.isexported(DerivativeCovers.Diagnostics, sym)
             @test !isdefined(DerivativeCovers, sym)
@@ -167,11 +183,13 @@ include("genericaxes.jl")
         end
 
         x0 = [0.6, -0.4, 0.9]
-        results = (cover_hessian(f, x0),
-                   cover_hessian(WithDiagnostics(), f, x0),
-                   cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
-                   cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
-                   cover_variance(f, x0))
+        results = (
+            cover_hessian(f, x0),
+            cover_hessian(WithDiagnostics(), f, x0),
+            cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
+            cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
+            cover_variance(f, x0),
+        )
         for c in results
             # Each names its own type and its dimensions, and holds vectors it must not print.
             for s in (sprint(show, c), sprint(show, MIME"text/plain"(), c))
@@ -217,36 +235,36 @@ include("genericaxes.jl")
         @test cover_hybrid(t, oi, 2) == cover_hybrid(t, outidx, 2)
         @test hvp(t, oi, [1.0, 0.0, 0.0]) == hvp(t, outidx, [1.0, 0.0, 0.0])
         h = cover_hessian(t, outidx).h_sum
-        @test scaled_spectral_radius(t, oi, h; maxiter=Int32(50)) ≈
-              scaled_spectral_radius(t, outidx, h; maxiter=50)
+        @test scaled_spectral_radius(t, oi, h; maxiter = Int32(50)) ≈
+            scaled_spectral_radius(t, outidx, h; maxiter = 50)
         # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
         k = something(findfirst(C -> !isempty(C), t.Cs))
         @test DerivativeCovers.local_cover_slots(t, Int32(k), 1) ==
-              DerivativeCovers.local_cover_slots(t, k, 1.0)
+            DerivativeCovers.local_cover_slots(t, k, 1.0)
     end
 
     # A program that is one elemental applied straight to the inputs has unit absolute
     # sensitivities, so its elementwise bound `B` is exactly `abs.(H)`. Both partials of each
     # elemental are therefore pinned against ForwardDiff: the first by `grad`, the second by `B`.
     @testset "elemental partials — $name" for (name, f, x0) in [
-        ("exp", x -> exp(x[1]), [0.7]),
-        ("log", x -> log(x[1]), [1.7]),
-        ("sin", x -> sin(x[1]), [0.6]),
-        ("cos", x -> cos(x[1]), [0.6]),
-        ("tan", x -> tan(x[1]), [0.6]),
-        ("atan", x -> atan(x[1]), [0.7]),
-        ("tanh", x -> tanh(x[1]), [0.4]),
-        ("sqrt", x -> sqrt(x[1]), [2.3]),
-        ("inv", x -> inv(x[1]), [2.0]),
-        ("abs2", x -> abs2(x[1]), [-1.3]),
-        ("reciprocal", x -> 3.0 / x[1], [2.0]),
-        ("constant power", x -> x[1]^2.5, [1.4]),
-        ("variable base", x -> x[1]^x[2], [1.7, 2.3]),
-        ("variable exponent", x -> 2.0^x[1], [1.3]),
-        ("rational base", x -> (3 // 2)^x[1], [1.3]),
-        ("product", x -> x[1] * x[2], [2.0, -3.0]),
-        ("quotient", x -> x[1] / x[2], [2.0, -3.0]),
-    ]
+            ("exp", x -> exp(x[1]), [0.7]),
+            ("log", x -> log(x[1]), [1.7]),
+            ("sin", x -> sin(x[1]), [0.6]),
+            ("cos", x -> cos(x[1]), [0.6]),
+            ("tan", x -> tan(x[1]), [0.6]),
+            ("atan", x -> atan(x[1]), [0.7]),
+            ("tanh", x -> tanh(x[1]), [0.4]),
+            ("sqrt", x -> sqrt(x[1]), [2.3]),
+            ("inv", x -> inv(x[1]), [2.0]),
+            ("abs2", x -> abs2(x[1]), [-1.3]),
+            ("reciprocal", x -> 3.0 / x[1], [2.0]),
+            ("constant power", x -> x[1]^2.5, [1.4]),
+            ("variable base", x -> x[1]^x[2], [1.7, 2.3]),
+            ("variable exponent", x -> 2.0^x[1], [1.3]),
+            ("rational base", x -> (3 // 2)^x[1], [1.3]),
+            ("product", x -> x[1] * x[2], [2.0, -3.0]),
+            ("quotient", x -> x[1] / x[2], [2.0, -3.0]),
+        ]
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
         @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
@@ -304,9 +322,13 @@ include("genericaxes.jl")
             @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
         end
         # A nonzero factor leaves a genuine singularity singular.
-        @test !all(isfinite,
-                   cover_hessian(WithDiagnostics(), x -> x[1]^0.5 + x[1] * x[2], x0;
-                                 check=false).h_sum)
+        @test !all(
+            isfinite,
+            cover_hessian(
+                WithDiagnostics(), x -> x[1]^0.5 + x[1] * x[2], x0;
+                check = false
+            ).h_sum
+        )
     end
 
     @testset "gradient matches ForwardDiff — $name" for (name, f, x0) in PROBLEMS
@@ -326,10 +348,10 @@ include("genericaxes.jl")
         # The quadrature merge is never looser than the sum merge, coordinatewise.
         @test all(res.h_quad .<= res.h_sum .* GATE)
         # The absolute-value reverse sweep reproduces the sum merge.
-        @test res.h_sum_rev ≈ res.h_sum rtol=1e-12
+        @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
         # For H ⪰ 0 the minimal cover is sqrt.(diag(H)); no valid cover can go below it.
         if isposdef(H)
-            @test all(res.h_quad .>= sqrt.(diag(H)) .* (1 - 1e-10))
+            @test all(res.h_quad .>= sqrt.(diag(H)) .* (1 - 1.0e-10))
         end
     end
 
@@ -364,37 +386,43 @@ include("genericaxes.jl")
     end
 
     @testset "covariance" begin
-        cases = [("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1e-6, 1e3]),
-                 ("quad matvec", quad_matvec(AQ), XQ, [1e-6, 1e3, 1.0, 1e-2, 1e4]),
-                 ("logsumexp n=8", logsumexp,
-                  [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
-                  [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3])]
+        cases = [
+            ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
+            ("quad matvec", quad_matvec(AQ), XQ, [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]),
+            (
+                "logsumexp n=8", logsumexp,
+                [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
+                [1.0e-3, 1.0e2, 1.0, 1.0e-1, 1.0e4, 1.0e-2, 1.0e1, 1.0e3],
+            ),
+        ]
         @testset "$name" for (name, f, x0, d) in cases
             res = cover_hessian(WithDiagnostics(), f, x0)
 
             # x -> D*x leaves every intermediate value and adjoint unchanged and puts a factor
             # 1/d[a] on each input edge, so h -> h ./ d exactly.
             resd = cover_hessian(WithDiagnostics(), xt -> f(xt ./ d), d .* x0)
-            @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-12
-            @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-12
+            @test resd.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
+            @test resd.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
 
             # f -> c*f scales every adjoint by c, hence every rho and every h by sqrt(c).
             c = 7.3
             resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
-            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
-            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
+            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol = 1.0e-12
+            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol = 1.0e-12
         end
     end
 
     @testset "balanced_split" begin
-        for (c11, c12, c22, z1, z2) in ((0.0, 1.0, 0.0, 2.0, 5.0),      # multiplication node
-                                        (1.0, 4.0, 2.0, 0.1, 10.0),
-                                        (0.0, 3.0, 0.0, 0.0, 1.0),      # zero-value fallback
-                                        (2.0, 5.0, 1.0, 1.0, 0.0))
+        for (c11, c12, c22, z1, z2) in (
+                (0.0, 1.0, 0.0, 2.0, 5.0),      # multiplication node
+                (1.0, 4.0, 2.0, 0.1, 10.0),
+                (0.0, 3.0, 0.0, 0.0, 1.0),      # zero-value fallback
+                (2.0, 5.0, 1.0, 1.0, 0.0),
+            )
             rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
-            @test rho1 >= sqrt(c11) * (1 - 1e-12)
-            @test rho2 >= sqrt(c22) * (1 - 1e-12)
-            @test rho1 * rho2 >= c12 * (1 - 1e-12)
+            @test rho1 >= sqrt(c11) * (1 - 1.0e-12)
+            @test rho2 >= sqrt(c22) * (1 - 1.0e-12)
+            @test rho1 * rho2 >= c12 * (1 - 1.0e-12)
         end
         # With both parent values positive the split is balanced against them: for a pure
         # multiplication node (c11 = c22 = 0), rho1/rho2 = z2/z1 and rho1*rho2 = c12.
@@ -414,35 +442,35 @@ include("genericaxes.jl")
             z2 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
             rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
             @test isfinite(rho1) && isfinite(rho2)
-            @test rho1 >= sqrt(c11) * (1 - 1e-12)
-            @test rho2 >= sqrt(c22) * (1 - 1e-12)
-            @test rho1 * rho2 ≈ c12 rtol=1e-12
+            @test rho1 >= sqrt(c11) * (1 - 1.0e-12)
+            @test rho2 >= sqrt(c22) * (1 - 1.0e-12)
+            @test rho1 * rho2 ≈ c12 rtol = 1.0e-12
         end
 
         # Continuity where the off-diagonal constraint takes over from the diagonal ones: at
         # c12^2 == c11*c22 the segment collapses to the diagonal cover (sqrt(c11), sqrt(c22)).
-        for eps in (1e-2, 1e-4, 1e-8)
+        for eps in (1.0e-2, 1.0e-4, 1.0e-8)
             rho1, rho2 = balanced_split(1.0, 10.0 * (1 + eps), 100.0, 1.0, 1.0)
-            @test rho1 ≈ 1.0 rtol=2eps
-            @test rho2 ≈ 10.0 rtol=2eps
+            @test rho1 ≈ 1.0 rtol = 2eps
+            @test rho2 ≈ 10.0 rtol = 2eps
         end
 
         # Continuity as a parent value vanishes: the equalizing target diverges, but the
         # segment endpoint it is clamped to does not.
-        for z1 in (1e-3, 1e-6, 1e-12, 0.0)
-            rho1, rho2 = balanced_split(1.0, 1.0, 1e-2, z1, 1.0)
+        for z1 in (1.0e-3, 1.0e-6, 1.0e-12, 0.0)
+            rho1, rho2 = balanced_split(1.0, 1.0, 1.0e-2, z1, 1.0)
             @test rho1 ≈ 10.0
             @test rho2 ≈ 0.1
         end
 
         # A value ratio extreme enough to overflow or underflow the equalizing target still
         # lands on the endpoint it was heading for, rather than reverting to the interior.
-        for (z1, z2) in ((1.0, 1e300), (1e-300, 1e300), (1e-300, 1.0), (1.0, Inf))
+        for (z1, z2) in ((1.0, 1.0e300), (1.0e-300, 1.0e300), (1.0e-300, 1.0), (1.0, Inf))
             rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
             @test rho1 ≈ 10.0
             @test rho2 ≈ 1.0
         end
-        for (z1, z2) in ((1e300, 1.0), (1e300, 1e-300), (1.0, 1e-300), (Inf, 1.0))
+        for (z1, z2) in ((1.0e300, 1.0), (1.0e300, 1.0e-300), (1.0, 1.0e-300), (Inf, 1.0))
             rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
             @test rho1 ≈ 1.0
             @test rho2 ≈ 10.0
@@ -474,10 +502,14 @@ include("genericaxes.jl")
 
         # `check=false` remains the way to get IEEE propagation instead: the cover comes back
         # non-finite for the caller to test, as `abs.(H) <= h*h'` cannot hold at such a point.
-        @test !all(isfinite, cover_hessian(WithDiagnostics(), divdiff, [0.5, 0.5]; check=false).h_sum)
-        @test !all(isfinite,
-                   cover_hessian(WithDiagnostics(), recipdot, [1.0, 2.0, 2.0, -1.0];
-                                 check=false).h_sum)
+        @test !all(isfinite, cover_hessian(WithDiagnostics(), divdiff, [0.5, 0.5]; check = false).h_sum)
+        @test !all(
+            isfinite,
+            cover_hessian(
+                WithDiagnostics(), recipdot, [1.0, 2.0, 2.0, -1.0];
+                check = false
+            ).h_sum
+        )
 
         # Away from the singularity both programs cover normally.
         @test all(isfinite, cover_hessian(WithDiagnostics(), divdiff, [0.5, 1.5]).h_sum)
@@ -488,7 +520,7 @@ include("genericaxes.jl")
         # Passing ValueSplit explicitly is the default, bitwise.
         @testset "ValueSplit is the default — $name" for (name, f, x0) in PROBLEMS
             res = cover_hessian(WithDiagnostics(), f, x0)
-            resv = cover_hessian(WithDiagnostics(), f, x0; rule=ValueSplit())
+            resv = cover_hessian(WithDiagnostics(), f, x0; rule = ValueSplit())
             @test resv.h_sum == res.h_sum
             @test resv.h_quad == res.h_quad
         end
@@ -496,15 +528,15 @@ include("genericaxes.jl")
         # SensitivitySplit satisfies the same covering chain on the whole battery.
         @testset "SensitivitySplit covering chain — $name" for (name, f, x0) in PROBLEMS
             H = ForwardDiff.hessian(f, x0)
-            res = cover_hessian(WithDiagnostics(), f, x0; rule=SensitivitySplit())
+            res = cover_hessian(WithDiagnostics(), f, x0; rule = SensitivitySplit())
             for h in (res.h_sum, res.h_quad)
                 @test all(>=(0), h)
                 @test rank1_ratio(res.B, h) <= GATE
                 @test cover_ratio(H, h) <= GATE
             end
-            @test res.h_sum_rev ≈ res.h_sum rtol=1e-12
+            @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
             # The one-group hybrid reproduces the sum merge under any rule.
-            @test cover_hybrid(f, x0, 1; rule=SensitivitySplit()) ≈ res.h_sum rtol=1e-12
+            @test cover_hybrid(f, x0, 1; rule = SensitivitySplit()) ≈ res.h_sum rtol = 1.0e-12
         end
 
         # A multiplication node with both operands exactly zero: the value channel is empty
@@ -515,10 +547,10 @@ include("genericaxes.jl")
         fmul = x -> (x[1] - 1) * (x[2] - 1)
         x0 = [1.0, 1.0]
         xp = [1.0 + 2.0^-40, 1.0 + 2.0^-38]
-        @test cover_hessian(WithDiagnostics(), fmul, x0; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, xp; rule=SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, x0; rule=ValueSplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, xp; rule=ValueSplit()).h_sum == [2.0, 0.5]
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = SensitivitySplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = ValueSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = ValueSplit()).h_sum == [2.0, 0.5]
 
         # Dead channel: sigma == 0 certifies that the slot's total gradient vanishes, so the
         # multiplication node deposits nothing there and its partner covers only its own
@@ -526,30 +558,32 @@ include("genericaxes.jl")
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
-        resd = cover_hessian(WithDiagnostics(), fdead, xd; rule=SensitivitySplit())
+        resd = cover_hessian(WithDiagnostics(), fdead, xd; rule = SensitivitySplit())
         @test resd.h_sum ≈ [sqrt(6), 0.0]
         @test cover_ratio(Hd, resd.h_sum) <= GATE
         # Approaching the dead point, the response of h is bounded by the sqrt(sigma1*sigma2)
         # envelope — a square-root cusp, not a jump.
-        rese = cover_hessian(WithDiagnostics(), fdead, [2.0^-20, 3.0]; rule=SensitivitySplit())
+        rese = cover_hessian(WithDiagnostics(), fdead, [2.0^-20, 3.0]; rule = SensitivitySplit())
         @test maximum(abs, rese.h_sum .- resd.h_sum) <= 2.0^-8
 
         # A dead inner-product pair: the (x[1]^2, x[3]) pair contributes nothing at x[1] == 0,
         # the (x[2], x[4]) pair splits 1:1, and the x[1]^2 node covers the (1,1) entry.
         fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
         xdot = [0.0, 1.0, 2.0, 3.0]
-        resdot = cover_hessian(WithDiagnostics(), fdot, xdot; rule=SensitivitySplit())
+        resdot = cover_hessian(WithDiagnostics(), fdot, xdot; rule = SensitivitySplit())
         @test resdot.h_sum ≈ [2.0, 1.0, 0.0, 1.0]
         @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
 
         # Input covariance holds when the weights are rescaled alongside the inputs.
         w = [0.5, 4.0, 1.0, 2.0, 0.25]
-        d = [1e-6, 1e3, 1.0, 1e-2, 1e4]
-        res = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule=SensitivitySplit(w))
-        resd2 = cover_hessian(WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
-                              rule=SensitivitySplit(d .* w))
-        @test resd2.h_sum ≈ res.h_sum ./ d rtol=1e-12
-        @test resd2.h_quad ≈ res.h_quad ./ d rtol=1e-12
+        d = [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]
+        res = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = SensitivitySplit(w))
+        resd2 = cover_hessian(
+            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+            rule = SensitivitySplit(d .* w)
+        )
+        @test resd2.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
+        @test resd2.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
 
         # Weights must be strictly positive and finite — a zero weight could zero a live slot's
         # scale and falsely certify it dead — and a malformed rule cannot be built at all.
@@ -557,7 +591,7 @@ include("genericaxes.jl")
         @test_throws "strictly positive" SensitivitySplit([1.0, Inf])
         @test_throws "strictly positive" SensitivitySplit([1.0, NaN])
         # Length is the one requirement that cannot be checked without a tape.
-        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule=SensitivitySplit([1.0]))
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = SensitivitySplit([1.0]))
 
         # Every reachable call form builds the same rule.
         @test SensitivitySplit() === SensitivitySplit(nothing) === SensitivitySplit{Nothing}()
@@ -567,22 +601,22 @@ include("genericaxes.jl")
 
         # Both channels of the variance pair are seeded from the same splits, so the rule
         # carries through: the hard channel reproduces the sum merge under the same rule.
-        vc = cover_variance(fmul, xp; rule=SensitivitySplit())
+        vc = cover_variance(fmul, xp; rule = SensitivitySplit())
         @test vc.h_sum == [1.0, 1.0]
-        @test all(>=(1 - 1e-12), vc.severity)
+        @test all(>=(1 - 1.0e-12), vc.severity)
         @test cover_variance(fmul, xp).h_sum == [2.0, 0.5]
 
         # A declaration's curvature covers follow the rule; its sensitivities are relative to
         # the sub-map's own arguments.
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
-        @test declare_submap(Fsub, xp; rule=SensitivitySplit()).S == [1.0 1.0]
+        @test declare_submap(Fsub, xp; rule = SensitivitySplit()).S == [1.0 1.0]
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
 
         # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
         # The Gauss-Newton pair is seeded at the residual nodes instead, and the gradient is an
         # ordinary adjoint sweep, so neither moves.
         nv = cover_nls(Fsub, xp)
-        ns = cover_nls(Fsub, xp; rule=SensitivitySplit())
+        ns = cover_nls(Fsub, xp; rule = SensitivitySplit())
         @test nv.h != ns.h
         @test nv.h_gn == ns.h_gn
         @test nv.grad == ns.grad
@@ -597,7 +631,7 @@ include("genericaxes.jl")
         t, outidx = tape_function(f, [1.0, 2.0])
         levels = node_levels(t)
         @test all(iszero, levels[1:t.ninputs])
-        @test all(k -> levels[k] > maximum(levels[t.parents[k]]; init=-1), (t.ninputs + 1):nnodes(t))
+        @test all(k -> levels[k] > maximum(levels[t.parents[k]]; init = -1), (t.ninputs + 1):nnodes(t))
 
         # A tape shallower than `ngroups` gives every depth its own group.
         lmax = maximum(levels)
@@ -611,7 +645,7 @@ include("genericaxes.jl")
         N = nnodes(t)
         @test cyclic_partition(t, 1) == ones(Int, N)
         @test cyclic_partition(t, N) == 1:N
-        @test sort(cyclic_partition(t, 3)) == sort(repeat(1:3, outer=N)[1:N])
+        @test sort(cyclic_partition(t, 3)) == sort(repeat(1:3, outer = N)[1:N])
         @test_throws ArgumentError cyclic_partition(t, 0)
     end
 
@@ -622,13 +656,15 @@ include("genericaxes.jl")
         res = cover_hessian(WithDiagnostics(), t, outidx)
 
         # One group sums every node: the sum merge. One node per group: the quadrature merge.
-        @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol=1e-12
-        @test cover_hybrid(t, outidx, N) ≈ res.h_quad rtol=1e-12
-        @test cover_hybrid(t, outidx, collect(1:N)) ≈ res.h_quad rtol=1e-12
+        @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol = 1.0e-12
+        @test cover_hybrid(t, outidx, N) ≈ res.h_quad rtol = 1.0e-12
+        @test cover_hybrid(t, outidx, collect(1:N)) ≈ res.h_quad rtol = 1.0e-12
 
         rng = MersenneTwister(hash(name))
-        for groups in (cyclic_partition(t, 4), level_partition(t, 4),
-                       rand(rng, 1:5, N), rand(rng, 1:2, N))
+        for groups in (
+                cyclic_partition(t, 4), level_partition(t, 4),
+                rand(rng, 1:5, N), rand(rng, 1:2, N),
+            )
             h = cover_hybrid(t, outidx, groups)
             @test all(>=(0), h)
             @test cover_ratio(H, h) <= GATE                  # valid for any partition
@@ -647,21 +683,25 @@ include("genericaxes.jl")
         # Rescaling is applied inside the program, so it adds nodes to the tape and shifts the
         # depth levels the default partition bins. Comparing two tapes of the *same* shape — the
         # unscaled one written with the same wrapper — isolates the covariance from that shift.
-        cases = [("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1e-6, 1e3]),
-                 ("logsumexp n=8", logsumexp,
-                  [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
-                  [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3])]
+        cases = [
+            ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
+            (
+                "logsumexp n=8", logsumexp,
+                [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
+                [1.0e-3, 1.0e2, 1.0, 1.0e-1, 1.0e4, 1.0e-2, 1.0e1, 1.0e3],
+            ),
+        ]
         @testset "$name" for (name, f, x0, d) in cases
             e = ones(length(x0))
             for G in (2, 4)
                 href = cover_hybrid(xt -> f(xt ./ e), x0, G)
                 hd = cover_hybrid(xt -> f(xt ./ d), d .* x0, G)
-                @test hd ≈ href ./ d rtol=1e-12
+                @test hd ≈ href ./ d rtol = 1.0e-12
 
                 c = 7.3
                 hc = cover_hybrid(x -> c * f(x), x0, G)
                 h1 = cover_hybrid(x -> 1.0 * f(x), x0, G)
-                @test hc ≈ sqrt(c) .* h1 rtol=1e-12
+                @test hc ≈ sqrt(c) .* h1 rtol = 1.0e-12
             end
         end
     end
@@ -687,7 +727,7 @@ include("genericaxes.jl")
         vc = cover_variance(t, outidx)
 
         @test vc.grad ≈ res.grad
-        @test vc.h_sum ≈ res.h_sum rtol=1e-12             # the hard channel is the sum merge
+        @test vc.h_sum ≈ res.h_sum rtol = 1.0e-12             # the hard channel is the sum merge
         @test all(>=(0), vc.h_var)
         # Quadrature over paths, then over nodes, then summation: h_var <= h_quad <= h_sum.
         @test all(vc.h_var .<= res.h_quad .* GATE)
@@ -701,7 +741,7 @@ include("genericaxes.jl")
         theta2 = variance_seeds(t, rhos)
         u2 = squared_sensitivities(t)
         ref = [sqrt(sum(theta2[j] * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
-        @test vc.h_var ≈ ref rtol=1e-12
+        @test vc.h_var ≈ ref rtol = 1.0e-12
     end
 
     @testset "variance channel is exact on tree-structured graphs" begin
@@ -709,7 +749,7 @@ include("genericaxes.jl")
         # input, so there is no covariance to drop: the estimate attains the quadrature merge.
         for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
             @test cover_variance(f, x0).h_var ≈
-                  cover_hessian(WithDiagnostics(), f, x0).h_quad rtol=1e-12
+                cover_hessian(WithDiagnostics(), f, x0).h_quad rtol = 1.0e-12
         end
         # One nonlinear node carries the whole Hessian of the factored quadratic, so the estimate
         # lands on the exact minimal cover.
@@ -738,25 +778,29 @@ include("genericaxes.jl")
     end
 
     @testset "variance channel covariance" begin
-        cases = [("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1e-6, 1e3]),
-                 ("quad matvec", quad_matvec(AQ), XQ, [1e-6, 1e3, 1.0, 1e-2, 1e4]),
-                 ("logsumexp n=8", logsumexp,
-                  [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
-                  [1e-3, 1e2, 1.0, 1e-1, 1e4, 1e-2, 1e1, 1e3])]
+        cases = [
+            ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
+            ("quad matvec", quad_matvec(AQ), XQ, [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]),
+            (
+                "logsumexp n=8", logsumexp,
+                [-3.0, -1.0, -2.0, 0.0, 1.0, 2.0, -0.5, 3.0],
+                [1.0e-3, 1.0e2, 1.0, 1.0e-1, 1.0e4, 1.0e-2, 1.0e1, 1.0e3],
+            ),
+        ]
         @testset "$name" for (name, f, x0, d) in cases
             vc = cover_variance(f, x0)
 
             # Rescaling the inputs puts a factor 1/d[a] on each input edge, whose square the
             # variance channel picks up; the severity, a ratio of the two channels, is invariant.
             vcd = cover_variance(xt -> f(xt ./ d), d .* x0)
-            @test vcd.h_var ≈ vc.h_var ./ d rtol=1e-12
-            @test vcd.severity ≈ vc.severity rtol=1e-12
+            @test vcd.h_var ≈ vc.h_var ./ d rtol = 1.0e-12
+            @test vcd.severity ≈ vc.severity rtol = 1.0e-12
 
             # f -> c*f scales every rho by sqrt(c), hence every squared seed by c.
             c = 7.3
             vcc = cover_variance(x -> c * f(x), x0)
-            @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol=1e-12
-            @test vcc.severity ≈ vc.severity rtol=1e-12
+            @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol = 1.0e-12
+            @test vcc.severity ≈ vc.severity rtol = 1.0e-12
         end
     end
 
@@ -784,8 +828,8 @@ include("genericaxes.jl")
     @testset "hvp — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         v = Float64[cos(3i) for i in eachindex(x0)]
-        @test hvp(f, x0, v) ≈ H * v rtol=1e-10
-        @test hvp(f, x0, zero(x0)) ≈ zero(x0) atol=1e-14
+        @test hvp(f, x0, v) ≈ H * v rtol = 1.0e-10
+        @test hvp(f, x0, zero(x0)) ≈ zero(x0) atol = 1.0e-14
         @test_throws DimensionMismatch hvp(f, x0, [1.0; v])
 
         # The in-place form writes the caller's destination and returns it.
@@ -803,7 +847,7 @@ include("genericaxes.jl")
 
         # Every entry of the scaled Hessian is bounded by its spectral norm.
         lambda = scaled_spectral_radius(H, h)
-        @test lambda >= cover_ratio(H, h) * (1 - 1e-12)
+        @test lambda >= cover_ratio(H, h) * (1 - 1.0e-12)
 
         hs = spectral_shrink(h, lambda)
         @test cover_ratio(H, hs) <= GATE                     # shrinking preserves validity
@@ -818,9 +862,9 @@ include("genericaxes.jl")
         # The matrix-free estimate approaches the exact norm from below, where it applies at all:
         # a coordinate the Hessian ignores gets a zero cover, which the power iteration rejects.
         if all(>(0), h)
-            est = scaled_spectral_radius(t, outidx, h; maxiter=1000, rtol=1e-10)
+            est = scaled_spectral_radius(t, outidx, h; maxiter = 1000, rtol = 1.0e-10)
             @test est <= lambda * GATE
-            @test est ≈ lambda rtol=1e-4
+            @test est ≈ lambda rtol = 1.0e-4
         else
             @test_throws "strictly positive" scaled_spectral_radius(t, outidx, h)
         end
@@ -833,10 +877,10 @@ include("genericaxes.jl")
         @test scaled_spectral_radius(H, h) ≈ 2
         @test spectral_shrink(h, 2.0) == h
         @test spectral_shrink(h, 0.25) ≈ h ./ 2
-        @test spectral_shrink(h, 0.25; safety=4) == h        # safety = 4 saturates the cover
+        @test spectral_shrink(h, 0.25; safety = 4) == h        # safety = 4 saturates the cover
 
         # The scaled Hessian, and hence the shrink factor, is invariant under both rescalings.
-        d = [1e-3, 1e5]
+        d = [1.0e-3, 1.0e5]
         @test scaled_spectral_radius(H .* (d * d'), h .* d) ≈ scaled_spectral_radius(H, h)
         @test scaled_spectral_radius(9 .* H, 3 .* h) ≈ scaled_spectral_radius(H, h)
 
@@ -847,10 +891,12 @@ include("genericaxes.jl")
 
         t, outidx = tape_function(rosenbrock, [-1.2, 1.0])
         @test_throws "strictly positive" scaled_spectral_radius(t, outidx, [1.0, 0.0])
-        @test_throws "did not converge" scaled_spectral_radius(t, outidx, [1.0, 1.0];
-                                                               maxiter=1, rtol=1e-12)
+        @test_throws "did not converge" scaled_spectral_radius(
+            t, outidx, [1.0, 1.0];
+            maxiter = 1, rtol = 1.0e-12
+        )
         @test_throws ArgumentError spectral_shrink(h, -1.0)
-        @test_throws ArgumentError spectral_shrink(h, 1.0; safety=0)
+        @test_throws ArgumentError spectral_shrink(h, 1.0; safety = 0)
     end
 
     @testset "metrics" begin
@@ -878,10 +924,12 @@ include("genericaxes.jl")
     # The generated problems are the substrate of the growth and tolerance studies, so what is
     # tested here is that each family is the function it claims to be, has the graph structure it
     # claims to have, and stays within the covering chain.
-    GENERATED = [(sigma, g(n))
-                 for sigma in (0.0, 2.0)
-                 for (_, g) in families(; sigma, seed=7)
-                 for n in (3, 6)]
+    GENERATED = [
+        (sigma, g(n))
+            for sigma in (0.0, 2.0)
+            for (_, g) in families(; sigma, seed = 7)
+            for n in (3, 6)
+    ]
 
     @testset "generated problems are well-formed — $(p.name) sigma=$sigma" for (sigma, p) in GENERATED
         @test nvars(p) == length(p.x0)
@@ -914,7 +962,7 @@ include("genericaxes.jl")
 
     @testset "quadratic forms share a Hessian and differ as programs" begin
         n = 5
-        ps = [quadratic(n; form=fm, rng=MersenneTwister(3)) for fm in (:entrywise, :matvec, :factored)]
+        ps = [quadratic(n; form = fm, rng = MersenneTwister(3)) for fm in (:entrywise, :matvec, :factored)]
         A = exact_hessian(ps[1])
         @test issymmetric(A)
         @test all(p -> exact_hessian(p) ≈ A, ps)          # one problem, three programs
@@ -925,7 +973,7 @@ include("genericaxes.jl")
         @test all(hs[3] .< hs[1])
 
         # rank 1: H = w*w' and the minimal cover abs.(w) = sqrt.(diag(A)) is attained.
-        p1 = quadratic(6; rank=1, form=:factored, rng=MersenneTwister(4))
+        p1 = quadratic(6; rank = 1, form = :factored, rng = MersenneTwister(4))
         @test rank(exact_hessian(p1)) == 1
         @test cover_hessian(WithDiagnostics(), p1.f, p1.x0).h_quad ≈ sqrt.(diag(exact_hessian(p1)))
     end
@@ -934,17 +982,17 @@ include("genericaxes.jl")
         # sharing = 0 consumes each node exactly once, so the graph is a tree: every input reaches
         # every node along a single path. The variance channel drops covariances between
         # reconverging paths, so it attains the quadrature merge exactly iff there are none.
-        tree = random_dag(8; nops=40, sharing=0.0, rng=MersenneTwister(11))
+        tree = random_dag(8; nops = 40, sharing = 0.0, rng = MersenneTwister(11))
         @test cover_variance(tree.f, tree.x0).h_var ≈
-              cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol=1e-10
+            cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol = 1.0e-10
 
         # With reuse, paths reconverge; the variance channel drops exactly those covariances and
         # so falls strictly below the quadrature merge on the coordinates that reconverge.
-        shared = random_dag(8; nops=40, sharing=0.6, rng=MersenneTwister(11))
+        shared = random_dag(8; nops = 40, sharing = 0.6, rng = MersenneTwister(11))
         hv = cover_variance(shared.f, shared.x0).h_var
         hq = cover_hessian(WithDiagnostics(), shared.f, shared.x0).h_quad
         @test all(hv .<= hq .* GATE)
-        @test count(hv .< hq .* (1 - 1e-8)) >= 2
+        @test count(hv .< hq .* (1 - 1.0e-8)) >= 2
 
         # Each input reaches the output: nothing is dropped on the floor.
         @test all(!iszero, ForwardDiff.gradient(shared.f, shared.x0))
@@ -972,8 +1020,8 @@ include("genericaxes.jl")
             return ds
         end
         for sharing in (0.0, 0.6), n in (16, 32, 64, 128, 256, 512)
-            p = random_dag(n; sharing, rng=MersenneTwister(1))
-            @test all(>(1e-3), tanhderivs(p.f, p.x0))
+            p = random_dag(n; sharing, rng = MersenneTwister(1))
+            @test all(>(1.0e-3), tanhderivs(p.f, p.x0))
             g = ForwardDiff.gradient(p.f, p.x0)
             H = ForwardDiff.hessian(p.f, p.x0)
             @test any(!iszero, H)
@@ -987,9 +1035,9 @@ include("genericaxes.jl")
     end
 
     @testset "rescale is exactly the input-units transformation" begin
-        p = quadratic(4; rng=MersenneTwister(5))
-        d = logscales(MersenneTwister(6), 4; sigma=4.0)
-        @test maximum(d) / minimum(d) > 1e2                # a genuinely wide spread
+        p = quadratic(4; rng = MersenneTwister(5))
+        d = logscales(MersenneTwister(6), 4; sigma = 4.0)
+        @test maximum(d) / minimum(d) > 1.0e2                # a genuinely wide spread
         q = rescale(p, d)
 
         @test q.x0 ≈ d .* p.x0
@@ -998,7 +1046,7 @@ include("genericaxes.jl")
         @test exact_hessian(q) ≈ Diagonal(inv.(d)) * exact_hessian(p) * Diagonal(inv.(d))
         # The cover is covariant under it: this is the property the whole method rests on.
         @test cover_hessian(WithDiagnostics(), q.f, q.x0).h_sum ≈
-              cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum ./ d rtol=1e-10
+            cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum ./ d rtol = 1.0e-10
 
         @test_throws DimensionMismatch rescale(p, [1.0, 2.0])
         @test_throws ArgumentError rescale(p, [1.0, 2.0, 0.0, 1.0])
@@ -1014,14 +1062,14 @@ include("genericaxes.jl")
             m = sum(l) / length(l)
             return sqrt(sum(abs2, l .- m) / length(l))
         end
-        narrow = exact_hessian(quadratic(32; rng=MersenneTwister(2), sigma=0.0))
-        wide = exact_hessian(quadratic(32; rng=MersenneTwister(2), sigma=3.0))
+        narrow = exact_hessian(quadratic(32; rng = MersenneTwister(2), sigma = 0.0))
+        wide = exact_hessian(quadratic(32; rng = MersenneTwister(2), sigma = 3.0))
         @test logspread(wide) > 1.5 * logspread(narrow)
 
-        @test_throws ArgumentError quadratic(4; rank=5)
-        @test_throws ArgumentError quadratic(4; form=:bogus)
-        @test_throws ArgumentError deep_composition(4; width=0)
-        @test_throws ArgumentError random_dag(4; sharing=1.5)
+        @test_throws ArgumentError quadratic(4; rank = 5)
+        @test_throws ArgumentError quadratic(4; form = :bogus)
+        @test_throws ArgumentError deep_composition(4; width = 0)
+        @test_throws ArgumentError random_dag(4; sharing = 1.5)
     end
 
     @testset "every pattern inflates its worst coordinate to exactly the peak" begin
@@ -1043,7 +1091,7 @@ include("genericaxes.jl")
 
         f = inflation_factors(UniformInflation(), n, peak)
         @test f ≈ fill(peak, n)
-        @test anisotropy(f) ≈ 0 atol=1e-12
+        @test anisotropy(f) ≈ 0 atol = 1.0e-12
 
         f = inflation_factors(SpikeInflation(3), n, peak)
         @test f[3] ≈ peak
@@ -1055,27 +1103,27 @@ include("genericaxes.jl")
         @test issorted(f)
         @test f[1] ≈ 1
         @test f[end] ≈ peak
-        @test anisotropy(f) ≈ log(peak) / 2 atol=0.05
+        @test anisotropy(f) ≈ log(peak) / 2 atol = 0.05
         @test inflation_factors(RampInflation(), 1, peak) ≈ [peak]
 
-        f = inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(3))
-        @test f ≈ inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(3))
-        @test f != inflation_factors(LognormalInflation(), n, peak; rng=MersenneTwister(4))
+        f = inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(3))
+        @test f ≈ inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(3))
+        @test f != inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(4))
         # Its head is more concentrated than a ramp's: the bulk of a normal draw sits well below
         # its maximum, and the gap widens with n.
         big = 256
-        lgn = inflation_factors(LognormalInflation(), big, peak; rng=MersenneTwister(3))
+        lgn = inflation_factors(LognormalInflation(), big, peak; rng = MersenneTwister(3))
         @test anisotropy(lgn) > anisotropy(inflation_factors(RampInflation(), big, peak))
     end
 
     @testset "an inflated cover is still a cover" begin
-        p = quadratic(6; form=:entrywise, rng=MersenneTwister(7))
+        p = quadratic(6; form = :entrywise, rng = MersenneTwister(7))
         H = exact_hessian(p)
         h = cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum
         @test cover_ratio(H, h) <= 1
 
         for pat in (UniformInflation(), LognormalInflation(), SpikeInflation(2), RampInflation())
-            f = inflation_factors(pat, h, 3.0; rng=MersenneTwister(8))
+            f = inflation_factors(pat, h, 3.0; rng = MersenneTwister(8))
             hd = inflate(h, f)
             # Inflation can only weaken the bound, never break it...
             @test cover_ratio(H, hd) <= cover_ratio(H, h)
@@ -1097,7 +1145,7 @@ include("genericaxes.jl")
         h = [2.0, 2.0, 0.0]
         @test cover_ratio(H, h) <= 1
 
-        f = inflation_factors(LognormalInflation(), h, 5.0; rng=MersenneTwister(9))
+        f = inflation_factors(LognormalInflation(), h, 5.0; rng = MersenneTwister(9))
         hd = inflate(h, f)
         @test hd[3] == 0
         @test cover_ratio(H, hd) <= 1
@@ -1118,7 +1166,7 @@ include("genericaxes.jl")
     @testset "the convergence test is scale-invariant" begin
         g, h = [3.0, 4.0], [1.0, 2.0]
         @test cover_norm(g, h) ≈ sqrt(13)
-        D = Diagonal([1e3, 1e-4])
+        D = Diagonal([1.0e3, 1.0e-4])
         @test cover_norm(D * g, D * h) ≈ cover_norm(g, h)
         @test cover_norm(2 * g, 2 * h) ≈ cover_norm(g, h)     # objective scaling f -> c*f
         # A dead coordinate: no curvature to divide by.
@@ -1141,8 +1189,8 @@ include("genericaxes.jl")
         @test s.shift == 2
         @test s.overshoot ≈ 0.25 / tol      # the true cover-norm where the run declared success
         @test stopping_shift(grads, covers, covers, tol).shift == 0
-        @test stopping_index(grads, covers, 1e-9) === nothing
-        @test_throws "never fires" stopping_shift(grads, covers, dcovers, 1e-9)
+        @test stopping_index(grads, covers, 1.0e-9) === nothing
+        @test_throws "never fires" stopping_shift(grads, covers, dcovers, 1.0e-9)
     end
 
     @testset "regularization bias" begin
@@ -1164,7 +1212,7 @@ include("genericaxes.jl")
         hd = inflate(LognormalInflation(), h, 8.0; rng)
         b = regularization_bias(A, g, h, hd, 0.5)
         # Variables: x -> D*x sends g -> D*g, A -> D*A*D, and any cover h -> D*h.
-        D = Diagonal([1e3, 1e-2, 1.0, 7.0, 1e-4])
+        D = Diagonal([1.0e3, 1.0e-2, 1.0, 7.0, 1.0e-4])
         @test regularization_bias(D * A * D, D * g, D * h, D * hd, 0.5) ≈ b
         # Objective: f -> c*f sends g -> c*g, A -> c*A, h -> sqrt(c)*h.
         c = 100.0
@@ -1199,7 +1247,7 @@ include("genericaxes.jl")
             h = exp.(randn(rng, 6))                 # a wide range of curvature scales
             tau = psd_shift(A, h)
             @test tau > 0                           # a random symmetric matrix is indefinite
-            @test eigmin(Symmetric(A + tau * Diagonal(h .^ 2))) > -1e-10
+            @test eigmin(Symmetric(A + tau * Diagonal(h .^ 2))) > -1.0e-10
             @test eigmin(Symmetric(A + 0.99tau * Diagonal(h .^ 2))) < 0
         end
     end
@@ -1236,12 +1284,12 @@ include("genericaxes.jl")
         A = M * M' + 12I                            # symmetric positive definite
         g = randn(rng, 12)
         h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
-        hd = inflate(LognormalInflation(), h, 1e4; rng)
+        hd = inflate(LognormalInflation(), h, 1.0e4; rng)
 
         # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
         # reach the target, and the loose cover pays for it in iterations.
-        long = step_degradation(A, g, h, hd; maxiter=40)
-        @test long.error_ref < 1e-6 && long.error_dist < 1e-6
+        long = step_degradation(A, g, h, hd; maxiter = 40)
+        @test long.error_ref < 1.0e-6 && long.error_dist < 1.0e-6
         @test long.iters_dist > long.iters_ref
 
         # On the usual budget of one iteration per coordinate the loose cover simply fails to
@@ -1251,10 +1299,10 @@ include("genericaxes.jl")
         budget = step_degradation(A, g, h, hd)
         @test budget.iters_ref == long.iters_ref
         @test budget.iters_dist === nothing
-        @test budget.error_dist > 1e3 * budget.error_ref
+        @test budget.error_dist > 1.0e3 * budget.error_ref
 
         # Uniform inflation is invisible here too: only the shape of the metric steers CG.
-        uni = step_degradation(A, g, h, inflate(UniformInflation(), h, 50.0); maxiter=4)
+        uni = step_degradation(A, g, h, inflate(UniformInflation(), h, 50.0); maxiter = 4)
         @test uni.error_dist ≈ uni.error_ref
     end
 

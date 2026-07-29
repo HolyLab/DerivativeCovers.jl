@@ -56,7 +56,7 @@
         tn, _ = tape_function(withnumber, x0)
         @test nnodes(tc) == nnodes(tn)
         @test cover_hessian(WithDiagnostics(), withconst, x0).h_sum ==
-              cover_hessian(WithDiagnostics(), withnumber, x0).h_sum
+            cover_hessian(WithDiagnostics(), withnumber, x0).h_sum
         # A constant reaching a node builder directly is a caller bug, and says so.
         @test_throws "no node on any tape" DerivativeCovers.noderef(TVar(1.0))
     end
@@ -69,7 +69,7 @@
         end
         x0 = [3.0, 4.0]
         r = cover_hessian(WithDiagnostics(), f, x0)
-        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
+        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1.0e-8
         H = ForwardDiff.hessian(f, x0)
         for h in (r.h_sum, r.h_quad)
             @test all(abs.(H) .<= h * h' .* GATE)
@@ -78,10 +78,10 @@
 
     @testset "objective converting a constant to the element type" begin
         # The `eltype(x)(c)` idiom, as `biggs6` and `clplatea` write it.
-        f = x -> sum(exp(-x[1] * i / 10) for i = 1:4) - eltype(x)(2.75) * x[2]^2
+        f = x -> sum(exp(-x[1] * i / 10) for i in 1:4) - eltype(x)(2.75) * x[2]^2
         x0 = [0.4, 1.25]
         r = cover_hessian(WithDiagnostics(), f, x0)
-        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
+        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1.0e-8
         H = ForwardDiff.hessian(f, x0)
         @test all(abs.(H) .<= r.h_sum * r.h_sum' .* GATE)
     end
@@ -90,12 +90,12 @@
         # The `eltype(x)[...]` idiom, as `penalty2` writes it: a vector of constants indexed
         # against the variables.
         f = function (x)
-            y = eltype(x)[exp(i // 10) for i = 1:3]
-            return sum((exp(x[i] / 10) - y[i])^2 for i = 1:3)
+            y = eltype(x)[exp(i // 10) for i in 1:3]
+            return sum((exp(x[i] / 10) - y[i])^2 for i in 1:3)
         end
         x0 = [0.3, -0.2, 0.7]
         r = cover_hessian(WithDiagnostics(), f, x0)
-        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1e-8
+        @test r.grad ≈ ForwardDiff.gradient(f, x0) rtol = 1.0e-8
         H = ForwardDiff.hessian(f, x0)
         for h in (r.h_sum, r.h_quad)
             @test all(abs.(H) .<= h * h' .* GATE)

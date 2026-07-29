@@ -85,7 +85,7 @@ julia> all(jc.b_max .<= jc.b_quad .<= jc.b_sum)
 true
 ```
 """
-function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
+function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a = nothing, check::Bool = true)
     m, n = length(outidxs), t.ninputs
     a === nothing && (a = ones(m))
     # `a` and every field of the result are indexed by output position, `1:m`, whatever the
@@ -97,23 +97,25 @@ function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, 
 
     Utilde = jacobian_surrogate(t, outidxs)
     scaled = Utilde ./ a                      # scaled[k, j] = Ũ_kj / a_k
-    b_sum = vec(sum(scaled; dims=1))
-    b_quad = sqrt.(vec(sum(abs2, scaled; dims=1)))
-    b_max = vec(maximum(scaled; dims=1))
+    b_sum = vec(sum(scaled; dims = 1))
+    b_quad = sqrt.(vec(sum(abs2, scaled; dims = 1)))
+    b_max = vec(maximum(scaled; dims = 1))
 
     if check
-        rtol = eps(float(real(eltype(Utilde))))^(2//3)
+        rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
         for j in 1:n, k in 1:m
             a[k] * b_max[j] >= Utilde[k, j] * (1 - rtol) ||
-                error("b_max does not cover the surrogate at output $k, input $j: " *
-                      "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])")
+                error(
+                "b_max does not cover the surrogate at output $k, input $j: " *
+                    "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])"
+            )
         end
     end
 
     return JacobianCover(collect(float.(a)), b_sum, b_quad, b_max, Utilde, m, n)
 end
 
-function cover_jacobian(r, x0::AbstractVector; a=nothing, check::Bool=true)
+function cover_jacobian(r, x0::AbstractVector; a = nothing, check::Bool = true)
     t, outidxs = tape_function(r, x0)
     outidxs isa AbstractVector ||
         throw(ArgumentError("cover_jacobian needs a vector-valued program; got a scalar output"))
@@ -160,8 +162,10 @@ julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per
  2.0
 ```
 """
-function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer},
-                               groups::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
+function cover_jacobian_hybrid(
+        t::Tape, outidxs::AbstractVector{<:Integer},
+        groups::AbstractVector{<:Integer}; a = nothing, check::Bool = true
+    )
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
     # `groups` and `a` are indexed by output position, `1:m`, whatever the indices of `outidxs`.
     Base.require_one_based_indexing(groups)
@@ -184,18 +188,22 @@ function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer},
 
     if check
         Utilde = jacobian_surrogate(t, outidxs)
-        rtol = eps(float(real(eltype(Utilde))))^(2//3)
+        rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
         for j in 1:n, k in 1:m
             a[k] * b[j] >= Utilde[k, j] * (1 - rtol) ||
-                error("group-max cover does not cover the surrogate at output $k, input $j: " *
-                      "a*b = $(a[k] * b[j]) < Ũ = $(Utilde[k, j])")
+                error(
+                "group-max cover does not cover the surrogate at output $k, input $j: " *
+                    "a*b = $(a[k] * b[j]) < Ũ = $(Utilde[k, j])"
+            )
         end
     end
     return b
 end
 
-function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer}, ngroups::Integer;
-                               a=nothing, check::Bool=true)
+function cover_jacobian_hybrid(
+        t::Tape, outidxs::AbstractVector{<:Integer}, ngroups::Integer;
+        a = nothing, check::Bool = true
+    )
     ngroups >= 1 || throw(ArgumentError("ngroups must be positive, got $ngroups"))
     m = length(outidxs)
     groups = [1 + (k - 1) % ngroups for k in 1:m]
@@ -406,9 +414,11 @@ so checking costs `O(mL)` on top of the `O(L)` production path; the matrix form 
 A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero column (a dead
 input) gets `b_j = 0`; both are exact and minimal.
 """
-function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule=SumMerge(),
-                       arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
-                       rtol::Real=eps(float(real(eltype(t.vals))))^(2//3), check::Bool=true)
+function balance_cover(
+        t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule = SumMerge(),
+        arule::Symbol = :marginal, a0 = nothing, maxiter::Union{Nothing, Integer} = nothing,
+        rtol::Real = eps(float(real(eltype(t.vals))))^(2 // 3), check::Bool = true
+    )
     m, N = length(outidxs), nnodes(t)
     maxiter = _resolve_maxiter(maxiter, arule)
     if !(merge isa SumMerge) || arule !== :marginal
@@ -448,7 +458,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Merge
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         r = jacobian_ratio(Utilde, a, b)
-        r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
+        r <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
             error("balanced pair does not cover the surrogate: worst ratio $r")
     end
     return (; a, b, iters, delta)
@@ -461,9 +471,11 @@ function balance_cover(r, x0::AbstractVector; kwargs...)
     return balance_cover(t, outidxs; kwargs...)
 end
 
-function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arule::Symbol=:marginal,
-                       a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
-                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3), check::Bool=true)
+function balance_cover(
+        Utilde::AbstractMatrix; merge::MergeRule = SumMerge(), arule::Symbol = :marginal,
+        a0 = nothing, maxiter::Union{Nothing, Integer} = nothing,
+        rtol::Real = eps(float(real(eltype(Utilde))))^(2 // 3), check::Bool = true
+    )
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     maxiter = _resolve_maxiter(maxiter, arule)
@@ -483,7 +495,7 @@ function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arul
 
     if check
         r = jacobian_ratio(Utilde, a, b)
-        r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
+        r <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
             error("balanced pair does not cover the matrix: worst ratio $r")
     end
     return (; a, b, iters, delta)
@@ -552,10 +564,12 @@ function _geomean_fit(U, a, maxiter, rtol)
         delta = max(uhi + whi, -(ulo + wlo))
         delta <= rtol && return a, iters, delta
     end
-    error("balance_cover(arule=:geomean) did not converge in $maxiter rounds: product still " *
-          "changing by delta = $delta > rtol = $rtol. The geometric-mean fit converges for every " *
-          "pattern but slowly on ill-conditioned supports; raise maxiter (some sparse patterns " *
-          "need 1e4–1e5 rounds).")
+    error(
+        "balance_cover(arule=:geomean) did not converge in $maxiter rounds: product still " *
+            "changing by delta = $delta > rtol = $rtol. The geometric-mean fit converges for every " *
+            "pattern but slowly on ill-conditioned supports; raise maxiter (some sparse patterns " *
+            "need 1e4–1e5 rounds)."
+    )
 end
 
 function _balance_start(a0, m)
@@ -573,7 +587,7 @@ end
 # (zero coordinates excluded — their zeros persist), the change of product (k, j) is u_k + w_j,
 # whose extremes are attained at the extremes of u and w. delta bounds |u_k + w_j| exactly and is
 # gauge-invariant, since a uniform shift of u cancels against the opposite shift of w.
-function _balance(bstep, astep, a, maxiter, rtol, hint="")
+function _balance(bstep, astep, a, maxiter, rtol, hint = "")
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     b = bstep(a)
     _regauge!(a, b)
@@ -583,7 +597,7 @@ function _balance(bstep, astep, a, maxiter, rtol, hint="")
     # helps. When delta goes flat (unchanged to `stall_flat` over `stall_window` rounds) while
     # still above rtol, the run is cycling, not converging; report the stall and point at geomean.
     # A genuinely converging alternation shrinks delta geometrically, so it never reads flat.
-    stall_window, stall_flat = 128, 1e-6
+    stall_window, stall_flat = 128, 1.0e-6
     last_checked = Inf
     for iters in 1:maxiter
         aprev, bprev = a, b
@@ -596,9 +610,11 @@ function _balance(bstep, astep, a, maxiter, rtol, hint="")
         delta <= rtol && return a, b, iters, delta
         if iters % stall_window == 0
             if delta > rtol && abs(delta - last_checked) <= stall_flat * delta
-                error("balance_cover stalled after $iters rounds: the product change " *
-                      "delta = $delta has plateaued above rtol = $rtol — a limit cycle, not slow " *
-                      "convergence$hint")
+                error(
+                    "balance_cover stalled after $iters rounds: the product change " *
+                        "delta = $delta has plateaued above rtol = $rtol — a limit cycle, not slow " *
+                        "convergence$hint"
+                )
             end
             last_checked = delta
         end
@@ -684,7 +700,7 @@ column `b_j = 0`; both are exact. Unlike [`balance_cover`](@ref) this minimizes 
 excess itself, so it is the tightness yardstick — but the optimum is generally non-unique off
 the critical cycles, so prefer `balance_cover`'s rules when covariance-by-uniqueness matters.
 """
-function jacobian_minimax(M::AbstractMatrix; atol::Real=eps(float(real(eltype(M))))^(3//4))
+function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(M))))^(3 // 4))
     Base.require_one_based_indexing(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
     atol > 0 || throw(ArgumentError("atol must be positive, got $atol"))
@@ -693,7 +709,7 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real=eps(float(real(eltype(M)
     for j in 1:n, k in 1:m
         M[k, j] > 0 && (push!(ks, k); push!(js, j); push!(cs, log(M[k, j])))
     end
-    isempty(cs) && return (; a=zeros(m), b=zeros(n), excess=1.0)
+    isempty(cs) && return (; a = zeros(m), b = zeros(n), excess = 1.0)
 
     lo, hi = 0.0, maximum(cs) - minimum(cs)
     feasible, pot = _minimax_feasible(m, n, ks, js, cs, hi)
@@ -713,7 +729,7 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real=eps(float(real(eltype(M)
     b[.!livecol] .= 0.0
     _regauge!(a, b)
     excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
-    excess >= 1 - eps(float(real(eltype(M))))^(2//3) ||
+    excess >= 1 - eps(float(real(eltype(M))))^(2 // 3) ||
         error("minimax pair does not cover M: worst ratio $(1 / excess)")
     return (; a, b, excess)
 end

@@ -151,7 +151,7 @@ julia> round.(vc.severity; digits=4)
  1.3938
 ```
 """
-function cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule::SplitRule=ValueSplit())
+function cover_variance(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit())
     n = t.ninputs
     vbar = adjoints(t, outidx)
     rhos, theta = local_covers(t, vbar; check, rule)
@@ -161,7 +161,7 @@ function cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule::SplitR
     return VarianceCover(vbar[1:n], h_sum, h_var, dependency_severity(h_sum, h_var))
 end
 
-function cover_variance(f, x0::AbstractVector; check::Bool=true, rule::SplitRule=ValueSplit())
+function cover_variance(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit())
     t, outidx = tape_function(f, x0)
     return cover_variance(t, outidx; check, rule)
 end

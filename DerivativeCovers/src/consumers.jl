@@ -109,8 +109,10 @@ Comparing the two *regularized* steps — rather than either against the unregul
 isolates the effect of cover looseness from the effect of regularizing at all, since `A` and `tau`
 are held fixed and only the cover changes.
 """
-function regularization_bias(A::AbstractMatrix, g::AbstractVector, h::AbstractVector,
-                             hd::AbstractVector, tau::Real)
+function regularization_bias(
+        A::AbstractMatrix, g::AbstractVector, h::AbstractVector,
+        hd::AbstractVector, tau::Real
+    )
     axes(h) == axes(hd) ||
         throw(DimensionMismatch("h and hd must share indices: $(axes(h)) vs $(axes(hd))"))
     xref = regularized_step(A, g, h, tau)
@@ -123,7 +125,7 @@ end
 
 _require_positive_cover(h::AbstractVector) =
     all(>(0), h) ||
-        throw(ArgumentError("this consumer needs a strictly positive cover; got minimum $(minimum(h))"))
+    throw(ArgumentError("this consumer needs a strictly positive cover; got minimum $(minimum(h))"))
 
 """
     psd_shift(A, h) -> tau
@@ -203,9 +205,11 @@ Requires a strictly positive cover, and a symmetric positive definite `A`. Defin
 enforced as the iteration goes: a search direction of nonpositive curvature throws rather than
 producing the NaN iterates that dividing by it would.
 """
-function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
-                  x0::AbstractVector = zero(b), maxiter::Integer = length(b),
-                  reltol::Real = sqrt(eps(float(real(eltype(b))))), reset::Integer = 16)
+function cover_cg(
+        A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
+        x0::AbstractVector = zero(b), maxiter::Integer = length(b),
+        reltol::Real = sqrt(eps(float(real(eltype(b))))), reset::Integer = 16
+    )
     axes(A, 1) == axes(A, 2) == axes(b, 1) == axes(h, 1) == axes(x0, 1) ||
         throw(DimensionMismatch("A, b, h and x0 must share indices"))
     reset > 0 || throw(ArgumentError("reset must be positive, got $reset"))
@@ -260,9 +264,11 @@ Holding the yardstick fixed matters: `cover_cg`'s own convergence test lives in 
 it was handed, so a loose cover would otherwise flatter itself by declaring victory sooner.
 Remaining keyword arguments are forwarded to [`cover_cg`](@ref).
 """
-function step_degradation(A::AbstractMatrix, g::AbstractVector, h::AbstractVector,
-                          hd::AbstractVector; maxiter::Integer = length(g),
-                          target::Real = 1e-6, kwargs...)
+function step_degradation(
+        A::AbstractMatrix, g::AbstractVector, h::AbstractVector,
+        hd::AbstractVector; maxiter::Integer = length(g),
+        target::Real = 1.0e-6, kwargs...
+    )
     axes(h) == axes(hd) ||
         throw(DimensionMismatch("h and hd must share indices: $(axes(h)) vs $(axes(hd))"))
     b = -g
@@ -276,6 +282,8 @@ function step_degradation(A::AbstractMatrix, g::AbstractVector, h::AbstractVecto
 
     ref = cover_cg(A, b, h; maxiter, kwargs...)
     dist = cover_cg(A, b, hd; maxiter, kwargs...)
-    return (; iters_ref = hit(ref.xs), iters_dist = hit(dist.xs),
-            error_ref = err(ref.x), error_dist = err(dist.x))
+    return (;
+        iters_ref = hit(ref.xs), iters_dist = hit(dist.xs),
+        error_ref = err(ref.x), error_dist = err(dist.x),
+    )
 end

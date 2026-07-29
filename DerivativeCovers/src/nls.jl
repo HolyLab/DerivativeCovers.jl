@@ -85,7 +85,7 @@ quadrature) or spread cyclically across `ngroups` groups (a cheaper upper bound)
 — the residual-curvature subgraph — is placed in one further group, so its second-order
 contribution is summed there and combined in quadrature with the Gauss–Newton groups.
 """
-function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups=nothing)
+function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups = nothing)
     m = length(sqidx)
     m >= 1 || throw(ArgumentError("need at least one residual"))
     gres = ngroups === nothing ? m : min(Int(ngroups), m)
@@ -139,8 +139,10 @@ julia> all(nc.h_gn .<= nc.h)
 true
 ```
 """
-function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true,
-                   rule::SplitRule=ValueSplit())
+function cover_nls(
+        r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
     n, N = t.ninputs, nnodes(t)
     m = length(residx)
