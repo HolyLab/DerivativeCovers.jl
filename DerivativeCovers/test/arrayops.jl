@@ -280,7 +280,10 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             cases = [("constant matrix", z -> sum(abs2, wrap(M) * z),
                       z -> sum(abs2, Matrix(wrap(M)) * z), x0),
                      ("variable matrix", v -> sum(abs2, wrap(reshape(v, 3, 3)) * v[1:3]),
-                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * v[1:3]), v0)]
+                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * v[1:3]), v0),
+                     ("variable matrix, constant vector",
+                      v -> sum(abs2, wrap(reshape(v, 3, 3)) * x0),
+                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * x0), v0)]
             @testset "$name" for (name, f, fd, z0) in cases
                 res = cover_hessian(WithDiagnostics(), f, z0)
                 @test res.grad ≈ ForwardDiff.gradient(fd, z0)
@@ -294,9 +297,25 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
               z -> sum(abs2, Matrix(Diagonal(c)) * z), x0),
              ("Diagonal, variable matrix", v -> sum(abs2, Diagonal(v[1:3]) * v[4:6]),
               v -> sum(abs2, Matrix(Diagonal(v[1:3])) * v[4:6]), [c; x0]),
-             ("adjoint row vector", z -> abs2(c' * z), z -> abs2(sum(c .* z)), x0),
-             ("transpose row vector", v -> abs2(transpose(v[1:3]) * v[4:6]),
-              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0])]
+             ("adjoint row vector, constant row", z -> abs2(c' * z), z -> abs2(sum(c .* z)), x0),
+             ("adjoint row vector, variable row", v -> abs2(v[1:3]' * v[4:6]),
+              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0]),
+             ("adjoint row vector, constant vector", v -> abs2(v[1:3]' * c),
+              v -> abs2(sum(v[1:3] .* c)), [c; x0]),
+             ("transpose row vector, variable row", v -> abs2(transpose(v[1:3]) * v[4:6]),
+              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0]),
+             ("transpose row vector, constant vector", v -> abs2(transpose(v[1:3]) * c),
+              v -> abs2(sum(v[1:3] .* c)), [c; x0]),
+             # `transpose` and `adjoint` are defined on TVar itself, so a wrapper around variable
+             # data has element type TVar: the row-vector methods dispatch on it, and an entry that
+             # is itself transposed on access resolves rather than erroring.
+             ("transposed variable matrix", v -> sum(abs2, transpose(reshape(v, 3, 3)) * v[1:3]),
+              v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * v[1:3]), v0),
+             ("transposed variable matrix, constant vector",
+              v -> sum(abs2, transpose(reshape(v, 3, 3)) * x0),
+              v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * x0), v0),
+             ("adjointed variable matrix", v -> sum(abs2, reshape(v, 3, 3)' * v[1:3]),
+              v -> sum(abs2, Matrix(reshape(v, 3, 3)') * v[1:3]), v0)]
             res = cover_hessian(WithDiagnostics(), f, z0)
             @test res.grad ≈ ForwardDiff.gradient(fd, z0)
             @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE

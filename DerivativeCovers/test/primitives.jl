@@ -303,6 +303,26 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test_throws DimensionMismatch Dreal * xs[1:2]
         @test_throws DimensionMismatch Diagonal(xs[1:1]) * xs
         @test_throws DimensionMismatch Diagonal([1.0]) * xs
+
+        # A node with three or more parents carries second partials only in the forms the cover
+        # sweep knows how to split; a dense C among them is not one, and says so rather than
+        # reading the 2x2 corner of a larger block.
+        t3 = Tape([1.0, 2.0, 3.0])
+        DerivativeCovers.pushnode!(t3, 6.0, [1, 2, 3], ones(3), ones(3, 3))
+        vbar = [0.0, 0.0, 0.0, 1.0]
+        @test_throws "node 4 has 3 parents; only unary and binary elementals are supported" (
+            local_covers(t3, vbar))
+    end
+
+    @testset "PairedPartials entries" begin
+        # An inner-product node's second partials are the cross terms alone: slots are ordered
+        # (w_1..w_q, x_1..x_q), so the only nonzeros are the pairs q apart.
+        t, _ = tape_function(v -> dot(v[1:3], v[4:6]), [0.9, -0.4, 1.3, 0.4, -1.1, 0.7])
+        k = findfirst(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
+        C = t.Cs[k]
+        @test size(C) == (6, 6)
+        @test C == [Float64(abs(i - j) == 3) for i in 1:6, j in 1:6]
+        @test C == C'
     end
 
 end
