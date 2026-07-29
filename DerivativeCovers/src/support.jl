@@ -120,7 +120,12 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
     end
     ids, ncomp = _label_components(uf, live)
     m = length(outidxs)
-    rowcomp = [ids[k] for k in outidxs]
+    # Rows are numbered by output *position*, so the labels are collected 1:m however `outidxs`
+    # itself is indexed.
+    rowcomp = Vector{Int}(undef, m)
+    for (p, k) in enumerate(outidxs)
+        rowcomp[p] = ids[k]
+    end
     colcomp = ids[1:n]
     return SupportComponents(rowcomp, colcomp, ncomp, Base.OneTo(m), Base.OneTo(n))
 end

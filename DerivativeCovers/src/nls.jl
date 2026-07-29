@@ -117,6 +117,27 @@ linear in `x` the two coincide and equal `√(diag(JᵀJ))` exactly.
 seeded at the residual nodes rather than at the per-node splits, so they do not depend on it.
 
 `check` is forwarded to [`cover_hybrid`](@ref) to verify the per-node cover invariants.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2] - 1.0, exp(x[1]) - 2.0];
+
+julia> nc = cover_nls(r, [0.5, 2.0]);
+
+julia> round.(nc.h; digits=4)
+2-element Vector{Float64}:
+ 2.7014
+ 0.5
+
+julia> round.(nc.h_gn; digits=4)
+2-element Vector{Float64}:
+ 2.592
+ 0.5
+
+julia> all(nc.h_gn .<= nc.h)
+true
+```
 """
 function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true,
                    rule::SplitRule=ValueSplit())

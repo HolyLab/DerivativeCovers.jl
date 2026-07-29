@@ -14,6 +14,7 @@ ExplicitImports = "1.15"
 ForwardDiff = "0.10, 1"
 LinearAlgebra = "1"
 MatrixCovers = "1"
+OffsetArrays = "1"
 Random = "1"
 Test = "1"
 julia = "1.10"
@@ -22,7 +23,8 @@ julia = "1.10"
 Aqua = "4c88cf16-eb10-579e-8560-4a9242c79595"
 ExplicitImports = "7d51a73a-1435-4ff3-83d9-f097790105c7"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+OffsetArrays = "6fe1bfb0-de20-5000-8ca7-80f57d26f881"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "ExplicitImports", "ForwardDiff", "Test"]
+test = ["Aqua", "ExplicitImports", "ForwardDiff", "OffsetArrays", "Test"]

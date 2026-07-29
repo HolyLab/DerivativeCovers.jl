@@ -337,6 +337,27 @@
         @test bald.iters <= 2
     end
 
+    @testset "balance_cover: an output no input reaches" begin
+        # A constant output has an identically zero surrogate row, so the alternation drives its
+        # weight to exactly zero. The tape form admits that only after an indicator sweep confirms
+        # no input reaches the output: a zero weight on a live output could cover nothing.
+        r = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
+        x0 = [0.7, 1.3]
+        t, outidxs = tape_function(r, x0)
+        U = jacobian_surrogate(t, outidxs)
+        @test U[2, :] == zeros(2)
+
+        bal = balance_cover(t, outidxs)
+        @test bal.a[2] == 0
+        @test all(>(0), bal.a[[1, 3]])
+        @test jacobian_ratio(U, bal.a, bal.b) <= GATE
+
+        # The tape route and the materialized surrogate reach the same pair.
+        balm = balance_cover(U)
+        @test bal.a ≈ balm.a rtol=1e-8
+        @test bal.b ≈ balm.b rtol=1e-8
+    end
+
     @testset "balance_cover: rank-1 exactness and the Sinkhorn fixed point" begin
         rng = MersenneTwister(7)
         u, v = exp.(randn(rng, 6)), exp.(randn(rng, 4))
@@ -344,6 +365,7 @@
         # The annotation supplies the rule check: there is no list of admissible spellings to
         # fall out of date, and SumMerge() is the default in both call forms.
         @test_throws TypeError balance_cover(U; merge=:max)
+        @test_throws "arule must be :marginal or :geomean" balance_cover(U; arule=:sinkhorn)
         @test balance_cover(U; merge=SumMerge()).b == balance_cover(U).b
         @test SumMerge() isa MergeRule && QuadMerge() isa MergeRule && MaxMerge() isa MergeRule
 
@@ -369,6 +391,16 @@
         @test_throws "did not converge" balance_cover(exp.(randn(rng, 3, 5)); maxiter=1)
         @test_throws "strictly positive" balance_cover(U; a0=zeros(6))
         @test_throws "nonnegative" balance_cover([1.0 -1.0; 1.0 1.0])
+
+        # The function form tapes the program and hands the tape to the two-argument form, so on a
+        # vector-valued program the two agree exactly; a scalar output has no rows to balance.
+        rvec = xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
+                      exp(xs[1]) + xs[2] * xs[3]]
+        xvec = [0.6, -0.4, 0.9]
+        balf = balance_cover(rvec, xvec)
+        balt = balance_cover(tape_function(rvec, xvec)...)
+        @test balf.a == balt.a
+        @test balf.b == balt.b
         @test_throws "vector-valued program" balance_cover(xs -> xs[1] * xs[2], [1.0, 2.0])
     end
 

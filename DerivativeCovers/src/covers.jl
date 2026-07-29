@@ -91,8 +91,8 @@ and an input-node entry a unit row. Costs `O(m*L)` time and memory: a diagnostic
 function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
     m, N = length(outidxs), nnodes(t)
     Vbar = zeros(m, N)
-    for k in 1:m
-        Vbar[k, outidxs[k]] += 1.0
+    for (k, o) in enumerate(outidxs)
+        Vbar[k, o] += 1.0
     end
     # Tape order is topological, so N:-1:1 fully accumulates each Vbar[:, j] before j feeds parents.
     for j in N:-1:1
@@ -661,6 +661,29 @@ diagnostics, and reaching them takes the constructive two-sweep form (`adjoints`
 `local_covers`, `abs_reverse`) that defines the covers rather than the fused sweep that
 computes them. `check` additionally verifies that the absolute-value reverse sweep reproduces
 `h_sum`, and that the `CoverOnly()` sweep reproduces both the gradient and `h_sum`.
+
+# Examples
+
+```jldoctest
+julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
+
+julia> c = cover_hessian(f, [0.5, 2.0]);
+
+julia> round.(c.h_sum; digits=4)
+2-element Vector{Float64}:
+ 4.1125
+ 2.4142
+
+julia> round.(c.grad; digits=4)
+2-element Vector{Float64}:
+ 5.6487
+ 2.0
+
+julia> H = [exp(0.5) 4.0; 4.0 1.0];   # the Hessian of f at [0.5, 2.0]
+
+julia> all(abs.(H) .<= c.h_sum * c.h_sum')
+true
+```
 """
 function cover_hessian(::WithDiagnostics, t::Tape, outidx::Integer; check::Bool=true,
                        rule::SplitRule=ValueSplit())

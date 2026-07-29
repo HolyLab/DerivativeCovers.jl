@@ -24,8 +24,8 @@ bound `B`. A repeated entry in `outidxs` yields an identical row.
 function jacobian_surrogate(t::Tape, outidxs::AbstractVector{<:Integer})
     m, N = length(outidxs), nnodes(t)
     Theta = zeros(m, N)
-    for k in 1:m
-        Theta[k, outidxs[k]] += 1.0
+    for (k, o) in enumerate(outidxs)
+        Theta[k, o] += 1.0
     end
     return abs_reverse(t, Theta)[:, 1:t.ninputs]
 end
@@ -67,10 +67,30 @@ evaluated at `x0`. Returns a [`JacobianCover`](@ref) carrying the sum, quadratur
 `a` must be strictly positive with one entry per output; `nothing` (the default) uses `ones(m)`.
 Every merge is a valid cover for *any* positive `a` — the choice of `a` trades tightness between
 the output and input sides but never validity. `check` verifies that `b_max` covers the surrogate.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> jc = cover_jacobian(r, [0.5, 2.0, -1.0]);
+
+julia> round.(jc.b_max; digits=4)
+3-element Vector{Float64}:
+ 2.0
+ 1.0
+ 2.0
+
+julia> all(jc.b_max .<= jc.b_quad .<= jc.b_sum)
+true
+```
 """
 function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
     m, n = length(outidxs), t.ninputs
     a === nothing && (a = ones(m))
+    # `a` and every field of the result are indexed by output position, `1:m`, whatever the
+    # indices of `outidxs` itself.
+    Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
     all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
@@ -117,22 +137,47 @@ partition `1 + (k-1) % ngroups` over the outputs.
 
 `a` is the fixed output weights (`nothing` uses `ones(m)`). `check` verifies `b` covers the
 surrogate.
+
+# Examples
+
+The two endpoints, on a program with three outputs:
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> t, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
+
+julia> round.(cover_jacobian_hybrid(t, outidxs, 1); digits=4)   # one group: b_sum
+3-element Vector{Float64}:
+ 3.6487
+ 1.5
+ 3.0
+
+julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per group: b_max
+3-element Vector{Float64}:
+ 2.0
+ 1.0
+ 2.0
+```
 """
 function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer},
                                groups::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
+    # `groups` and `a` are indexed by output position, `1:m`, whatever the indices of `outidxs`.
+    Base.require_one_based_indexing(groups)
     length(groups) == m ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $m (one per output)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
     a === nothing && (a = ones(m))
+    Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
     all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
 
     G = maximum(groups)
     Theta = zeros(G, N)
-    for k in 1:m
-        Theta[groups[k], outidxs[k]] += 1.0 / a[k]
+    for (k, o) in enumerate(outidxs)
+        Theta[groups[k], o] += 1.0 / a[k]
     end
     Abar = abs_reverse(t, Theta)              # G × N, group column-sums of Ũ/a at the inputs
     b = [maximum(view(Abar, :, j)) for j in 1:n]
@@ -230,7 +275,13 @@ function marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::Abstra
         end
     end
     s = abs_forward(t, theta)
-    return s[outidxs]
+    # The weights are indexed by output position, `1:length(outidxs)`, whatever the indices of
+    # `outidxs`: `balance_cover`'s alternation pairs them against a 1-based iterate.
+    a = Vector{eltype(s)}(undef, length(outidxs))
+    for (k, o) in enumerate(outidxs)
+        a[k] = s[o]
+    end
+    return a
 end
 
 function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
@@ -370,9 +421,9 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Merge
     bstep = a -> begin
         theta = zeros(N)
         anydead = false
-        for k in 1:m
+        for (k, o) in enumerate(outidxs)
             if a[k] > 0
-                theta[outidxs[k]] += 1.0 / a[k]
+                theta[o] += 1.0 / a[k]
             else
                 anydead = true
             end
@@ -380,8 +431,8 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Merge
         if anydead
             # A zero a[k] is only coverable when output k is dead: check with an indicator sweep.
             ind = zeros(N)
-            for k in 1:m
-                a[k] == 0 && (ind[outidxs[k]] = 1.0)
+            for (k, o) in enumerate(outidxs)
+                a[k] == 0 && (ind[o] = 1.0)
             end
             reach = abs_reverse(t, ind)
             for j in 1:t.ninputs

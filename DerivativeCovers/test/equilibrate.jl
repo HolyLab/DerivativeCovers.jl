@@ -57,7 +57,7 @@
     @testset "product argument checks" begin
         t, outidxs = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
         @test_throws "expected 2 (one per input)" jvp(t, outidxs, [1.0, 2.0, 3.0])
-        @test_throws "expected 2 (one per output)" vjp(t, outidxs, [1.0])
+        @test_throws "u and outidxs must share indices" vjp(t, outidxs, [1.0])
         # A destination of the wrong shape is caught before the sweep runs.
         @test_throws DimensionMismatch jvp!(zeros(3), t, outidxs, [1.0, 2.0])
         @test_throws DimensionMismatch vjp!(zeros(3), t, outidxs, [1.0, 2.0])
@@ -126,7 +126,8 @@
         c = cover_jacobian(t, outidxs)
         @test_throws "strictly positive" scaled_singular_value(t, outidxs, c.a, zeros(3))
         @test_throws "expected 3 (one per input)" scaled_singular_value(t, outidxs, c.a, ones(2))
-        @test_throws "expected 4 (one per output)" scaled_singular_value(t, outidxs, ones(2), c.b_max)
+        @test_throws "a and outidxs must share indices" scaled_singular_value(t, outidxs, ones(2),
+                                                                             c.b_max)
         # Non-convergence is an error, never a silently returned partial estimate.
         @test_throws "did not converge" scaled_singular_value(t, outidxs, c.a, c.b_max;
                                                               rtol=1e-15, maxiter=2)

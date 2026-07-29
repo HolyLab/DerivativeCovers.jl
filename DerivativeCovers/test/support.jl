@@ -37,6 +37,21 @@
         @test rowcomponent(sc, length(outidxs) + 1) == rowcomponent(sc, 1)
     end
 
+    @testset "an edge whose partial vanishes carries no support" begin
+        # Support is read off the recorded first partials, not off the tape's shape: at xs[1] = 0
+        # the squaring node's partial is exactly zero, so output 1 depends on no input even though
+        # a tape edge joins them. The matrix reading of the surrogate agrees.
+        tz, oz = tape_function(xs -> [xs[1]^2, xs[2]], [0.0, 1.0])
+        Uz = DerivativeCovers.jacobian_surrogate(tz, oz)
+        @test Uz[1, :] == zeros(2)
+        sc = support_components(tz, oz)
+        scm = support_components(Uz)
+        @test ncomponents(sc) == ncomponents(scm) == 1
+        @test rowcomponent(sc, 1) == rowcomponent(scm, 1) == 0
+        @test [rowcomponent(sc, k) for k in 1:2] == [rowcomponent(scm, k) for k in 1:2]
+        @test [colcomponent(sc, j) for j in 1:2] == [colcomponent(scm, j) for j in 1:2]
+    end
+
     @testset "out-of-range output fails fast" begin
         @test_throws BoundsError support_components(t, [nnodes(t) + 1])
     end

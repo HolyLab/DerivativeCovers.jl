@@ -13,8 +13,13 @@
         @test value(zero(TVar)) == 0
         @test value(TVar(2.5)) == 2.5
 
+        # `TVar` on a TVar is the identity in both states, so generic code that asks for the
+        # element type of something already of that type neither copies nor loses the tape.
+        @test TVar(TVar(2.5)) === TVar(2.5)
+
         t = Tape([2.5])
         x = TVar(t, 1)
+        @test TVar(x) === x
         @test !isconstant(x)
         @test value(x) == 2.5
         @test isconstant(zero(x)) && value(zero(x)) == 0

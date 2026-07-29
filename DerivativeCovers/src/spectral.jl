@@ -31,6 +31,24 @@ Costs about two gradients and `O(L)` memory.
 
 `hvp!` writes into `Hv`, which shares the axes of `v`. It saves the result allocation only: the
 two sweeps still allocate their own `O(L)` working vectors, so it is not allocation-free.
+
+# Examples
+
+```jldoctest
+julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
+
+julia> x0, v = [0.5, 2.0], [1.0, 0.0];
+
+julia> round.(hvp(f, x0, v); digits=4)
+2-element Vector{Float64}:
+ 1.6487
+ 4.0
+
+julia> h = cover_hessian(f, x0).h_sum;   # the cover bounds the product
+
+julia> all(abs.(hvp(f, x0, v)) .<= h .* (h' * abs.(v)))
+true
+```
 """
 hvp(t::Tape, outidx::Integer, v::AbstractVector) =
     hvp!(similar(v, float(eltype(v))), t, outidx, v)
@@ -135,6 +153,7 @@ function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
                                 rtol::Real=cbrt(eps(float(real(eltype(h))))),
                                 rng::AbstractRNG=Xoshiro(0))
     n = t.ninputs
+    Base.require_one_based_indexing(h)
     length(h) == n ||
         throw(DimensionMismatch("h has length $(length(h)), expected $n (one per input)"))
     all(>(0), h) ||

@@ -66,6 +66,21 @@ end
     Tape(x0::AbstractVector)
 
 Create a tape seeded with the entries of `x0` as its input nodes.
+
+# Examples
+
+Recording by hand, the way [`tape_function`](@ref) does it:
+
+```jldoctest
+julia> t = Tape([0.5, 2.0]);
+
+julia> x = [TVar(t, i) for i in 1:t.ninputs];
+
+julia> y = exp(x[1]) + x[1] * x[2]^2;
+
+julia> DerivativeCovers.nnodes(t), y.idx
+(6, 6)
+```
 """
 function Tape(x0::AbstractVector)
     Base.require_one_based_indexing(x0)
@@ -97,6 +112,22 @@ Constants are closed under the elementals — an operation on constants alone fo
 and an operation mixing the two records against the recording operand with the constant as a
 coefficient — so a constant never reaches a node builder. `val` is the scalar both states carry;
 for a recording `TVar` it equals `t.vals[idx]`, which nodes never mutate once pushed.
+
+# Examples
+
+```jldoctest
+julia> t = Tape([0.5, 2.0]);
+
+julia> x = TVar(t, 1);
+
+julia> DerivativeCovers.isconstant(x), DerivativeCovers.value(x)
+(false, 0.5)
+
+julia> c = TVar(3.0);   # a constant: a value and no tape
+
+julia> DerivativeCovers.isconstant(c * TVar(4.0)), DerivativeCovers.value(c * TVar(4.0))
+(true, 12.0)
+```
 """
 struct TVar
     tape::Union{Tape,Nothing}
@@ -312,6 +343,27 @@ returns:
     given — the indices, not the values, define the outputs. A constant entry gets a node of its
     own ([`constantnode`](@ref)) and so a zero Jacobian row; a program whose outputs are *all*
     constant depends on none of its inputs and is an error.
+
+# Examples
+
+```jldoctest
+julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
+
+julia> t, outidx = tape_function(f, [0.5, 2.0]);
+
+julia> t.ninputs, outidx, t.vals[outidx]
+(2, 6, 3.648721270700128)
+
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> tr, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
+
+julia> outidxs
+3-element Vector{Int64}:
+ 4
+ 6
+ 8
+```
 """
 function tape_function(f, x0::AbstractVector)
     t = Tape(x0)

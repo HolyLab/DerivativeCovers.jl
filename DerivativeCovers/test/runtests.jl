@@ -29,6 +29,7 @@ using Aqua
 using ExplicitImports
 using ForwardDiff
 using LinearAlgebra
+using OffsetArrays
 using Random
 using Test
 
@@ -53,6 +54,7 @@ include("jacobianconverse.jl")
 include("equilibrate.jl")
 include("compose.jl")
 include("paired.jl")
+include("genericaxes.jl")
 
 @testset "DerivativeCovers.jl" begin
 
@@ -271,6 +273,24 @@ include("paired.jl")
     @testset "a variable exponent needs a positive base" begin
         @test_throws "requires a positive base" cover_hessian(x -> x[1]^x[2], [-1.7, 2.0])
         @test_throws "requires a positive base" cover_hessian(x -> (-2.0)^x[1], [1.3])
+    end
+
+    @testset "an already-tight pair needs no balancing" begin
+        # A power node's off-diagonal carries the factor (1 + z*log(x)), which a base below 1 can
+        # drive small enough that C12^2 <= C11*C22. Such a pair covers itself: each slot takes the
+        # square root of its own diagonal, and the product of the two still dominates C12, so no
+        # balancing against the parent scales is needed.
+        f = x -> x[1]^x[2]
+        x0 = [0.5, 1.6]
+        t, outidx = tape_function(f, x0)
+        C = t.Cs[outidx]
+        c11, c12, c22 = abs(C[1, 1]), abs(C[1, 2]), abs(C[2, 2])
+        @test c12^2 <= c11 * c22
+        @test DerivativeCovers.local_cover_slots(t, outidx, 1.0) == [sqrt(c11), sqrt(c22)]
+
+        res = cover_hessian(WithDiagnostics(), f, x0)
+        @test res.grad ≈ ForwardDiff.gradient(f, x0)
+        @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
     end
 
     @testset "constant powers at the origin" begin

@@ -9,6 +9,7 @@ makedocs(;
     modules=[DerivativeCovers, DerivativeCovers.Diagnostics, DerivativeCoverProblems],
     authors="Tim Holy <tim.holy@gmail.com> and contributors",
     sitename="DerivativeCovers.jl",
+    checkdocs=:all,
     format=Documenter.HTML(;
         canonical="https://HolyLab.github.io/DerivativeCovers.jl",
         edit_link="main",

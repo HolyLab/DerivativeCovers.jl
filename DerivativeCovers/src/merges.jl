@@ -141,6 +141,24 @@ A partition assigns whole *nodes* to groups, so an inner-product node's atoms (s
 on a tape with inner-product nodes is therefore the per-node quadrature merge, bounded below by
 `h_quad` from [`cover_hessian`](@ref) rather than equal to it; validity for every partition, and
 the interpolation between the sum and quadrature extremes, are unaffected.
+
+# Examples
+
+The two endpoints, on a six-node tape:
+
+```jldoctest
+julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
+
+julia> round.(cover_hybrid(f, [0.5, 2.0], 1); digits=4)   # one group: the sum merge
+2-element Vector{Float64}:
+ 4.1125
+ 2.4142
+
+julia> round.(cover_hybrid(f, [0.5, 2.0], 6); digits=4)   # a group per node: the quadrature merge
+2-element Vector{Float64}:
+ 3.1062
+ 1.7321
+```
 """
 function cover_hybrid(t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool=true,
                       rule::SplitRule=ValueSplit())

@@ -1,17 +1,21 @@
 # Elementary operations recorded on the tape. Each records its value, its first partials, and
 # its second partials; a program built from anything outside this set hits a MethodError.
 
-import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint
+import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
+             transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 
 # A TVar is a broadcast scalar: `xs ./ s` with `s::TVar` broadcasts `s` against every entry of
 # `xs` instead of falling back to Base's default `collect(s)`, which errors on a scalar TVar.
 Base.broadcastable(x::TVar) = Ref(x)
 
-# A TVar is a real scalar, so it is its own adjoint. Defining this also makes
-# `Base.promote_op(adjoint, TVar)` be `TVar`, so `v'` on a `Vector{TVar}` produces an
-# `Adjoint{TVar,...}` that the row-vector product methods below can dispatch on.
+# A TVar is a real scalar, so it is its own adjoint and its own transpose. Both are needed: they
+# make `Base.promote_op(adjoint, TVar)` and `Base.promote_op(transpose, TVar)` be `TVar`, so `v'`
+# and `transpose(v)` on a `Vector{TVar}` produce wrappers with a `TVar` element type that the
+# row-vector product methods below can dispatch on. Without them the element type is `Union{}` and
+# any wrapper entry that is itself transposed on access throws a `MethodError`.
 adjoint(x::TVar) = x
+transpose(x::TVar) = x
 
 # --- constant folding --------------------------------------------------------------------------
 # A constant TVar (`isconstant`) has a value and no tape, so it enters a node as a coefficient
@@ -209,8 +213,31 @@ function _partitioned_dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     total = length(parts) == 1 ? only(parts) : linearnode(ones(length(parts)), parts)
     return iszero(offset) ? total : total + offset
 end
-dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = linearnode(w, xs)
-dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = linearnode(x, ws)
+dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = _linear_dot(w, xs)
+dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
+
+# An inner product against constant coefficients. `linearnode` takes recording operands only, but a
+# `TVar` container can hold constants — the structural zeros and unit diagonal a triangular wrapper
+# supplies on `getindex`, or a literal placed in a container by generic code — so those fold into
+# an additive offset and only the recording entries become parents. A constant side carries no
+# second-order term, so this records the atom set the scalarized product gives.
+function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
+    any(isconstant, xs) || return linearnode(coeffs, xs)
+    idxs = eachindex(coeffs, xs)
+    rcoef, rest = Float64[], TVar[]
+    offset = 0.0
+    for j in idxs
+        x = xs[j]
+        if isconstant(x)
+            offset += coeffs[j] * value(x)
+        else
+            push!(rcoef, float(coeffs[j])); push!(rest, x)
+        end
+    end
+    isempty(rest) && return TVar(offset)   # every entry constant
+    total = linearnode(rcoef, rest)
+    return iszero(offset) ? total : total + offset
+end
 
 # Row-by-row matrix-vector product. Each row dispatches to the `dot` methods above, so a
 # constant row or a constant `x` records a `linearnode` and a mixed pair a `dotnode`.
@@ -261,7 +288,10 @@ end
 # gain is tape length: one node instead of n-1.
 function Base.sum(xs::AbstractArray{TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
-    any(isconstant, xs) || return linearnode(ones(length(xs)), vec(xs))
+    # `linearnode` pairs coefficients with terms by index, so the unit coefficients carry `v`'s
+    # axes.
+    v = vec(xs)
+    any(isconstant, xs) || return linearnode(fill!(similar(v, Float64), 1), v)
     # Constants in the sum are an additive offset, which the unary constant node carries; a sum of
     # constants alone has nothing to record and stays a constant.
     recording = [x for x in xs if !isconstant(x)]
