@@ -64,11 +64,19 @@ include("genericaxes.jl")
         # Julia 1.10 cannot distinguish public, unexported names, so public-access checks would
         # incorrectly reject Base.broadcastable.
         public_ok = VERSION >= v"1.11"
+        # `generic_matvecmul!` and `generic_matmatmul!` are where a package supplies its own
+        # product rules, and `wrap` and `MulAddMul` appear in their signatures. They are slated to
+        # become public; until the release that declares them, every version this package supports
+        # needs them excused here.
         test_explicit_imports(
             DerivativeCovers;
             all_explicit_imports_are_public = public_ok,
             all_qualified_accesses_are_public = public_ok ?
-                (; ignore = (:broadcastable,)) : false
+                (;
+                    ignore = (
+                        :broadcastable, :generic_matvecmul!, :generic_matmatmul!, :wrap, :MulAddMul,
+                    ),
+                ) : false
         )
     end
 

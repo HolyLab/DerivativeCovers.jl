@@ -27,6 +27,23 @@ function sumf_scalar(z)
     return acc
 end
 
+"""
+Matrix-matrix product written as an explicit multiply-add chain per output entry, the form
+LinearAlgebra's generic fallback records.
+"""
+function matmat_scalar(W::AbstractMatrix, X::AbstractMatrix)
+    Y = similar(W, TVar, (axes(W, 1), axes(X, 2)))
+    ks = axes(X, 1)
+    for m in axes(W, 1), n in axes(X, 2)
+        acc = W[m, first(ks)] * X[first(ks), n]
+        for k in Iterators.drop(ks, 1)
+            acc = acc + W[m, k] * X[k, n]
+        end
+        Y[m, n] = acc
+    end
+    return Y
+end
+
 "Head `dot(c0, softmax(z))`, the primitive form."
 softmax_prim(c0) = z -> dot(c0, softmax(z))
 
@@ -348,6 +365,116 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
+    end
+
+    @testset "mul! records what * records" begin
+        M = [2.0 -1.0 0.5; 0.3 1.4 -0.8; -0.6 0.2 1.1]
+        c = [0.9, -0.4, 1.3]
+        x0 = [0.4, -1.1, 0.7]
+        v0 = vec(M)
+
+        # The rule sits at LinearAlgebra's generic entry points, which a product reaches only when
+        # no specialized implementation claims it. `records` says whether this operand family
+        # arrives there. Those that do record the tape `*` records. Those LinearAlgebra keeps a
+        # `mul!` of its own for cover the same Hessian, from a tape of its choosing: how long
+        # depends on the wrapper and the Julia version, and only the cover is promised.
+        @testset "$name" for (name, mkW, mkx, z0, records) in [
+                ("dense, variable vector", v -> M, v -> v, x0, true),
+                ("dense, both variable", v -> reshape(v, 3, 3), v -> v[1:3], v0, true),
+                ("dense, constant vector", v -> reshape(v, 3, 3), v -> x0, v0, true),
+                ("adjoint", v -> M', v -> v, x0, true),
+                ("transpose, variable matrix", v -> transpose(reshape(v, 3, 3)), v -> v[1:3], v0, true),
+                ("Symmetric", v -> Symmetric(M), v -> v, x0, true),
+                ("Diagonal, variable vector", v -> Diagonal(c), v -> v, x0, true),
+                ("Diagonal, both variable", v -> Diagonal(v[1:3]), v -> v[4:6], [c; x0], true),
+                ("Diagonal, constant vector", v -> Diagonal(v[1:3]), v -> x0, [c; x0], true),
+                ("triangular, variable vector", v -> UpperTriangular(M), v -> v, x0, false),
+                (
+                    "triangular, both variable", v -> UpperTriangular(reshape(v, 3, 3)),
+                    v -> v[1:3], v0, false,
+                ),
+                ("Bidiagonal", v -> Bidiagonal(c, [0.5, -0.5], :U), v -> v, x0, false),
+                ("Tridiagonal", v -> Tridiagonal([0.5, -0.5], c, [0.3, 0.7]), v -> v, x0, false),
+            ]
+            fstar = z -> sum(abs2, mkW(z) * mkx(z))
+            fmul = z -> begin
+                W, x = mkW(z), mkx(z)
+                y = similar(x, TVar, axes(W, 1))
+                mul!(y, W, x)
+                return sum(abs2, y)
+            end
+            rs = cover_hessian(WithDiagnostics(), fstar, z0)
+            rm = cover_hessian(WithDiagnostics(), fmul, z0)
+            @test rm.grad ≈ rs.grad rtol = 1.0e-12
+            @test rm.B ≈ rs.B rtol = 1.0e-12
+            @test rm.h_sum ≈ rs.h_sum rtol = 1.0e-12
+            @test rm.h_quad ≈ rs.h_quad rtol = 1.0e-12
+
+            nmul = nnodes(first(tape_function(fmul, z0)))
+            nstar = nnodes(first(tape_function(fstar, z0)))
+            records ? (@test nmul == nstar) : (@test nmul >= nstar)
+        end
+
+        @testset "alpha and beta" begin
+            fref = z -> sum(abs2, 2.5 .* (M * z) .+ 3.0 .* z)
+            fmul = z -> begin
+                y = collect(z)
+                mul!(y, M, z, 2.5, 3.0)
+                return sum(abs2, y)
+            end
+            @test cover_hessian(fmul, x0).grad ≈ ForwardDiff.gradient(fref, x0)
+            @test cover_ratio(ForwardDiff.hessian(fref, x0), cover_hessian(fmul, x0).h_sum) <=
+                GATE
+
+            # A destination laid out over other axes than the product's is a mismatch, not a
+            # result silently relabelled.
+            t = Tape(x0)
+            xs = [TVar(t, i) for i in 1:3]
+            @test_throws "mul! destination has axes" mul!(Vector{TVar}(undef, 2), M, xs)
+        end
+    end
+
+    @testset "matrix-matrix products" begin
+        # `*` on two matrices reaches `matmatnodes` through LinearAlgebra's fallback, which
+        # allocates the destination and calls `mul!`. Each output entry is one node.
+        M = [2.0 -1.0 0.5; 0.3 1.4 -0.8; -0.6 0.2 1.1]
+        N = [0.7 0.2 -1.4; -0.9 1.1 0.3; 0.5 -0.6 0.8]
+        v0 = vec(M)
+
+        @testset "$name" for (name, mkW, mkX) in [
+                ("constant right operand", v -> reshape(v, 3, 3), v -> N),
+                ("constant left operand", v -> N, v -> reshape(v, 3, 3)),
+                ("both variable", v -> reshape(v, 3, 3), v -> reshape(v, 3, 3)),
+            ]
+            fprim = z -> sum(abs2, mkW(z) * mkX(z))
+            fscalar = z -> sum(abs2, matmat_scalar(mkW(z), mkX(z)))
+            fmul = z -> begin
+                W, X = mkW(z), mkX(z)
+                Y = similar(W, TVar, (axes(W, 1), axes(X, 2)))
+                mul!(Y, W, X)
+                return sum(abs2, Y)
+            end
+            rp = cover_hessian(WithDiagnostics(), fprim, v0)
+            rc = cover_hessian(WithDiagnostics(), fscalar, v0)
+
+            @test cover_ratio(ForwardDiff.hessian(fprim, v0), rp.h_sum) <= GATE
+            @test rp.grad ≈ rc.grad rtol = 1.0e-12
+            @test rp.B ≈ rc.B rtol = 1.0e-12
+            @test rp.h_sum ≈ rc.h_sum rtol = 1.0e-12
+            @test rp.h_quad ≈ rc.h_quad rtol = 1.0e-12
+            @test cover_hessian(WithDiagnostics(), fmul, v0).h_sum == rp.h_sum
+
+            # Nine inputs, one node per product entry, one per `abs2`, and the sum — against the
+            # multiply-add chain the scalarized twin spends three nodes per entry on.
+            @test nnodes(first(tape_function(fprim, v0))) == 9 + 9 + 9 + 1
+            @test nnodes(first(tape_function(fscalar, v0))) > 2 * nnodes(
+                first(tape_function(fprim, v0))
+            )
+        end
+
+        t = Tape([0.4, -1.1, 0.7])
+        xs = [TVar(t, i) for i in 1:3]
+        @test_throws "W has axes" mul!(Matrix{TVar}(undef, 3, 3), reshape(xs, 3, 1), M)
     end
 
     @testset "covariance — softmax and layernorm" begin
