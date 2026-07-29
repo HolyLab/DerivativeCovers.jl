@@ -33,11 +33,13 @@ end
 """
     Tape
 
-A Wengert list recorded while a scalar program runs on [`TVar`](@ref) inputs.
+A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs.
 
-Node `k` stores its value `vals[k]`, its parent indices `parents[k]`, the first partials
+The first `ninputs` nodes represent the function inputs. Later nodes are appended in topological
+order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
+`parents[k]`, first partials
 `ds[k][i] = ∂φ_k/∂v_{p_i}`, and the second partials `Cs[k]`, a symmetric `∂²φ_k/∂v_{p_i}∂v_{p_j}`
-in one of three forms:
+in one of four forms:
 
   - a dense `Matrix{Float64}`, for unary and binary elementals;
   - a [`PairedPartials`](@ref), for an inner-product node (see [`dotnode`](@ref)): parent slots
@@ -50,9 +52,7 @@ in one of three forms:
     true second partials are not recorded, only the declared rank-1 bound
     `abs(C[i, j]) <= s[i]*s[j]`.
 
-The first `ninputs` nodes are the program's inputs; they carry no parents and empty partials, as
-does a constant output node ([`constantnode`](@ref)). Nodes are appended as the program executes,
-so they are in topological order: every parent index is smaller than the node's own index.
+Input nodes and constant output nodes have no parents and no second partials.
 """
 struct Tape
     vals::Vector{Float64}
@@ -105,15 +105,12 @@ nnodes(t::Tape) = length(t.vals)
     TVar(t::Tape, idx::Integer)
     TVar(c::Real)
 
-A scalar in a program being recorded, in one of two states. A *recording* `TVar` refers to node
-`idx` of the tape `t`, and every elemental applied to it appends a node. A *constant* `TVar`
-([`isconstant`](@ref)) carries a value and no tape: it is what `eltype(x)(c)` and `zero(eltype(x))`
-produce in generic numeric code, where a typed literal is asked for before any tape is in reach.
+A scalar used while recording a function.
 
-Constants are closed under the elementals — an operation on constants alone folds to a constant,
-and an operation mixing the two records against the recording operand with the constant as a
-coefficient — so a constant never reaches a node builder. `val` is the scalar both states carry;
-for a recording `TVar` it equals `t.vals[idx]`, which nodes never mutate once pushed.
+`TVar(t, idx)` refers to node `idx` on `t`. `TVar(c)` creates a constant with a value but no
+tape; this supports typed literals such as `zero(eltype(x))` in generic numerical code.
+Operations involving only constants are folded immediately. Operations that mix a constant and
+a recorded variable store the constant as a coefficient.
 
 # Examples
 
@@ -341,16 +338,17 @@ end
     tape_function(f, x0::AbstractVector) -> (tape, outidx)      # scalar output
     tape_function(f, x0::AbstractVector) -> (tape, outidxs)     # vector output
 
-Record the program `f` evaluated at `x0`. `f` must accept a vector of [`TVar`](@ref)s and use only
-the elementals overloaded for `TVar`. Returns the [`Tape`](@ref) and, depending on what `f`
-returns:
+Record `f` at `x0` and return its [`Tape`](@ref) and output node index or indices.
+
+`f` must accept a vector of [`TVar`](@ref)s and use operations supported by `TVar`. The second
+return value is:
 
   - a single `TVar` output: the `Int` index `outidx` of the output node;
   - an `AbstractVector` of `TVar`s: the `Vector{Int}` of output-node indices `outidxs`, one per
-    entry. Entries may be input nodes or repeat a node (a duplicated output), and both are kept as
-    given — the indices, not the values, define the outputs. A constant entry gets a node of its
-    own ([`constantnode`](@ref)) and so a zero Jacobian row; a program whose outputs are *all*
-    constant depends on none of its inputs and is an error.
+    entry. Input nodes and repeated outputs are preserved. A constant output receives its own
+    node and therefore contributes a zero Jacobian row.
+
+A function whose outputs are all constant raises an error.
 
 # Examples
 

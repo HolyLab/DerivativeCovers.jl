@@ -16,15 +16,16 @@
 """
     VarianceCover
 
-The hard and variance channels of one taped program, as returned by [`cover_variance`](@ref).
+Result of [`cover_variance`](@ref).
 
-- `grad`: the gradient.
-- `h_sum`: the sum merge — a guaranteed cover of the Hessian.
-- `h_var`: the variance-channel estimate of the quadrature merge. It satisfies
-  `h_var <= h_quad <= h_sum` coordinatewise and is **not itself a cover**: it drops the
-  covariances between reconvergent contributions, so `abs(H[i,j])` may exceed `h_var[i]*h_var[j]`.
-- `severity`: the per-coordinate ratio `h_sum ./ h_var`, at least 1, and large exactly on the
-  coordinates whose cover is dominated by reconvergence rather than by Hessian magnitude.
+- `grad`: gradient of the scalar function.
+- `h_sum`: certified sum-merge Hessian cover.
+- `h_var`: variance estimate of the quadrature merge. This is **not a certified cover**.
+- `severity`: coordinatewise ratio `h_sum ./ h_var`. Larger values indicate more overlap from
+  reconvergent paths.
+
+The estimates satisfy `h_var <= h_quad <= h_sum` coordinatewise. Because `h_var` drops
+covariances between reconvergent contributions, it need not bound the Hessian.
 """
 struct VarianceCover
     grad::Vector{Float64}
@@ -116,17 +117,14 @@ end
     cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit()) -> VarianceCover
     cover_variance(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> VarianceCover
 
-The hard sum-merge cover and the variance-channel estimate of the quadrature merge, for the taped
-program with output node `outidx` or for the scalar program `f` at `x0`, together with their
-per-coordinate ratio (see [`dependency_severity`](@ref)).
+Compute a certified sum-merge cover and an inexpensive estimate of the quadrature merge.
 
-Only `h_sum` is a guaranteed cover; `h_var` may fall below the Hessian it estimates. The pair
-costs one adjoint sweep and one two-channel reverse sweep — `O(L)` time and memory, independent
-of the input dimension — so the estimate is available wherever the sum merge is, unlike the exact
-quadrature merge.
+Pass either a tape and scalar output node, or a function and evaluation point. The returned
+[`VarianceCover`](@ref) contains the gradient, both channels, and their coordinatewise ratio.
 
-`rule` selects the [`SplitRule`](@ref) behind the per-node covers; both channels are seeded from
-the same splits. `check` verifies the per-node cover invariants.
+Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Computing both costs
+`O(L)` time and memory, independent of the number of inputs. `rule` selects the
+[`SplitRule`](@ref), and `check=true` verifies the local covering conditions.
 
 # Examples
 

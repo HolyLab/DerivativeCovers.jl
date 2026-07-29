@@ -33,17 +33,17 @@ end
 """
     JacobianCover
 
-Asymmetric rank-1 covers of a Jacobian, as returned by [`cover_jacobian`](@ref). For the fixed
-output weights `a`, each `b` satisfies `a_k * b_j ≥ |J_kj|` for every entry:
+Result of [`cover_jacobian`](@ref). Each pair `(a, b)` satisfies
+`a[k] * b[j] >= abs(J[k,j])`.
 
-- `a`: the output weights the covers were built for (`ones(m)` by default).
-- `b_sum`: the sum merge `b_j = ∑_k Ũ_kj/a_k` — the loosest, obtainable at `O(L)` from one
-  reverse sweep (see [`cover_jacobian_hybrid`](@ref) with one group).
+- `a`: output weights; `ones(m)` by default.
+- `b_sum`: sum merge, computed in one `O(L)` reverse sweep.
 - `b_quad`: the quadrature merge `b_j = √(∑_k (Ũ_kj/a_k)²)`.
-- `b_max`: the exact minimal `b` for this `a`, `b_j = max_k Ũ_kj/a_k`. Always
-  `b_max ≤ b_quad ≤ b_sum` coordinatewise.
-- `Utilde`: the `m × n` surrogate `Ũ` (see [`jacobian_surrogate`](@ref)), a diagnostic.
-- `m`, `n`: output count and input count.
+- `b_max`: smallest valid `b` for the fixed `a` and the surrogate `Utilde`.
+- `Utilde`: `m × n` absolute-sensitivity surrogate satisfying `Utilde >= abs.(J)`.
+- `m`, `n`: numbers of outputs and inputs.
+
+The merges satisfy `b_max <= b_quad <= b_sum` coordinatewise.
 """
 struct JacobianCover
     a::Vector{Float64}
@@ -59,14 +59,15 @@ end
     cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check=true) -> JacobianCover
     cover_jacobian(r, x0::AbstractVector; a=nothing, check=true) -> JacobianCover
 
-Asymmetric rank-1 covers of the Jacobian of a vector-valued program: either a tape `t` with output
-nodes `outidxs`, or a program `r` mapping a vector of [`TVar`](@ref)s to a vector of `TVar`s,
-evaluated at `x0`. Returns a [`JacobianCover`](@ref) carrying the sum, quadrature, and exact
-(max) merges of the absolute sensitivities for the fixed output weights `a`.
+Compute asymmetric rank-1 covers of a vector-valued function's Jacobian.
 
-`a` must be strictly positive with one entry per output; `nothing` (the default) uses `ones(m)`.
-Every merge is a valid cover for *any* positive `a` — the choice of `a` trades tightness between
-the output and input sides but never validity. `check` verifies that `b_max` covers the surrogate.
+Pass either a tape and output nodes, or a function and evaluation point. The result contains sum,
+quadrature, and max merges of the absolute sensitivities. For each returned `b`,
+`a[k] * b[j] >= abs(J[k,j])`.
+
+`a` must contain one strictly positive weight per output; the default is `ones(m)`. Changing `a`
+redistributes scale between the output and input factors without affecting validity.
+`check=true` verifies the max merge against the absolute-sensitivity surrogate.
 
 # Examples
 
@@ -126,19 +127,17 @@ end
     cover_jacobian_hybrid(t::Tape, outidxs, groups::AbstractVector{<:Integer}; a=nothing, check=true) -> b
     cover_jacobian_hybrid(t::Tape, outidxs, ngroups::Integer; a=nothing, check=true) -> b
 
-Group-max merge of the absolute sensitivities: partition the `m` outputs into groups, sum
-`Ũ_kj/a_k` within each group, and combine the groups by `max`. The group partial sums come from a
-`maximum(groups)`-channel absolute-value reverse sweep seeded `1/a_k` at the output nodes, so the
-cost is `O(G*L)` without ever forming the `m × n` surrogate.
+Compute a Jacobian cover by grouping outputs.
 
-`b_j = max_g ∑_{k ∈ group g} Ũ_kj/a_k` is a valid cover for every partition: each group sum already
-dominates every one of its terms `Ũ_kj/a_k`, and the max preserves that. One group reproduces the
-sum merge `b_sum`; one output per group reproduces the exact merge `b_max`; intermediate partitions
-interpolate, tightening as the partition is refined. An integer `ngroups` selects the cyclic
-partition `1 + (k-1) % ngroups` over the outputs.
+`groups[k]` assigns output `k` to a group. Absolute sensitivities are summed within each group,
+then the group totals are combined with `max`. Alternatively, pass `ngroups` to assign outputs
+cyclically.
 
-`a` is the fixed output weights (`nothing` uses `ones(m)`). `check` verifies `b` covers the
-surrogate.
+Every grouping is valid. One group reproduces `b_sum`; one group per output reproduces `b_max`.
+The cost is `O(G * L)` for `G = maximum(groups)`, without forming the full surrogate.
+
+`a` supplies the output weights and defaults to `ones(m)`. `check=true` verifies the result
+against the surrogate.
 
 # Examples
 

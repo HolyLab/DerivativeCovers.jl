@@ -6,12 +6,12 @@
 [![Coverage](https://codecov.io/gh/HolyLab/DerivativeCovers.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/HolyLab/DerivativeCovers.jl)
 [![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
-Rank-1 covers of a program's Hessian at about twice the cost of a gradient.
+Compute certified rank-1 bounds on a program's Hessian at about twice the cost of a gradient.
 
-A cover is a nonnegative vector `h` with `abs(H[i,j]) <= h[i]*h[j]` for every entry of the
-Hessian `H`, obtained without ever forming `H`. The covers are deterministic and guaranteed —
-not sampled, not estimated — and they are covariant under rescaling of the inputs and of the
-objective, so they carry the units of the problem rather than of the way it was written down.
+A cover is a nonnegative vector `h` such that `abs(H[i,j]) <= h[i] * h[j]` for every entry of
+the Hessian `H`. DerivativeCovers computes `h` without forming `H`. The result is deterministic
+and certified rather than sampled or estimated. It also transforms consistently when the inputs
+or objective are rescaled.
 
 ## Installation
 
@@ -22,8 +22,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 
 ## Quick start
 
-A scalar program is recorded by running it on `TVar` inputs; nothing about the function has to
-be declared in advance:
+Pass a scalar function and an evaluation point to `cover_hessian`:
 
 ```julia
 using DerivativeCovers
@@ -36,25 +35,24 @@ c.h_sum   # 4-element Vector{Float64}: [2.833, 1.145, 3.633, 0.612]
 c.grad    # the gradient comes along for free
 ```
 
-One forward pass and one paired reverse sweep, `O(L)` in the tape length. The cover then bounds
-things the Hessian would have told you — an entry by `h[i]*h[j]`, the spectral radius by
-`norm(h)^2`, a Hessian-vector product by `h .* (h'*abs.(v))`:
+The computation uses one forward pass and one paired reverse sweep, for `O(L)` work on a tape of
+length `L`. A cover bounds individual Hessian entries, the spectral radius, and
+Hessian-vector products:
 
 ```julia
 v = [1.0, 0.0, -1.0, 0.5]
-hvp(f, x0, v)                            # the exact product, one more sweep
-all(abs.(hvp(f, x0, v)) .<= c.h_sum .* (c.h_sum'abs.(v)))   # true
+hvp(f, x0, v)                                      # the exact product, one more sweep
+all(abs.(hvp(f, x0, v)) .<= c.h_sum .* (c.h_sum' * abs.(v)))  # true
 ```
 
-`cover_jacobian`, `cover_nls`, and `cover_variance` are the entry points for vector-valued
-programs, least-squares losses, and the variance-channel estimate. `cover_hybrid` trades cost
-against tightness through a group count, and a `SplitRule` selects which cover within the valid
-family a node contributes.
+Use `cover_jacobian` for vector-valued functions, `cover_nls` for nonlinear least-squares
+objectives, and `cover_variance` for a cheaper, uncertified estimate. `cover_hybrid` lets you
+trade computation for a tighter cover, while `SplitRule` controls how individual nodes select
+among equally valid local covers.
 
 ## Documentation
 
-The [rendered documentation](https://HolyLab.github.io/DerivativeCovers.jl/dev/) covers the entry
-points, the quantities defined on a cover (`cover_ratio`, `tightness`, `equilibrate`, …), and the
-`Diagnostics` submodule, which supplies controlled distortions of a cover and the task-level
-consumers that reveal what a distortion costs. The programs those instruments are exercised on
-live in the companion package [DerivativeCoverProblems](../DerivativeCoverProblems).
+See the [rendered documentation](https://HolyLab.github.io/DerivativeCovers.jl/dev/) for the full
+API, cover-quality utilities such as `cover_ratio` and `tightness`, and tools for studying how
+cover looseness affects downstream algorithms. Reusable test problems live in the companion
+package [DerivativeCoverProblems](../DerivativeCoverProblems).

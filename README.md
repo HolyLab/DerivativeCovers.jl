@@ -1,15 +1,15 @@
 # DerivativeCovers.jl
 
-This repository holds two packages, each in its own subdirectory:
+This repository contains two Julia packages:
 
-- [**DerivativeCovers**](DerivativeCovers) — rank-1 covers of a program's Hessian at about twice
-  the cost of a gradient.
-- [**DerivativeCoverProblems**](DerivativeCoverProblems) — parameterized families of programs,
-  with reference Hessians and Jacobians, for measuring how loose a cover is.
+- [**DerivativeCovers**](DerivativeCovers) computes certified rank-1 bounds on Hessians and
+  Jacobians without forming those matrices.
+- [**DerivativeCoverProblems**](DerivativeCoverProblems) provides parameterized test problems
+  with reference Hessians and Jacobians for evaluating cover quality.
 
-The corpus is a separate package because it depends on nothing in the library: its programs are
-written in generic Julia and are taped by virtue of that. Keeping them apart means a user of the
-covers never loads the fixtures, and the corpus can be versioned and cited on its own.
+The test problems live in a separate package so users of DerivativeCovers do not need to install
+or load them. The problems are written in generic Julia and have no dependency on the main
+package.
 
 Documentation for both is built from `DerivativeCovers/docs`.
 

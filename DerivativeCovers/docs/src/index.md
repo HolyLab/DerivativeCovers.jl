@@ -13,7 +13,8 @@ DerivativeCovers
 
 ## Installation
 
-The package is not registered, and lives in a subdirectory of its repository:
+DerivativeCovers is not yet registered. Install it directly from its subdirectory in the
+repository:
 
 ```julia
 using Pkg
@@ -22,7 +23,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 
 ## Quick start
 
-Record a scalar program by running it on [`TVar`](@ref) inputs, then ask for a cover:
+Call [`cover_hessian`](@ref) with a scalar function and the point where you want to evaluate it:
 
 ```jldoctest quickstart
 julia> f(x) = exp(x[1]) + sum(x[i] * x[i+1] for i in 1:length(x)-1);
@@ -39,8 +40,9 @@ julia> round.(c.h_sum; digits=4)
  0.6124
 ```
 
-`c.h_sum` is a nonnegative vector `h` with `abs(H[i,j]) <= h[i]*h[j]` for every entry of the
-Hessian `H`, which was never formed. The gradient comes along for free:
+The result contains a nonnegative vector `h` such that
+`abs(H[i,j]) <= h[i] * h[j]` for every entry of the Hessian `H`. The Hessian itself is never
+formed. The same reverse sweep also computes the gradient:
 
 ```jldoctest quickstart
 julia> round.(c.grad; digits=4)
@@ -51,37 +53,35 @@ julia> round.(c.grad; digits=4)
   0.3
 ```
 
-That is the whole "do" path: one forward pass and one paired reverse sweep, `O(L)` in the tape
-length. [`cover_jacobian`](@ref), [`cover_nls`](@ref), and [`cover_variance`](@ref) are the
-corresponding entry points for vector-valued programs, least-squares losses, and the
-variance-channel estimate.
+This computation takes one forward pass and one paired reverse sweep, or `O(L)` work for a tape
+of length `L`. Use [`cover_jacobian`](@ref) for vector-valued functions, [`cover_nls`](@ref) for
+nonlinear least-squares objectives, and [`cover_variance`](@ref) for the cheaper, uncertified
+variance estimate.
 
 ## Using a cover
 
-A cover is a bound, so what you do with it is bound something. `h[i]*h[j]` bounds a Hessian
-entry, `norm(h)^2` bounds the spectral radius, and the products `h .* d` bound the change in the
-gradient under a step `d`. [`hvp`](@ref), [`jvp`](@ref), and [`vjp`](@ref) supply the exact
-matrix-free products alongside, each at one sweep.
+If `h` covers a Hessian `H`, then `h[i] * h[j]` bounds `abs(H[i,j])`, `norm(h)^2` bounds the
+spectral radius, and `h .* (h' * abs.(d))` bounds `abs.(H * d)`. The package can also compute
+exact matrix-free products with [`hvp`](@ref), [`jvp`](@ref), and [`vjp`](@ref), each in one
+additional sweep.
 
-Two knobs change what you get:
+Two options control the result:
 
-- **Tightness against cost.** [`cover_hybrid`](@ref) and [`cover_jacobian_hybrid`](@ref) take an
-  integer group count that interpolates between the cheap sum merge and the tighter quadrature
-  merge, at `O(G*L)`.
-- **Which cover within the valid family.** A node with an active off-diagonal admits a
-  one-parameter family of rank-1 covers and nothing about the node selects within it; a
-  [`SplitRule`](@ref) supplies the scale reference. [`ValueSplit`](@ref) (the default) uses parent
-  value magnitudes, [`SensitivitySplit`](@ref) uses input-weighted sensitivities.
+- **Cost versus tightness.** [`cover_hybrid`](@ref) and
+  [`cover_jacobian_hybrid`](@ref) divide contributions into `G` groups. Larger `G` usually gives
+  a tighter cover and costs `O(G * L)`.
+- **How local covers are scaled.** Some nodes admit a family of equally valid rank-1 covers. A
+  [`SplitRule`](@ref) chooses among them. [`ValueSplit`](@ref), the default, uses the magnitudes
+  of parent values; [`SensitivitySplit`](@ref) uses input-weighted sensitivities.
 
-The quantities defined *on* a cover — [`cover_ratio`](@ref), [`tightness`](@ref),
-[`equilibrate`](@ref), and the rest — are public but unexported, and live on the
-[Quantities and extension points](@ref) page.
+Utilities such as [`cover_ratio`](@ref), [`tightness`](@ref), and [`equilibrate`](@ref) are
+public but not exported. Call them with the `DerivativeCovers.` prefix; see
+[Quantities and extension points](@ref).
 
 ## Studying a cover
 
-The looseness of a cover is itself an object of study, and the package carries the instruments for
-measuring it. [`WithDiagnostics`](@ref) asks [`cover_hessian`](@ref) for the elementwise bound `B`
-and the alternative merges alongside the cover, so a ratio can be computed directly:
+Pass [`WithDiagnostics`](@ref) to [`cover_hessian`](@ref) to inspect the elementwise bound `B`
+and alternative merges:
 
 ```jldoctest quickstart
 julia> d = cover_hessian(WithDiagnostics(), f, x0);
@@ -90,23 +90,21 @@ julia> round(DerivativeCovers.cover_ratio(d.B, d.h_sum); digits=4)
 0.4495
 ```
 
-This form costs `O(n*L)` time and `O(n^2)` memory — it forms the very matrix the production path
-exists to avoid — so it is opt-in and never the default.
+Diagnostics cost `O(n * L)` time and `O(n^2)` memory because they form an explicit matrix.
+They are therefore opt-in.
 
-Beyond that, [Diagnostics](@ref) supplies controlled distortions of a cover and the task-level
-consumers that reveal what a distortion costs, and the companion package
-`DerivativeCoverProblems` supplies the [Problem families](@ref) those instruments are exercised
-on.
+The [Diagnostics](@ref) module can perturb a cover in controlled ways and measure the effect on
+downstream computations. The companion `DerivativeCoverProblems` package provides the
+[Problem families](@ref) used in these experiments.
 
 ## How this documentation is organized
 
-The three reference pages are the package's three-tier name partition, rendered:
+The reference is divided by API status:
 
-- This page documents the exported names — everything `using DerivativeCovers` brings into scope.
-- [Quantities and extension points](@ref) documents the names that are `public` but unexported:
-  reached by qualification, and covered by the same compatibility promise.
-- [Internals](@ref) documents everything else. These names are reachable and documented, but
-  carry no promise: they are the sweep machinery a reimplementation is free to restructure.
+- This page lists exported names.
+- [Quantities and extension points](@ref) lists public, unexported names. These are part of the
+  supported API and require the `DerivativeCovers.` prefix.
+- [Internals](@ref) lists implementation details, which may change without notice.
 
 ## Recording a program
 

@@ -1,27 +1,22 @@
 """
     DerivativeCovers
 
-Rank-1 covers of a program's Hessian at about twice the cost of a gradient.
+Compute certified rank-1 bounds on Hessians and Jacobians without forming either matrix.
 
-A scalar program is recorded on a [`Tape`](@ref) by running it on [`TVar`](@ref) inputs;
-[`cover_hessian`](@ref) then returns nonnegative vectors `h` with `abs(H[i,j]) <= h[i]*h[j]`,
-without ever forming the Hessian `H`. The covers are deterministic, guaranteed, and exactly
-covariant under rescaling of the inputs (`h -> inv(D)*h` when `x -> D*x`) and of the objective
-(`h -> sqrt(c)*h` when `f -> c*f`). Input covariance holds as stated for the default
-[`ValueSplit`](@ref) rule; under [`SensitivitySplit`](@ref) it holds when the input weights are
-rescaled alongside (`w -> D*w`).
+A Hessian cover is a nonnegative vector `h` satisfying
+`abs(H[i,j]) <= h[i] * h[j]` for every entry of `H`. [`cover_hessian`](@ref) records a scalar
+function on a [`Tape`](@ref) and computes such a cover, together with the gradient, in `O(L)`
+work for a tape of length `L`. The result is deterministic and certified.
 
-`using DerivativeCovers` brings in the entry points and the types they return, and nothing else.
-The quantities defined on a cover (`cover_ratio`, `tightness`, `equilibrate`, …) and the surface
-for adding a new elemental (`pushnode!`, `unarynode`, …) are public but unexported, so they are
-reached by qualification. Tape methods for `MatrixCovers.support_components`,
-`MatrixCovers.gramcover`, and `MatrixCovers.gramcover!` are defined here, but those functions
-belong to MatrixCovers: calling them unqualified takes `using MatrixCovers` as well.
+The default [`ValueSplit`](@ref) rule is covariant under rescaling: if `x -> D*x`, then
+`h -> inv(D)*h`; if `f -> c*f`, then `h -> sqrt(c)*h`.
+[`SensitivitySplit`](@ref) has the same input covariance when its weights are rescaled as
+`w -> D*w`.
 
-The [`DerivativeCovers.Diagnostics`](@ref) submodule serves the study of cover quality rather than
-its use: it supplies the instruments that measure what a loose cover costs a consumer of it. The
-programs those instruments are exercised on live in the companion package
-`DerivativeCoverProblems`, which depends on nothing here.
+`using DerivativeCovers` imports the main entry points and result types. Public utilities such as
+`cover_ratio`, `tightness`, and `equilibrate` are not exported; call them with the
+`DerivativeCovers.` prefix. The [`DerivativeCovers.Diagnostics`](@ref) submodule provides tools
+for studying how cover looseness affects downstream algorithms.
 """
 module DerivativeCovers
 

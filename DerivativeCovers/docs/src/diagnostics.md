@@ -4,8 +4,12 @@ CurrentModule = DerivativeCovers
 
 # Diagnostics
 
-Controlled distortions of a cover, and the task-level consumers that reveal what the distortion
-costs. Load with `using DerivativeCovers.Diagnostics`.
+This module provides tools for perturbing covers in controlled ways and measuring the effect on
+downstream algorithms. Load it with:
+
+```julia
+using DerivativeCovers.Diagnostics
+```
 
 ```@index
 Pages = ["diagnostics.md"]
