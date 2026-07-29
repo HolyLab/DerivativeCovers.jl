@@ -172,6 +172,22 @@
         # The column axis indexes the tape's inputs, which are 1-based, so a mismatch there is a
         # dimension error rather than something to carry through.
         @test_throws DimensionMismatch offsetcopy(W) * xs
+
+        # `mul!` is index-matched to its destination, and the matrix-matrix rule carries the row
+        # axis of one operand and the column axis of the other.
+        yo = OffsetArray(Vector{TVar}(undef, 3), -2)
+        @test axes(mul!(yo, Wrows, xs), 1) == axes(Wrows, 1)
+        @test value.(collect(yo)) == value.(collect(W * xs))
+        @test_throws "mul! destination has axes" mul!(Vector{TVar}(undef, 3), Wrows, xs)
+
+        Xcols = OffsetArray(reshape(xs, 3, 1), 0, -2)
+        Yo = OffsetArray(Matrix{TVar}(undef, 3, 1), -2, -2)
+        @test axes(mul!(Yo, Wrows, Xcols)) == (axes(Wrows, 1), axes(Xcols, 2))
+        @test value.(vec(collect(Yo))) == value.(collect(W * xs))
+
+        # Out of place, LinearAlgebra sizes the destination one-based, so an offset operand is a
+        # mismatch there rather than a result relabelled onto axes it was not computed over.
+        @test_throws "mul! destination has axes" Wrows * Xcols
     end
 
 end

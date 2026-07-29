@@ -58,6 +58,47 @@
         @test_throws "no node on any tape" DerivativeCovers.noderef(TVar(1.0))
     end
 
+    @testset "identity operations record no node" begin
+        t = Tape([2.5, -0.0])
+        x = TVar(t, 1)
+        for y in (x + 0, 0 + x, x - 0, x * 1, 1 * x, x / 1)
+            @test y === x
+        end
+        # A shift too small to register leaves the value, and so every derivative, alone.
+        @test x + 1.0e-300 === x
+        @test nnodes(t) == 2
+
+        # A scaling is not an identity just because it leaves the value alone: the factor is the
+        # node's first partial, and here it is 5.
+        z = TVar(t, 2)
+        scaled = z * 5.0
+        @test value(scaled) == value(z)
+        @test scaled !== z
+        # Adding a positive zero to a negative zero does change the value.
+        @test z + 0.0 !== z
+        @test nnodes(t) == 4
+
+        # A scaling by a non-unit constant does record, and records as a linear node: its
+        # curvature is zero, which is the empty second-partial matrix rather than a 1×1 zero.
+        @test isempty(t.Cs[scaled.idx])
+
+        # An accumulator seeded with `zero(eltype(x))`, the shape generic numerical code takes,
+        # records the tape the direct expression does.
+        seeded = function (x)
+            acc = zero(eltype(x))
+            for i in eachindex(x)
+                acc = acc + x[i]^2
+            end
+            return acc
+        end
+        direct = x -> x[1]^2 + x[2]^2 + x[3]^2
+        x0 = [1.5, -2.0, 0.5]
+        @test nnodes(first(tape_function(seeded, x0))) ==
+            nnodes(first(tape_function(direct, x0)))
+        @test cover_hessian(WithDiagnostics(), seeded, x0).h_sum ==
+            cover_hessian(WithDiagnostics(), direct, x0).h_sum
+    end
+
     @testset "objective seeded with one(eltype(x))" begin
         f = function (x)
             s = one(eltype(x))

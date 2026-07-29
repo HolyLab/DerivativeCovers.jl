@@ -3,6 +3,9 @@
 import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
     transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
+# The in-place rules below extend LinearAlgebra's generic product entry points, which are reached
+# by qualification rather than by name.
+import LinearAlgebra
 
 # Treat TVar as a scalar during broadcasting.
 Base.broadcastable(x::TVar) = Ref(x)
@@ -37,13 +40,32 @@ end
 -(x::TVar) = isconstant(x) ? TVar(-value(x)) : unarynode(x, -value(x), -1.0, 0)
 
 # --- TVar with a numeric constant, folded into a unary node ---
-+(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) + c) : unarynode(x, value(x) + c, 1.0, 0)
+# An operation that leaves the operand alone returns it rather than recording a node. Generic
+# numerical code seeds accumulators with `zero(T)` and scales by unit factors, so these identities
+# are common enough to lengthen a tape appreciably, and the node they would record has unit first
+# partial and no curvature: dropping it leaves every derivative unchanged.
+#
+# An additive shift qualifies whenever it leaves the value alone, which also declines the case
+# where it would turn a negative zero positive. A scaling qualifies only for a unit factor: the
+# coefficient is the node's first partial, so a product that happens to leave the value alone --
+# any factor at all, when the value is zero -- still has a derivative to record.
+function +(x::TVar, c::Real)
+    isconstant(x) && return TVar(value(x) + c)
+    v = value(x)
+    return v + c === v ? x : unarynode(x, v + c, 1.0, 0)
+end
 +(c::Real, x::TVar) = x + c
--(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) - c) : unarynode(x, value(x) - c, 1.0, 0)
+function -(x::TVar, c::Real)
+    isconstant(x) && return TVar(value(x) - c)
+    v = value(x)
+    return v - c === v ? x : unarynode(x, v - c, 1.0, 0)
+end
 -(c::Real, x::TVar) = isconstant(x) ? TVar(c - value(x)) : unarynode(x, c - value(x), -1.0, 0)
-*(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) : unarynode(x, value(x) * c, float(c), 0)
+*(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) :
+    isone(c) ? x : unarynode(x, value(x) * c, float(c), 0)
 *(c::Real, x::TVar) = x * c
-/(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) : unarynode(x, value(x) / c, 1 / c, 0)
+/(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) :
+    isone(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
 # TVar is not a Number, so define scalar-array multiplication explicitly.
 *(x::TVar, c::AbstractArray{<:Real}) = x .* c
 *(c::AbstractArray{<:Real}, x::TVar) = c .* x
@@ -252,6 +274,73 @@ end
 *(W::AbstractTriangular{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
 *(W::AbstractTriangular{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 *(W::AbstractTriangular{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
+
+# Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
+# per output row. `mul!` is the only route to it. A `*` method of its own would tie with
+# LinearAlgebra's algebra of lazily wrapped vectors, which are `AbstractMatrix`es too, and
+# LinearAlgebra's fallback `*` already allocates a destination and calls `mul!`.
+function matmatnodes(W::AbstractMatrix, X::AbstractMatrix)
+    axes(W, 2) == axes(X, 1) ||
+        throw(DimensionMismatch("W has axes $(axes(W)), X has axes $(axes(X))"))
+    return TVar[dot(view(W, m, :), view(X, :, n)) for m in axes(W, 1), n in axes(X, 2)]
+end
+
+# --- in-place products -------------------------------------------------------------------------
+# `mul!` records what the corresponding `*` records. Left to LinearAlgebra's generic implementation
+# it accumulates each output from scalar `*` and `+`, spending a node per multiply-add and three
+# more per output on the typed zero it seeds the accumulator with, so an `m × n` matrix-vector
+# product costs `O(m*n)` nodes where the row-by-row rule costs `O(m)`.
+#
+# The rules attach to `generic_matvecmul!` and `generic_matmatmul!`, the entry points LinearAlgebra
+# routes a product to once it has decided no specialized implementation applies, rather than to
+# `mul!` itself. Structured wrappers own `mul!` methods, and which ones they own varies by Julia
+# version, so a rule on `mul!` would need an entry per wrapper type just to break the ties. These
+# entry points sit below all of that: one method per product shape, and nothing to tie with. The
+# wrapper LinearAlgebra strips from an operand arrives as the character `tA`, and `wrap` restores
+# it, so the recorders see the matrix the caller passed.
+#
+# The wrappers that keep a `mul!` of their own -- triangular, `Bidiagonal`, `Tridiagonal` -- record
+# their scalarized form instead. That covers the same Hessian from a longer tape; their `*` methods
+# above still record one node per output row.
+
+# Write a recorded product into `y`. The destination's axes must be the product's: LinearAlgebra's
+# out-of-place `*` sizes its matrix destination one-based, so an offset operand reaching `mul!`
+# that way is a mismatch rather than a result silently relabelled.
+function storeproduct!(y::AbstractArray{TVar}, z::AbstractArray, alpha::Number, beta::Number)
+    axes(y) == axes(z) ||
+        throw(DimensionMismatch("mul! destination has axes $(axes(y)), product has axes $(axes(z))"))
+    iszero(beta) || return y .= alpha .* z .+ beta .* y
+    # A unit `alpha` is the 3-argument call; multiplying through would record a node per output.
+    return isone(alpha) ? (y .= z) : (y .= alpha .* z)
+end
+
+recordmatvec!(y, tA, W, x, alpha, beta) =
+    storeproduct!(y, matvecnodes(LinearAlgebra.wrap(W, tA), x), alpha, beta)
+recordmatmat!(Y, tA, tB, W, X, alpha, beta) =
+    storeproduct!(Y, matmatnodes(LinearAlgebra.wrap(W, tA), LinearAlgebra.wrap(X, tB)), alpha, beta)
+
+# Julia 1.11 replaced the trailing `MulAddMul` of both entry points with a scalar pair.
+@static if VERSION >= v"1.11"
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
+
+    LinearAlgebra.generic_matmatmul!(
+        Y::AbstractMatrix{TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        alpha::Number, beta::Number
+    ) = recordmatmat!(Y, tA, tB, W, X, alpha, beta)
+else
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
+
+    LinearAlgebra.generic_matmatmul!(
+        Y::AbstractMatrix{TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        add::LinearAlgebra.MulAddMul
+    ) = recordmatmat!(Y, tA, tB, W, X, add.alpha, add.beta)
+end
 
 # Record a sum as one linear node instead of n-1 addition nodes.
 function Base.sum(xs::AbstractArray{TVar})

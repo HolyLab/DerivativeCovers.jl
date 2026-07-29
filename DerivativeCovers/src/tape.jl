@@ -45,9 +45,9 @@ in one of four forms:
   - a [`PairedPartials`](@ref), for an inner-product node (see [`dotnode`](@ref)): parent slots
     are ordered `(w_1, ..., w_q, x_1, ..., x_q)` and the only nonzero entries are the cross terms
     `∂²y/∂w_j∂x_j = 1`;
-  - an empty `Matrix{Float64}(undef, 0, 0)`, for a node whose first partials are constant in the
-    inputs (the input nodes themselves, and linear n-ary nodes such as [`linearnode`](@ref)):
-    it contributes no second-order term to any cover;
+  - an empty `Matrix{Float64}(undef, 0, 0)`, for a node with no second-order term: the input nodes
+    themselves, linear n-ary nodes such as [`linearnode`](@ref), and any elemental whose recorded
+    curvature is zero. It contributes nothing to any cover;
   - a [`CoveredPartials`](@ref), for a declared sub-map output (see [`submapnode`](@ref)): the
     true second partials are not recorded, only the declared rank-1 bound
     `abs(C[i, j]) <= s[i]*s[j]`.
@@ -203,10 +203,15 @@ constantnode(t::Tape, c::Real) =
     unarynode(x::TVar, val, d, c) -> TVar
 
 Record a node `φ(x)` with value `val`, `φ'(x) = d`, and `φ''(x) = c`.
+
+A zero `c` is stored as the empty second-partial matrix (see [`Tape`](@ref)) rather than as a
+`1×1` zero: the node contributes no second-order term either way, and the empty form says so
+without a matrix to allocate and scan.
 """
 function unarynode(x::TVar, val, d, c)
     t, i = noderef(x)
-    return pushnode!(t, val, [i], [float(d)], fill(float(c), 1, 1))
+    C = iszero(c) ? Matrix{Float64}(undef, 0, 0) : fill(float(c), 1, 1)
+    return pushnode!(t, val, [i], [float(d)], C)
 end
 
 """
