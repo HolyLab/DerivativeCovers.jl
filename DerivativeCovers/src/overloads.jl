@@ -1,29 +1,19 @@
-# Elementary operations recorded on the tape. Each records its value, its first partials, and
-# its second partials; a program built from anything outside this set hits a MethodError.
+# Operations supported by TVar recording.
 
 import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
     transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 
-# A TVar is a broadcast scalar: `xs ./ s` with `s::TVar` broadcasts `s` against every entry of
-# `xs` instead of falling back to Base's default `collect(s)`, which errors on a scalar TVar.
+# Treat TVar as a scalar during broadcasting.
 Base.broadcastable(x::TVar) = Ref(x)
 
-# A TVar is a real scalar, so it is its own adjoint and its own transpose. Both are needed: they
-# make `Base.promote_op(adjoint, TVar)` and `Base.promote_op(transpose, TVar)` be `TVar`, so `v'`
-# and `transpose(v)` on a `Vector{TVar}` produce wrappers with a `TVar` element type that the
-# row-vector product methods below can dispatch on. Without them the element type is `Union{}` and
-# any wrapper entry that is itself transposed on access throws a `MethodError`.
+# Defining scalar adjoint and transpose keeps row-vector wrappers typed as TVar.
 adjoint(x::TVar) = x
 transpose(x::TVar) = x
 
 # --- constant folding --------------------------------------------------------------------------
-# A constant TVar (`isconstant`) has a value and no tape, so it enters a node as a coefficient
-# rather than as a parent. Every method below that takes a TVar therefore begins by disposing of
-# the constant cases: `unfold` strips a constant to its value, which sends the operation to the
-# `Real` method that records against the operand still carrying a tape, and `fold` restores the
-# TVar type when both operands were constants and no node was recorded at all. Constants are thus
-# closed under the elementals, which is what lets a `Vector{TVar}` hold them.
+# Constants have no tape node. `unfold` exposes their values before dispatch; `fold` wraps a
+# constant-only result back into TVar so heterogeneous numeric code remains type-stable.
 unfold(x::TVar) = isconstant(x) ? value(x) : x
 fold(x::TVar) = x
 fold(v::Real) = TVar(v)
@@ -54,8 +44,7 @@ end
 *(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) : unarynode(x, value(x) * c, float(c), 0)
 *(c::Real, x::TVar) = x * c
 /(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) : unarynode(x, value(x) / c, 1 / c, 0)
-# A TVar scales an array of constants entrywise, as any scalar does. `*` on a scalar and an array
-# is only defined for `Number`s, and a TVar is a tape node rather than a Number.
+# TVar is not a Number, so define scalar-array multiplication explicitly.
 *(x::TVar, c::AbstractArray{<:Real}) = x .* c
 *(c::AbstractArray{<:Real}, x::TVar) = c .* x
 function /(c::Real, x::TVar)
@@ -65,11 +54,8 @@ function /(c::Real, x::TVar)
 end
 
 # --- values of the element type obtained from numbers ---
-# `zero(eltype(x))`, `one(eltype(x))` and `eltype(x)(c)` are how generic numeric code asks for a
-# typed literal, and `convert` is how one lands in a container of that type. Each returns a
-# constant TVar: a value with no tape, which the arithmetic above folds into a node on first
-# contact with a recording TVar. The type-level forms have no tape they could refer to, so
-# constants are what makes these definable at all.
+# Generic code obtains typed literals through zero, one, conversion, and constructors. These
+# return constant TVars because no tape is available at the type level.
 Base.zero(::Type{TVar}) = TVar(0.0)
 Base.one(::Type{TVar}) = TVar(1.0)
 Base.oneunit(::Type{TVar}) = TVar(1.0)
@@ -79,11 +65,8 @@ Base.oneunit(x::TVar) = TVar(1.0)
 Base.convert(::Type{TVar}, c::Real) = TVar(c)
 
 # --- power with a constant exponent ---
-# A leading factor of zero makes the whole term vanish identically: `x^0` is constant and `x^1`
-# is linear, so the derivatives those factors multiply are zero at every `v`. Applying the factor
-# before the power keeps that true at `v == 0`, where the power itself is singular and the product
-# would otherwise be `0 * Inf`. A nonzero factor leaves a genuine singularity singular, as
-# `sqrt` and `inv` are at zero.
+# Apply zero derivative factors before singular powers so x^0 and x^1 remain constant and linear
+# at x = 0. Genuine singularities remain singular.
 function ^(x::TVar, p::Real)
     isconstant(x) && return TVar(value(x)^p)
     v = value(x)
@@ -167,13 +150,8 @@ end
 abs2(x::TVar) = isconstant(x) ? TVar(value(x)^2) : unarynode(x, value(x)^2, 2 * value(x), 2)
 
 # --- inner products and matrix-vector products ---
-# A variable-times-variable product records one inner-product node per output entry; a
-# constant-coefficient product records one linear node per output entry, carrying no
-# second-order term (see `dotnode`/`linearnode` in tape.jl).
-# A `Vector{TVar}` may hold constants (`eltype(x)[...]`), and a side that is entirely constant is
-# a coefficient vector: it records as a linear node, exactly as a `Vector{Float64}` would. The node
-# forms are per-vector, not per-entry, so an operand that mixes the two states is split by pair
-# instead (`_partitioned_dot`).
+# Variable-variable products use inner-product nodes; constant coefficients use linear nodes.
+# Mixed TVar vectors are partitioned by pair.
 function dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     wconst, xconst = count(isconstant, ws), count(isconstant, xs)
     wconst == 0 && xconst == 0 && return dotnode(ws, xs)
@@ -182,12 +160,8 @@ function dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     return _partitioned_dot(ws, xs)
 end
 
-# An inner product whose operands mix constant and recording TVars, split by the state of each
-# pair: pairs recording on both sides form one inner-product node, pairs with one constant side
-# form a linear node against those constants as coefficients, and pairs constant on both sides an
-# additive offset. A pair with a constant side has no second-order term, so it contributes no atom
-# under any reading, and the additions that recombine the parts are transparent to every sweep:
-# the atom set is the one the scalarized product gives, for at most three nodes instead of 2q.
+# Partition a mixed dot product into a bilinear node, a linear node, and a constant offset. This
+# preserves the scalarized atom set with at most three nodes.
 function _partitioned_dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
     idxs = eachindex(ws, xs)
     isempty(idxs) && throw(ArgumentError("cannot record an empty inner product"))
@@ -218,11 +192,7 @@ end
 dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = _linear_dot(w, xs)
 dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
 
-# An inner product against constant coefficients. `linearnode` takes recording operands only, but a
-# `TVar` container can hold constants — the structural zeros and unit diagonal a triangular wrapper
-# supplies on `getindex`, or a literal placed in a container by generic code — so those fold into
-# an additive offset and only the recording entries become parents. A constant side carries no
-# second-order term, so this records the atom set the scalarized product gives.
+# Fold constant entries into an offset; only recording entries become parents of the linear node.
 function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
     any(isconstant, xs) || return linearnode(coeffs, xs)
     idxs = eachindex(coeffs, xs)
@@ -253,10 +223,7 @@ end
 *(W::AbstractMatrix{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
 *(W::AbstractMatrix{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 
-# Disambiguate against LinearAlgebra's generic `Adjoint`/`Transpose` row-vector and `Diagonal`
-# matrix-vector products, which are `AbstractMatrix` and so tie with the three methods above:
-# an adjoint/transpose row vector times a vector is the same dot product `dot` already records,
-# and a diagonal matrix times a vector is the elementwise product the scalar `*` already records.
+# Resolve dispatch ties with LinearAlgebra's AbstractMatrix methods.
 *(
     W::Union{Adjoint{TVar, <:AbstractVector}, Transpose{TVar, <:AbstractVector}},
     x::AbstractVector{TVar}
@@ -270,9 +237,7 @@ end
     x::AbstractVector{TVar}
 ) = dot(parent(W), x)
 
-# Elementwise product, not a row-by-row one: routing a `Diagonal` through `matvecnodes` would
-# record n dense linear nodes at O(n²) cost. Broadcasting expands a length-1 or otherwise
-# mismatched operand rather than rejecting it, so the axes must be checked here.
+# A diagonal product is elementwise; the explicit axes check prevents broadcast expansion.
 function diagvecnodes(W::Diagonal, x::AbstractVector)
     axes(W, 2) == axes(x, 1) ||
         throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
@@ -283,17 +248,12 @@ end
 *(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
 *(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = diagvecnodes(W, x)
 
-# LinearAlgebra's triangular matrix-vector product likewise ties with the three `AbstractMatrix`
-# methods. Triangular structure needs no special handling: `matvecnodes` reads each row through
-# `getindex`, which supplies the structural zeros and the unit diagonal.
+# Triangular wrappers need only dispatch disambiguation; getindex supplies their structural values.
 *(W::AbstractTriangular{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
 *(W::AbstractTriangular{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 *(W::AbstractTriangular{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
 
-# A sum of TVars records as one linear n-ary node (see `linearnode`) rather than a chain of
-# n-1 binary additions: additions relay adjoints and absolute sweeps with unit weight and
-# contribute no atoms, so every cover quantity agrees with the chained form to roundoff. The
-# gain is tape length: one node instead of n-1.
+# Record a sum as one linear node instead of n-1 addition nodes.
 function Base.sum(xs::AbstractArray{TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
     # `linearnode` pairs coefficients with terms by index, so the unit coefficients carry `v`'s

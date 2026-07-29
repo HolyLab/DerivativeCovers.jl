@@ -1,6 +1,4 @@
-# Values of the element type built from numbers. `one(eltype(x))`, `eltype(x)(c)` and the
-# containers they populate are the generic-code idioms for typed constants, so a program using
-# them must tape and cover; a constant TVar is what makes that possible.
+# Typed constants used by generic code must remain compatible with recording.
 
 @testset "constants.jl" begin
 
@@ -13,8 +11,7 @@
         @test value(zero(TVar)) == 0
         @test value(TVar(2.5)) == 2.5
 
-        # `TVar` on a TVar is the identity in both states, so generic code that asks for the
-        # element type of something already of that type neither copies nor loses the tape.
+        # Converting an existing TVar must preserve its identity and tape.
         @test TVar(TVar(2.5)) === TVar(2.5)
 
         t = Tape([2.5])

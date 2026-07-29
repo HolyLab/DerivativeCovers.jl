@@ -1,21 +1,17 @@
-# Gauss–Newton / least-squares covers.
+# Covers for nonlinear least-squares objectives.
 #
 # For a residual map r: Rⁿ → Rᵐ the least-squares loss f = ½∑ₖ rₖ² has Hessian
 #
 #     H = JᵀJ + ∑ₖ rₖ ∇²rₖ,     J = ∂r/∂x,
 #
-# the Gauss–Newton term plus the residual-weighted curvature. Taping f directly makes each
-# residual a node of an ordinary scalar program, so no multi-output tape is needed: the square
-# node rₖ² is unary with second partial 2, and on the loss tape its adjoint is exactly ½, so its
-# local cover contributes one atom of weight √(½·2) = 1 seeded at rₖ. That atom's cover vector is
-# the residual's absolute sensitivity ũ_{rₖ} (Bauer's first-order graph), so combining the
-# residual atoms in quadrature — each residual its own group in the hybrid merge — reproduces
+# The first term is Gauss–Newton; the second is residual-weighted curvature. On the loss tape,
+# each residual square contributes a unit-weight atom seeded at the residual. Combining these
+# atoms in quadrature gives
 #
 #     h_gn[j] = √(∑ₖ ũ_{rₖ,j}²) ≥ √(diag(JᵀJ))[j],
 #
-# a symmetric cover of JᵀJ and the certified analog of the Gauss–Newton (GGN) diagonal. The
-# remaining nonlinear nodes (the ∑ₖ rₖ ∇²rₖ term) ride along in one further group, so the full
-# merge stays a valid cover of the whole Hessian while isolating the Gauss–Newton contribution.
+# a symmetric cover of JᵀJ. All residual-curvature nodes share one additional group, preserving a
+# cover of the full Hessian while keeping the Gauss–Newton contribution separate.
 
 """
     NLSCover
@@ -141,8 +137,7 @@ function cover_nls(
     n, N = t.ninputs, nnodes(t)
     m = length(residx)
 
-    # Residual absolute sensitivities ũ_{rₖ}: one channel per residual, seeded 1 at its node, in a
-    # single vector-mode absolute reverse sweep. Reading the input columns gives the m×n Ũ.
+    # One reverse channel per residual produces the m×n absolute-sensitivity surrogate.
     Theta = zeros(m, N)
     for k in 1:m
         Theta[k, residx[k]] = 1.0

@@ -1,10 +1,7 @@
-# Tests for the `cancellation` generator in problems.jl: the cancel/aligned pair shares every
-# node value and every elemental-data magnitude, differing only in the sign of the two constants
-# that multiply the quartet squares, and the closed forms for `H` and its minimal cover hold
-# exactly.
+# The aligned and cancelling programs share node values and derivative magnitudes. Only coefficient
+# signs differ, isolating the effect of cancellation.
 #
-# Calls are qualified `Problems.cancellation` because `programs.jl`'s own `cancellation(x)` test
-# program (unrelated, included earlier) shadows the bare name in this file's scope.
+# Qualify the generator because programs.jl defines an unrelated fixture with the same name.
 
 @testset "cancellation.jl" begin
 

@@ -1,8 +1,5 @@
-# Tests for the Gauss–Newton / least-squares covers of nls.jl. The residual maps are synthetic
-# and small, and ground truth is ForwardDiff's exact Hessian, Jacobian, and gradient of the loss
-# `f = ½∑ₖ rₖ²`. The two claims specific to this construction are that the Gauss–Newton cover
-# `h_gn` is a valid cover of `JᵀJ` sitting under the full cover `h`, and that on linear residuals
-# `h_gn` reproduces `√(diag(JᵀJ))` exactly.
+# Compare least-squares covers with ForwardDiff. The Gauss–Newton cover must bound J'J, remain
+# below the full-Hessian cover, and equal sqrt.(diag(J'J)) for linear residuals.
 
 "Loss `f = ½∑ₖ rₖ²` of a residual map, as a plain scalar program for ForwardDiff."
 nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))

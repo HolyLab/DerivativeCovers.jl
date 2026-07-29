@@ -1,6 +1,4 @@
-# Composite array operations built from the elementals the package overloads, used as fixtures by
-# arrayops.jl. Each runs both on AbstractVector{TVar}, recording onto the tape, and on plain
-# numeric vectors, so the same function serves as its own ForwardDiff-comparable twin.
+# Generic array fixtures used with both TVar recording and ForwardDiff.
 
 """
     softmax(x::AbstractVector)

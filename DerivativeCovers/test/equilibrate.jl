@@ -1,8 +1,5 @@
-# Tests for the first-order matrix-free products (`jvp`, `vjp`) and the two-sided equilibration
-# built on them. Ground truth for the products is `ForwardDiff.jacobian`; the properties worth
-# pinning for the equilibration are that a valid cover maps to entries bounded by 1, that the
-# matrix-free singular value approaches the dense one strictly *from below* (so an unguarded shrink
-# would be invalid), and that the shrink inherits validity.
+# Compare matrix-free Jacobian products with ForwardDiff. Equilibration tests verify entrywise
+# bounds, convergence of the singular-value estimate from below, and validity after shrinking.
 
 @testset "equilibration" begin
 

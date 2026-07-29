@@ -1,14 +1,9 @@
-# Tests for the first-order (Jacobian) cancellation pair `Problems.jacobian_cancellation`. The
-# family's claims: the aligned/cancel variants share every tape magnitude (so every cover built
-# from magnitudes is identical on the two), the surrogate equals |J_aligned| exactly and is
-# rank 1, and the balanced max-merge therefore pays exactly the per-column cancellation index
-# kappa_j = |J_aligned|/|J_cancel| against the cancel member's minimal cover — no magnitude
-# method can pay less, and the sum merge pays the output-multiplicity factor on top.
+# The aligned and cancelling Jacobian fixtures share all tape magnitudes. These tests isolate the
+# unavoidable cost of signed cancellation for magnitude-only covers.
 
 @testset "jacobianconverse.jl" begin
 
-    # A cancel/aligned pair must share every random draw, so each member gets a fresh,
-    # identically seeded rng.
+    # Separate identically seeded RNGs keep both variants on the same random draws.
     pair(; seed = 1, kwargs...) =
         (
         Problems.jacobian_cancellation(8; aligned = false, rng = MersenneTwister(seed), kwargs...),

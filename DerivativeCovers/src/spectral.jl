@@ -1,10 +1,7 @@
-# Hessian-vector products, and the spectral shrink they enable.
+# Hessian-vector products and spectral shrinking.
 #
-# A cover h defines the scaled Hessian Hhat = D^-1 H D^-1 with D = diag(h), whose entries are all
-# bounded by 1 exactly when h covers H. Since every entry of a symmetric matrix is bounded by its
-# spectral norm, lambda = norm(Hhat, 2) turns any valid cover into the valid cover sqrt(lambda)*h,
-# which is tighter whenever lambda < 1 — that is, whenever the cover is loose in the spectral
-# sense rather than merely entrywise.
+# For D = diag(h), a valid cover makes every entry of Ĥ = D⁻¹HD⁻¹ at most one in magnitude.
+# Therefore √norm(Ĥ, 2) h is also valid and is tighter when the scaled spectral norm is below one.
 
 """
     hvp(t::Tape, outidx::Integer, v::AbstractVector) -> Hv
@@ -87,8 +84,7 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
                 vbardot[p] += ds[i] * ak
             end
         elseif C isa PairedPartials
-            # Slot j pairs with slot q+j and with nothing else, so the curvature term is one
-            # lookup per slot rather than a scan of the (2q)^2 entries.
+            # PairedPartials has one partner per slot; avoid scanning structural zeros.
             qh = C.q
             for j in 1:qh
                 pw, px = ps[j], ps[qh + j]

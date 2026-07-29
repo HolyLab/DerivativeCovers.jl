@@ -1,11 +1,9 @@
-# Jacobian-vector and vector-Jacobian products, and the two-sided equilibration they enable.
+# Matrix-free Jacobian products and two-sided equilibration.
 #
-# A Jacobian cover (a, b) defines the equilibrated Jacobian Jhat = diag(a)^-1 J diag(b)^-1, whose
-# entries are all bounded by 1 exactly when (a, b) covers J. Since every entry of a matrix is
-# bounded by its spectral norm, sigma = opnorm(Jhat, 2) turns any valid cover into the valid cover
-# (sqrt(sigma)*a, sqrt(sigma)*b), which is tighter whenever sigma < 1 — that is, whenever the cover
-# is loose in the spectral sense rather than merely entrywise. This is the first-order twin of the
-# spectral shrink in `spectral.jl`, with the same converges-from-below discipline.
+# For a valid cover `(a, b)`, every entry of Ĵ = diag(a)⁻¹J diag(b)⁻¹ is at most one in
+# magnitude. Scaling both cover factors by √opnorm(Ĵ) preserves validity and tightens the cover
+# when the norm is below one. The matrix-free estimate converges from below, so shrinking requires
+# a safety factor.
 
 """
     jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) -> Jv
@@ -47,7 +45,7 @@ function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v
 
     dv = zeros(N)
     copyto!(view(dv, 1:n), v)
-    # Tape order is topological, so every parent's tangent is final before its child reads it.
+    # Forward topological order finalizes parent tangents before use.
     for k in (n + 1):N
         acc = 0.0
         for (i, p) in enumerate(t.parents[k])
@@ -111,7 +109,7 @@ function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, 
     for k in eachindex(u, outidxs)
         vbar[outidxs[k]] += u[k]
     end
-    # Tape order is topological, so N:-1:1 fully accumulates vbar[k] before k feeds its parents.
+    # Reverse topological order finalizes each adjoint before propagation.
     for k in N:-1:1
         vk = vbar[k]
         vk == 0 && continue

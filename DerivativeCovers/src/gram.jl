@@ -1,12 +1,7 @@
-# Symmetric covers of a Gram matrix J'*W*J read off an asymmetric Jacobian cover
-# (a, b) of J, for a J that lives on a tape rather than in a materialized surrogate.
+# Gram-matrix covers derived from an asymmetric Jacobian cover.
 #
-# The construction, the roundoff inflation, and the coupling of components by a
-# general W all live in MatrixCovers; the tape forms here only supply the support
-# components (via the O(L) route that never forms Ũ) and delegate. The matrix forms
-# `gramcover(a, b, Ũ[, w or W])` are MatrixCovers' own; this package adds Tape methods to
-# the same functions but does not export them, so reaching the matrix forms unqualified
-# needs `using MatrixCovers`.
+# MatrixCovers implements the construction. These methods derive support components from a tape
+# in O(L), without forming Ũ, and delegate the remaining work.
 
 """
     gramcover(a, b, t::Tape, outidxs) -> s

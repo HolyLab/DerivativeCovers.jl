@@ -1,6 +1,4 @@
-# The paired sweep must reproduce, in one reverse pass, both outputs of the constructive
-# production path: the exact gradient (signed channel, vs `adjoints` and ForwardDiff) and the
-# sum-merge cover (absolute channel, vs `local_covers` + `abs_reverse`).
+# The fused signed/absolute sweep must match both ForwardDiff and the constructive cover path.
 
 @testset "paired.jl" begin
 

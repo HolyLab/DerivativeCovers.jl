@@ -1,17 +1,11 @@
-# The variance channel: a deterministic estimate of the quadrature merge, at the cost of one sweep.
+# A one-sweep estimate of the quadrature merge.
 #
-# The quadrature merge is sqrt(diag(M)) with M = sum_k s_k s_k', and evaluating it exactly needs
-# the forward sensitivities, hence O(n*L) time and memory. Propagate the *squares* of the seeds
-# through a reverse sweep whose coefficients are the squared partials, and every path contribution
-# accumulates in quadrature rather than summing: that is precisely what treating the reconvergent
-# adjoints as uncorrelated amounts to. The dropped covariances are nonnegative, because every seed
-# and every coefficient in the sweep is, so the channel underestimates diag(M) wherever paths
-# reconverge and is exact when the linearized graph is a tree.
+# The exact quadrature merge needs O(nL) forward sensitivities. Instead, propagate squared seeds
+# through squared partials so path contributions combine in quadrature. This drops positive
+# covariance when paths reconverge and is exact on a linearized tree.
 #
-# The estimate is therefore *not* a cover. Its value is comparative: run it alongside the hard
-# sum-merge channel in the same traversal and the per-coordinate ratio of the two measures how
-# much of each coordinate's cover is overlap between reconvergent contributions rather than
-# genuine Hessian magnitude.
+# The result is not a cover. Comparing it with the certified sum channel estimates how much of
+# that cover comes from overlapping paths.
 
 """
     VarianceCover

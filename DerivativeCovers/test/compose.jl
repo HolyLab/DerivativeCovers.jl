@@ -1,13 +1,10 @@
-# Tests for compositional covers: the function-level composition rules and the declared-sub-map
-# primitive. Ground truth throughout is ForwardDiff on the plain composite. The contracts pinned:
-# first order through a declared call is exact (gradients, Jacobians), the covers built through
-# it are valid on the true Hessian conditional on a declaration the tests audit directly, hvp
-# fails fast, and the declared path is scale-covariant.
+# Composition tests compare with ForwardDiff and audit every declared sub-map bound. They verify
+# exact first derivatives, valid Hessian covers, scale covariance, and the intentional absence of
+# Hessian-vector products for declared curvature.
 
 @testset "compositional covers" begin
 
-    # A sub-map with nonlinear, transcendental, and exactly linear outputs (row 4 of S must be
-    # exactly zero), and a scalar consumer of its outputs. Both run on TVar and plain vectors.
+    # Row 4 is exactly linear, so its declared curvature cover must be zero.
     Fsub = v -> [v[1] * v[2], sin(v[3]) + v[1], exp(0.3 * v[2]) * v[3], v[1] + v[2] + v[3]]
     gout = y -> y[1] * y[4] + exp(y[2]) + y[3]^2
     x0 = [0.7, -0.4, 1.1]

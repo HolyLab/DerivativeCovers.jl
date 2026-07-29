@@ -1,7 +1,4 @@
-# Tests for the inner-product primitives `dotnode`/`linearnode` (recorded via `LinearAlgebra.dot`
-# and `*` on vectors/matrices of `TVar`s). The core claim is parity with the scalarized graph: a
-# primitive program and its hand-scalarized twin must agree exactly (to roundoff) on every
-# quantity `cover_hessian` and `cover_variance` produce.
+# Inner-product and linear nodes must match hand-scalarized graphs in every cover quantity.
 
 "f = sum_j w[j]*x[j], written as scalar multiply-adds in evaluation order."
 function scalar_dot(w, x)

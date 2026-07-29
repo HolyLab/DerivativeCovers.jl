@@ -1,10 +1,8 @@
-# Merges of the per-node covers that interpolate between the two extremes of `cover_hessian`.
+# Grouped merges interpolate between sum and quadrature covers.
 #
-# Writing s_k for node k's cover vector, the sum merge takes sum_k s_k and the quadrature merge
-# takes sqrt(sum_k s_k.^2). Partition the nodes into G groups, sum within a group and combine
-# groups in quadrature, and the two extremes become the endpoints G = 1 and one-node-per-group.
-# Every group's partial sum comes out of one channel of a vector-mode absolute-value reverse
-# sweep, so the cost is O(G*L) rather than the O(n*L) of the exact quadrature merge.
+# Sum node covers within each of G groups, then combine the group totals in quadrature. One group
+# gives the sum merge; one group per node gives the per-node quadrature merge. A vector-mode
+# reverse sweep computes all group totals in O(G L).
 
 """
     cyclic_partition(t::Tape, ngroups::Integer) -> groups
@@ -162,8 +160,7 @@ function cover_hybrid(
     return _cover_hybrid(t, adjoints(t, outidx), groups; check, rule)
 end
 
-# The merge itself, taking the adjoints as an argument: a caller that needs the gradient too
-# (`cover_nls`) passes the sweep it already ran instead of paying for a second one.
+# Accept precomputed adjoints so callers such as cover_nls can reuse their gradient sweep.
 function _cover_hybrid(
         t::Tape, vbar::AbstractVector, groups::AbstractVector{<:Integer};
         check::Bool = true, rule::SplitRule = ValueSplit()

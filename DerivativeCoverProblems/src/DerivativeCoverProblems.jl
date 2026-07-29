@@ -99,8 +99,7 @@ end
 
 # ---- program-building helpers ---------------------------------------------------------------
 #
-# `TVar` has no `zero`, and none can be defined: a tape node exists only once it is recorded.
-# So every accumulation starts from a term rather than from an additive identity.
+# Start accumulations from a term so generic recorded scalars need no detached additive identity.
 
 "Sum the entries of `v` using only the binary `+` of its element type. `v` must be non-empty."
 function _sum(v)
@@ -264,19 +263,12 @@ const _DAG_BINARY = (:add, :sub, :mul)
 # Probability that a node is unary rather than binary.
 const _DAG_PUNARY = 0.4
 
-# Node magnitudes are held inside [1/_DAG_BAND, _DAG_BAND] by a normalizing `:scale` node. Both
-# ends matter: `:mul` and `:sqr` chains run away to overflow from above, and — the silent failure
-# — collapse to an exactly zero derivative from below, since squaring a sub-unit value a dozen
-# times underflows and leaves a program that is constant to second order. Normalizing is linear,
-# so unlike a `tanh` squash it leaves the second-order structure of the program intact.
+# Keep node magnitudes in [1/_DAG_BAND, _DAG_BAND]. Multiplication chains otherwise overflow or
+# underflow to derivative-dead constants. Linear normalization preserves second-order structure.
 const _DAG_BAND = 1.0e3
 
-# tanh must see a tame input: `1 - tanh(v)^2` evaluates to exactly zero in Float64 for
-# |v| ≳ 19, and a derivative-dead node erases its whole subtree from the gradient and the
-# Hessian — at sharing = 0, where the program's tail is a single unary chain, one saturated
-# tanh zeroes every derivative of the program. The value band above is far too wide to
-# prevent this, so tanh inputs beyond this band are first normalized to magnitude 1, where
-# tanh has healthy first and second derivatives.
+# Float64 tanh has an exactly zero derivative for large inputs. Normalize inputs outside this
+# narrower band to keep both first and second derivatives active.
 const _DAG_TANH_BAND = 2.0
 
 """
@@ -389,14 +381,10 @@ function random_dag(
 
     ncurved = 0                                 # ops with a nonzero second derivative
     for _ in 1:nops
-        # A tree whose unconsumed nodes have dwindled to one can only keep growing as a
-        # single unary chain, and derivative factors compound multiplicatively along a
-        # chain — hundreds of them wander into under- or overflow and erase (or explode)
-        # every derivative of the program. Stop instead, once the program carries some
-        # curvature; with reuse (`sharing > 0`) the frontier repopulates and no chain forms.
+        # Without sharing, a one-node frontier can only grow a numerically unstable unary chain.
+        # Stop once the graph already contains curvature.
         sharing == 0 && length(frontier) == 1 && ncurved > 0 && break
-        # Without reuse a binary op needs two unconsumed nodes; when they run out, go unary
-        # rather than break the tree property that `sharing = 0` promises.
+        # Preserve the tree property when fewer than two unconsumed nodes remain.
         binary_ok = sharing > 0 || length(frontier) >= 2
         if !binary_ok || rand(rng) < _DAG_PUNARY
             op = rand(rng, _DAG_UNARY)
@@ -417,8 +405,7 @@ function random_dag(
     end
 
     if ncurved == 0
-        # An entirely linear draw has an identically zero Hessian and poses no covering
-        # problem at all; square one unconsumed node so every generated program has curvature.
+        # Ensure every generated problem has nonzero curvature.
         p = _take_parent!(rng, frontier, length(vals), 0.0)
         finish!(emit!(:sqr, [p], Float64[], vals[p]^2))
     end
@@ -790,7 +777,7 @@ function jacobian_cancellation(
     s = ifelse.(rand(rng, ns) .< 0.5, -1.0, 1.0)
     w = s .* x0S
     if all(>(0), w) || all(<(0), w)
-        # Balancing sum(alpha .* w) = 0 with alpha > 0 needs w of mixed sign; flip the weakest.
+        # Positive balancing weights require w to contain both signs.
         i = argmin(abs.(w))
         s[i] = -s[i]
         w[i] = -w[i]
@@ -802,8 +789,7 @@ function jacobian_cancellation(
     pvec = psign .* pmag
     pvec[supp] .= s .* pmag[supp]         # on the support, sign(p_j) must match the forms
 
-    # Positive magnitudes with sum(alpha .* w) = 0: draw freely, then rescale the negative-w
-    # part so the two half-sums balance exactly. Strictly positive by construction.
+    # Rescale one sign group so positive alpha satisfies sum(alpha .* w) = 0.
     function draw_balanced()
         alpha = (abs.(randn(rng, ns)) .+ 0.1) .* exp.(sigma .* randn(rng, ns))
         Sp, Sm = w .> 0, w .< 0
@@ -817,9 +803,8 @@ function jacobian_cancellation(
         a = s .* draw_balanced()
         b = s .* draw_balanced()
         ab = a .+ b
-        # Entrywise split c = t .* ab, d = (1 .- t) .* ab with c'x0S = 0: since ab'x0S = 0
-        # already, any t with sum((t .- 1/2) .* ab .* x0S) = 0 works; project a free draw and
-        # shrink it into (0.05, 0.95) so both halves keep the column sign.
+        # Split ab into c and d while preserving c'x0S = d'x0S = 0. Keep t away from the
+        # endpoints so both halves retain the column sign.
         mvec = ab .* x0S
         u = rand(rng, ns) .* 0.5 .- 0.25
         u .-= (sum(u .* mvec) / sum(abs2, mvec)) .* mvec
@@ -857,8 +842,7 @@ function jacobian_cancellation(
         return (delta * px + dot(ghat, x)) .* q
     end
 
-    # Both closed forms share the delta-term literally, so off-support entries (ghat = 0) are
-    # bit-identical between the pair and the cancellation index there is exactly 1.
+    # Share the delta term literally so off-support entries are bit-identical.
     J = aligned ? delta .* q * pvec' .+ q * ghat' : delta .* q * pvec'
 
     name = (aligned ? "aligned" : "cancel") * " jac n=$n nout=$nout m=$m delta=$delta"

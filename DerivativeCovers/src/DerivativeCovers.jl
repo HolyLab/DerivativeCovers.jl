@@ -25,10 +25,7 @@ using Random: AbstractRNG, Xoshiro
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
-# The entry points a caller needs after `using DerivativeCovers`: the tape, the four cover
-# constructors and the two that trade cost against tightness, the modes that select how much
-# `cover_hessian` returns, the types they return, the split rules that parameterize them, and the
-# matrix-free products.
+# Main entry points and result types.
 export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid
@@ -37,14 +34,8 @@ export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
-# Addressable by qualification, and covered by the same compatibility promise as the exports,
-# but kept out of the top namespace. Two kinds of name qualify: the contracts outside code
-# implements or records against, and the quantities that are defined independently of how any
-# sweep computes them. Neither can be disturbed by a reimplementation of the sweeps themselves,
-# which is why they carry the promise and the sweep machinery does not.
-#
-# `public` is 1.11+ syntax and would be a parse error on the 1.10 given in `[compat]`, so the
-# declaration goes through `eval` where the parser never sees the keyword.
+# Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
+# so construct the declaration dynamically on Julia 1.11 and later.
 @static if VERSION >= v"1.11"
     # Tape construction and the invariants a new elemental must satisfy.
     eval(

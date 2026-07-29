@@ -1,6 +1,4 @@
-# Summary displays for the recorded program and the cover results. A `TVar` holds a reference to
-# the whole `Tape`, so the field-by-field default would dump every node of the program each time
-# a single scalar is inspected; these keep the output proportional to the summary, not the tape.
+# Compact displays prevent a TVar from printing its entire tape.
 
 Base.show(io::IO, t::Tape) = print(io, "Tape(", nnodes(t), " nodes, ", t.ninputs, " inputs)")
 

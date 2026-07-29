@@ -1,20 +1,16 @@
-# Rank-1 covers of a program's Hessian, computed from its tape without forming the Hessian.
+# Rank-1 Hessian covers computed from a tape.
 #
 # A symmetric cover of a symmetric matrix H is a nonnegative vector h with |H[i,j]| <= h[i]h[j].
 # The construction rests on the exact identity
 #
 #     H = sum_k vbar_k * sum_{i,j in P_k} (d²φ_k/dv_i dv_j) * ∇v_i (∇v_j)',
 #
-# where node k = φ_k(v_{P_k}) has reverse-mode adjoint vbar_k and ∇v_i is the total gradient of
-# intermediate v_i with respect to the inputs. Bounding every factor in absolute value gives the
-# elementwise bound B >= |H|; a per-node rank-1 cover s_k with s_k s_k' dominating node k's
-# contribution to B then yields covers of H under either merge (see [`cover_hessian`](@ref)).
+# Here vbar_k is the reverse-mode adjoint of node k and ∇v_i is an intermediate's input
+# gradient. Taking absolute values gives B >= |H|. Each node contributes a rank-1 cover of its
+# term in B; the merge determines how those local covers are combined.
 #
-# An inner-product node (`dotnode` in tape.jl) has a block-diagonal second-partial matrix
-# (`PairedPartials`) that splits into q independent 2x2 blocks, one per parent pair; it is
-# covered by q rank-1 atoms rather than one, and the quadrature merge combines atoms rather than
-# whole nodes (see `atom_slots`). A linear n-ary node (`linearnode`) carries an empty
-# second-partial matrix and contributes no atom at all.
+# An inner-product node contributes one atom per independent parent pair. A linear node has no
+# second partials and contributes no atoms.
 
 """
     HessianCover
@@ -60,7 +56,7 @@ function adjoints(t::Tape, outidx::Integer)
     N = nnodes(t)
     vbar = zeros(N)
     vbar[outidx] = 1.0
-    # Tape order is topological, so N:-1:1 fully accumulates vbar[k] before k feeds its parents.
+    # Reverse topological order finalizes each adjoint before propagating it.
     for k in N:-1:1
         vk = vbar[k]
         vk == 0 && continue
@@ -89,7 +85,7 @@ function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
     for (k, o) in enumerate(outidxs)
         Vbar[k, o] += 1.0
     end
-    # Tape order is topological, so N:-1:1 fully accumulates each Vbar[:, j] before j feeds parents.
+    # Reverse topological order finalizes each adjoint column before propagation.
     for j in N:-1:1
         for (i, p) in enumerate(t.parents[j])
             d = t.ds[j][i]
@@ -261,10 +257,8 @@ function balanced_split(c11, c12, c22, z1, z2)
     else
         oftype(lo, NaN)
     end
-    # Clamp before validating: an infinite or zero target is the correct limit whenever the
-    # segment bounds it on that side, so only a target the bounds fail to resolve — NaN, or one
-    # running off an unbounded end — falls through to the endpoint-based choices. Those are
-    # clamped in turn, since neither is confined to the segment on its own.
+    # Clamping resolves zero or infinite limiting targets when the feasible interval has a finite
+    # endpoint. Only an unresolved NaN or unbounded target reaches the fallback.
     rho1 = clamp(target, lo, hi)
     if !(isfinite(rho1) && rho1 > 0)
         g = sqrt(lo * hi)
@@ -361,9 +355,7 @@ With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must 
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
-# Lazy elementwise absolute value of the tape's value vector: ValueSplit's scale references
-# as an O(1) view, so neither a cover sweep nor a single three-argument local_cover_slots
-# call pays an O(L) copy for them.
+# Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
 struct AbsValues <: AbstractVector{Float64}
     vals::Vector{Float64}
 end
@@ -507,8 +499,7 @@ function local_cover_slots(
             a, b = balanced_split(0.0, c, 0.0, s1, s2)
             if check
                 check_finite_partials(t, k, av, (c,))
-                # sqrt(eps): the entries compared here carry roundoff accumulated over an
-                # operation count set by the tape, not by this expression.
+                # Allow for roundoff accumulated across the tape, not just this comparison.
                 rtol = sqrt(eps(float(real(eltype(t.vals)))))
                 a * b >= c * (1 - rtol) ||
                     error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
@@ -533,9 +524,8 @@ function local_cover_slots(
         (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
         s1, s2 = scales[ps[1]], scales[ps[2]]
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
-            # A dead slot needs no cover and gets none; its partner covers only its own
-            # diagonal. The off-diagonal invariant is deliberately not enforced here — the
-            # entries it would cover vanish identically (see the docstring).
+            # A dead slot contributes no diagonal or cross term; only its live partner needs
+            # cover weight.
             return [s1 == 0 ? 0.0 : sqrt(c11), s2 == 0 ? 0.0 : sqrt(c22)]
         end
         if c12^2 <= c11 * c22
@@ -716,15 +706,14 @@ function cover_hessian(
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
-        # Two routes to the same quantity, so their errors are correlated and the gap they may
-        # legitimately show is far below the accumulated roundoff of either route alone.
+        # These two computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(eltype(t.vals))))^(3 // 4)
         for q in 1:n
             denom = max(abs(h_sum[q]), 1.0)
             abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
-        # invariants already checked in local_covers
+        # local_covers already checked the node invariants.
         pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
         for q in 1:n
             gdenom = max(abs(vbar[q]), 1.0)
