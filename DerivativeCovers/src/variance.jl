@@ -127,6 +127,29 @@ quadrature merge.
 
 `rule` selects the [`SplitRule`](@ref) behind the per-node covers; both channels are seeded from
 the same splits. `check` verifies the per-node cover invariants.
+
+# Examples
+
+```jldoctest
+julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
+
+julia> vc = cover_variance(f, [0.5, 2.0]);
+
+julia> round.(vc.h_sum; digits=4)
+2-element Vector{Float64}:
+ 4.1125
+ 2.4142
+
+julia> round.(vc.h_var; digits=4)
+2-element Vector{Float64}:
+ 3.1062
+ 1.7321
+
+julia> round.(vc.severity; digits=4)
+2-element Vector{Float64}:
+ 1.3239
+ 1.3938
+```
 """
 function cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule::SplitRule=ValueSplit())
     n = t.ninputs

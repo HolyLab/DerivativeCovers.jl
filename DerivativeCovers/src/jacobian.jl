@@ -67,6 +67,23 @@ evaluated at `x0`. Returns a [`JacobianCover`](@ref) carrying the sum, quadratur
 `a` must be strictly positive with one entry per output; `nothing` (the default) uses `ones(m)`.
 Every merge is a valid cover for *any* positive `a` — the choice of `a` trades tightness between
 the output and input sides but never validity. `check` verifies that `b_max` covers the surrogate.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> jc = cover_jacobian(r, [0.5, 2.0, -1.0]);
+
+julia> round.(jc.b_max; digits=4)
+3-element Vector{Float64}:
+ 2.0
+ 1.0
+ 2.0
+
+julia> all(jc.b_max .<= jc.b_quad .<= jc.b_sum)
+true
+```
 """
 function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check::Bool=true)
     m, n = length(outidxs), t.ninputs
@@ -120,6 +137,28 @@ partition `1 + (k-1) % ngroups` over the outputs.
 
 `a` is the fixed output weights (`nothing` uses `ones(m)`). `check` verifies `b` covers the
 surrogate.
+
+# Examples
+
+The two endpoints, on a program with three outputs:
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> t, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
+
+julia> round.(cover_jacobian_hybrid(t, outidxs, 1); digits=4)   # one group: b_sum
+3-element Vector{Float64}:
+ 3.6487
+ 1.5
+ 3.0
+
+julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per group: b_max
+3-element Vector{Float64}:
+ 2.0
+ 1.0
+ 2.0
+```
 """
 function cover_jacobian_hybrid(t::Tape, outidxs::AbstractVector{<:Integer},
                                groups::AbstractVector{<:Integer}; a=nothing, check::Bool=true)

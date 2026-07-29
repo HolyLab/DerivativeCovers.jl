@@ -21,6 +21,18 @@ A repeated entry in `outidxs` yields an identical entry of `Jv`.
 
 `jvp!` writes into `Jv`, which shares the axes of `outidxs`. It saves the result allocation only:
 the sweep still allocates its own `O(L)` working vector, so it is not allocation-free.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> round.(jvp(r, [0.5, 2.0, -1.0], [1.0, 0.0, 1.0]); digits=4)
+3-element Vector{Float64}:
+ 2.0
+ 0.6487
+ 2.0
+```
 """
 jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) =
     jvp!(similar(v, float(eltype(v)), axes(outidxs)), t, outidxs, v)
@@ -72,6 +84,18 @@ The seed `u` shares the axes of `outidxs`, the mirror of [`jvp`](@ref)'s `Jv`.
 `vjp!` writes into `Jtu`, which is indexed by the tape's inputs, `Base.OneTo(t.ninputs)`. It
 saves the result allocation only: the sweep still allocates its own `O(L)` working vector, so it
 is not allocation-free.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> round.(vjp(r, [0.5, 2.0, -1.0], [1.0, 1.0, 1.0]); digits=4)
+3-element Vector{Float64}:
+ 3.6487
+ 1.5
+ 1.0
+```
 """
 vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) =
     vjp!(similar(u, float(eltype(u)), Base.OneTo(t.ninputs)), t, outidxs, u)
