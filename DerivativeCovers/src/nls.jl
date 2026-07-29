@@ -99,7 +99,7 @@ function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups=not
 end
 
 """
-    cover_nls(r, x0; ngroups=nothing, check=true) -> NLSCover
+    cover_nls(r, x0; ngroups=nothing, check=true, rule=ValueSplit()) -> NLSCover
 
 Rank-1 covers of the least-squares loss `f = ½∑ₖ rₖ(x)²` at `x0`, where `r` maps a vector of
 [`TVar`](@ref)s to the residual vector. Builds the loss tape itself (see [`nls_loss_tape`](@ref)),
@@ -113,9 +113,13 @@ the Gauss–Newton matrix `JᵀJ`. `h` comes from [`cover_hybrid`](@ref) over th
 from the residual absolute sensitivities and satisfies `h_gn[j] ≤ h[j]`; on residuals that are
 linear in `x` the two coincide and equal `√(diag(JᵀJ))` exactly.
 
+`rule` selects the [`SplitRule`](@ref) behind the per-node covers of `h`. `h_gn` and `Utilde` are
+seeded at the residual nodes rather than at the per-node splits, so they do not depend on it.
+
 `check` is forwarded to [`cover_hybrid`](@ref) to verify the per-node cover invariants.
 """
-function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true)
+function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true,
+                   rule::SplitRule=ValueSplit())
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
     n, N = t.ninputs, nnodes(t)
     m = length(residx)
@@ -131,8 +135,9 @@ function cover_nls(r, x0::AbstractVector; ngroups=nothing, check::Bool=true)
     h_gn = [sqrt(sum(abs2, view(Utilde, :, j))) for j in 1:n]
 
     groups = nls_partition(N, sqidx; ngroups)
-    h = cover_hybrid(t, outidx, groups; check)
-    grad = adjoints(t, outidx)[1:n]
+    vbar = adjoints(t, outidx)
+    h = _cover_hybrid(t, vbar, groups; check, rule)
+    grad = vbar[1:n]
 
     return NLSCover(grad, h, h_gn, Utilde, m)
 end

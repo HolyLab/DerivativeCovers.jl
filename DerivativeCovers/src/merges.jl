@@ -144,7 +144,13 @@ the interpolation between the sum and quadrature extremes, are unaffected.
 """
 function cover_hybrid(t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool=true,
                       rule::SplitRule=ValueSplit())
-    vbar = adjoints(t, outidx)
+    return _cover_hybrid(t, adjoints(t, outidx), groups; check, rule)
+end
+
+# The merge itself, taking the adjoints as an argument: a caller that needs the gradient too
+# (`cover_nls`) passes the sweep it already ran instead of paying for a second one.
+function _cover_hybrid(t::Tape, vbar::AbstractVector, groups::AbstractVector{<:Integer};
+                       check::Bool=true, rule::SplitRule=ValueSplit())
     rhos, _ = local_covers(t, vbar; check, rule)
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
     return [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs]

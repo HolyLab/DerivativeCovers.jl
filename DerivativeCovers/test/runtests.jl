@@ -557,6 +557,19 @@ include("paired.jl")
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
         @test declare_submap(Fsub, xp; rule=SensitivitySplit()).S == [1.0 1.0]
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
+
+        # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
+        # The Gauss-Newton pair is seeded at the residual nodes instead, and the gradient is an
+        # ordinary adjoint sweep, so neither moves.
+        nv = cover_nls(Fsub, xp)
+        ns = cover_nls(Fsub, xp; rule=SensitivitySplit())
+        @test nv.h != ns.h
+        @test nv.h_gn == ns.h_gn
+        @test nv.grad == ns.grad
+        let H = ForwardDiff.hessian(x -> 0.5 * sum(abs2, Fsub(x)), xp)
+            @test cover_ratio(H, nv.h) <= GATE
+            @test cover_ratio(H, ns.h) <= GATE
+        end
     end
 
     @testset "node levels and partitions" begin

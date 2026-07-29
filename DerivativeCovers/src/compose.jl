@@ -91,8 +91,9 @@ curvature covers `S` whose row `k` is the sum-merge cover of `∇²F_k`, so
 single `TVar` (declared as one output) or a vector of them; a linear output gets an exactly
 zero row of `S`.
 
-Costs `O(q*L_F)` time — `q` reverse sweeps over `F`'s tape — once per declaration; the scratch
-tape is discarded afterwards. The declaration transforms covariantly under rescalings of `F`'s
+Costs `O(q*L_F)` time — one `q`-channel adjoint sweep over `F`'s tape plus one absolute sweep per
+output — once per declaration; the scratch tape is discarded afterwards. The declaration
+transforms covariantly under rescalings of `F`'s
 arguments and outputs because each ingredient inherits the covariance of the underlying sweeps,
 including the zero-parent-value fallback exception of the local tie-break.
 
@@ -108,11 +109,13 @@ function declare_submap(F, x0::AbstractVector; rule::SplitRule=ValueSplit())
     outidxs = out isa Integer ? [out] : out
     q, n = length(outidxs), t.ninputs
     y = t.vals[outidxs]
-    J = adjoints(t, outidxs)[:, 1:n]
+    # Row k of the vector-mode sweep is the adjoint vector of output k, so one traversal serves
+    # both the Jacobian and the per-output local covers.
+    Vbar = adjoints(t, outidxs)
+    J = Vbar[:, 1:n]
     S = Matrix{Float64}(undef, q, n)
     for k in 1:q
-        vbar = adjoints(t, outidxs[k])
-        _, theta = local_covers(t, vbar; rule)
+        _, theta = local_covers(t, Vbar[k, :]; rule)
         S[k, :] = abs_reverse(t, theta)[1:n]
     end
     return (; y, J, S)
