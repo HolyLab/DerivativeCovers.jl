@@ -1,5 +1,8 @@
 ```@meta
 CurrentModule = DerivativeCovers
+DocTestSetup = quote
+    using DerivativeCovers
+end
 ```
 
 # DerivativeCovers
@@ -8,25 +11,44 @@ CurrentModule = DerivativeCovers
 DerivativeCovers
 ```
 
+## Installation
+
+The package is not registered, and lives in a subdirectory of its repository:
+
+```julia
+using Pkg
+Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="DerivativeCovers")
+```
+
 ## Quick start
 
 Record a scalar program by running it on [`TVar`](@ref) inputs, then ask for a cover:
 
-```@example quickstart
-using DerivativeCovers
+```jldoctest quickstart
+julia> f(x) = exp(x[1]) + sum(x[i] * x[i+1] for i in 1:length(x)-1);
 
-f(x) = exp(x[1]) + sum(x[i] * x[i+1] for i in 1:length(x)-1)
-x0 = [0.5, -1.2, 0.3, 0.8]
+julia> x0 = [0.5, -1.2, 0.3, 0.8];
 
-c = cover_hessian(f, x0)
-c.h_sum
+julia> c = cover_hessian(f, x0);
+
+julia> round.(c.h_sum; digits=4)
+4-element Vector{Float64}:
+ 2.8332
+ 1.1455
+ 3.633
+ 0.6124
 ```
 
 `c.h_sum` is a nonnegative vector `h` with `abs(H[i,j]) <= h[i]*h[j]` for every entry of the
 Hessian `H`, which was never formed. The gradient comes along for free:
 
-```@example quickstart
-c.grad
+```jldoctest quickstart
+julia> round.(c.grad; digits=4)
+4-element Vector{Float64}:
+  0.4487
+  0.8
+ -0.4
+  0.3
 ```
 
 That is the whole "do" path: one forward pass and one paired reverse sweep, `O(L)` in the tape
@@ -61,9 +83,11 @@ The looseness of a cover is itself an object of study, and the package carries t
 measuring it. [`WithDiagnostics`](@ref) asks [`cover_hessian`](@ref) for the elementwise bound `B`
 and the alternative merges alongside the cover, so a ratio can be computed directly:
 
-```@example quickstart
-d = cover_hessian(WithDiagnostics(), f, x0)
-DerivativeCovers.cover_ratio(d.B, d.h_sum)
+```jldoctest quickstart
+julia> d = cover_hessian(WithDiagnostics(), f, x0);
+
+julia> round(DerivativeCovers.cover_ratio(d.B, d.h_sum); digits=4)
+0.4495
 ```
 
 This form costs `O(n*L)` time and `O(n^2)` memory — it forms the very matrix the production path
