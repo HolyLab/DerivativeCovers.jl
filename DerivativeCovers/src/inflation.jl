@@ -71,11 +71,13 @@ function inflation_shape end
 
 _shape(h::AbstractVector) = fill!(similar(h, float(eltype(h))), 0)
 
-inflation_shape(::UniformInflation, h::AbstractVector; rng::AbstractRNG=Xoshiro(0)) =
+inflation_shape(::UniformInflation, h::AbstractVector; rng::AbstractRNG = Xoshiro(0)) =
     fill!(_shape(h), 1)
 
-function inflation_shape(p::SpikeInflation, h::AbstractVector;
-                         rng::AbstractRNG=Xoshiro(0))
+function inflation_shape(
+        p::SpikeInflation, h::AbstractVector;
+        rng::AbstractRNG = Xoshiro(0)
+    )
     p.index in eachindex(h) ||
         throw(BoundsError(h, p.index))
     w = _shape(h)
@@ -83,8 +85,10 @@ function inflation_shape(p::SpikeInflation, h::AbstractVector;
     return w
 end
 
-function inflation_shape(::RampInflation, h::AbstractVector;
-                         rng::AbstractRNG=Xoshiro(0))
+function inflation_shape(
+        ::RampInflation, h::AbstractVector;
+        rng::AbstractRNG = Xoshiro(0)
+    )
     w = _shape(h)
     n = length(h)
     for (j, i) in enumerate(eachindex(h))
@@ -93,8 +97,10 @@ function inflation_shape(::RampInflation, h::AbstractVector;
     return w
 end
 
-function inflation_shape(::LognormalInflation, h::AbstractVector;
-                         rng::AbstractRNG=Xoshiro(0))
+function inflation_shape(
+        ::LognormalInflation, h::AbstractVector;
+        rng::AbstractRNG = Xoshiro(0)
+    )
     w = _shape(h)
     for i in eachindex(w)
         w[i] = abs(randn(rng))
@@ -119,14 +125,18 @@ what it applied should keep `f` and summarize it (with [`anisotropy`](@ref), say
 recompute it from the inflated cover — a cover coordinate that is exactly zero stays zero under
 [`inflate`](@ref) and reveals nothing about the factor it was multiplied by.
 """
-function inflation_factors(pattern::InflationPattern, h::AbstractVector, peak::Real;
-                           rng::AbstractRNG=Xoshiro(0))
+function inflation_factors(
+        pattern::InflationPattern, h::AbstractVector, peak::Real;
+        rng::AbstractRNG = Xoshiro(0)
+    )
     peak >= 1 || throw(ArgumentError("peak must be at least 1, got $peak"))
     return peak .^ inflation_shape(pattern, h; rng)
 end
 
-inflation_factors(pattern::InflationPattern, n::Integer, peak::Real;
-                  rng::AbstractRNG=Xoshiro(0)) =
+inflation_factors(
+    pattern::InflationPattern, n::Integer, peak::Real;
+    rng::AbstractRNG = Xoshiro(0)
+) =
     inflation_factors(pattern, zeros(n), peak; rng)
 
 """
@@ -149,8 +159,10 @@ function inflate(h::AbstractVector, f::AbstractVector)
     return h .* f
 end
 
-inflate(pattern::InflationPattern, h::AbstractVector, peak::Real;
-        rng::AbstractRNG=Xoshiro(0)) =
+inflate(
+    pattern::InflationPattern, h::AbstractVector, peak::Real;
+    rng::AbstractRNG = Xoshiro(0)
+) =
     inflate(h, inflation_factors(pattern, h, peak; rng))
 
 """

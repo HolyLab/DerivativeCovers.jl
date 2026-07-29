@@ -8,10 +8,10 @@
 
 @testset "cancellation.jl" begin
 
-    n, m, delta = 6, 4, 1e-2
+    n, m, delta = 6, 4, 1.0e-2
 
     @testset "twin and Hessian agreement — $(aligned ? "aligned" : "cancel")" for aligned in (false, true)
-        p = Problems.cancellation(n; m, delta, aligned, rng=MersenneTwister(11))
+        p = Problems.cancellation(n; m, delta, aligned, rng = MersenneTwister(11))
         @test p.f(p.x0) ≈ p.twin(p.x0)
         rng = MersenneTwister(12)
         for _ in 1:3
@@ -24,8 +24,8 @@
     end
 
     @testset "pair property" begin
-        pc = Problems.cancellation(n; m, delta, aligned=false, rng=MersenneTwister(7))
-        pa = Problems.cancellation(n; m, delta, aligned=true, rng=MersenneTwister(7))
+        pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
+        pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         tc, oc = tape_function(pc.f, pc.x0)
         ta, oa = tape_function(pa.f, pa.x0)
         @test nnodes(tc) == nnodes(ta)
@@ -36,7 +36,7 @@
         # linear form vanishes at x0 by construction, so it contributes nothing at first order —
         # but the two variants sum that cancellation in a different order (opposite-signed
         # terms), leaving roundoff at the last few bits.
-        @test isapprox(rc.grad, ra.grad; rtol=1e-12)
+        @test isapprox(rc.grad, ra.grad; rtol = 1.0e-12)
         @test rc.B == ra.B
         @test rc.h_sum == ra.h_sum
         @test rc.h_quad == ra.h_quad
@@ -47,7 +47,7 @@
     end
 
     @testset "validity" for aligned in (false, true)
-        p = Problems.cancellation(n; m, delta, aligned, rng=MersenneTwister(21))
+        p = Problems.cancellation(n; m, delta, aligned, rng = MersenneTwister(21))
         H = exact_hessian(p)
         t, outidx = tape_function(p.f, p.x0)
         res = cover_hessian(WithDiagnostics(), t, outidx)
@@ -57,25 +57,25 @@
     end
 
     @testset "closed forms" begin
-        pc = Problems.cancellation(n; m, delta, aligned=false, rng=MersenneTwister(7))
-        pa = Problems.cancellation(n; m, delta, aligned=true, rng=MersenneTwister(7))
+        pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
+        pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
         res = cover_hessian(WithDiagnostics(), pc.f, pc.x0)
         vc = cover_variance(pc.f, pc.x0)
 
-        @test res.h_quad ≈ sqrt.(diag(Ha)) rtol=1e-8
-        @test vc.h_var ≈ res.h_quad rtol=1e-10
+        @test res.h_quad ≈ sqrt.(diag(Ha)) rtol = 1.0e-8
+        @test vc.h_var ≈ res.h_quad rtol = 1.0e-10
 
         hstar = sqrt.(diag(Hc))
         @test all(abs(Hc[i, j]) <= hstar[i] * hstar[j] * GATE for i in 1:n, j in 1:n)
 
         kappa = diag(Ha) ./ diag(Hc)
-        @test res.h_quad ./ hstar ≈ sqrt.(kappa) rtol=1e-8
+        @test res.h_quad ./ hstar ≈ sqrt.(kappa) rtol = 1.0e-8
     end
 
     @testset "looseness grows with m" begin
         function gm_looseness(mval)
-            p = Problems.cancellation(16; m=mval, delta=1e-2, aligned=false, rng=MersenneTwister(3))
+            p = Problems.cancellation(16; m = mval, delta = 1.0e-2, aligned = false, rng = MersenneTwister(3))
             Hc = exact_hessian(p)
             hstar = sqrt.(diag(Hc))
             res = cover_hessian(WithDiagnostics(), p.f, p.x0)
@@ -87,12 +87,12 @@
 
     @testset "support variant" begin
         support = 1:3
-        p = Problems.cancellation(n; m=4, delta=1e-2, aligned=false, support, rng=MersenneTwister(3))
+        p = Problems.cancellation(n; m = 4, delta = 1.0e-2, aligned = false, support, rng = MersenneTwister(3))
         Hc = exact_hessian(p)
         hstar = sqrt.(diag(Hc))
         res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         for i in setdiff(1:n, support)
-            @test res.h_quad[i] ≈ hstar[i] rtol=1e-8
+            @test res.h_quad[i] ≈ hstar[i] rtol = 1.0e-8
         end
         for i in support
             @test res.h_quad[i] >= 2 * hstar[i]
@@ -100,13 +100,13 @@
     end
 
     @testset "sigma = 0.5" begin
-        pc = Problems.cancellation(n; m, delta, aligned=false, sigma=0.5, rng=MersenneTwister(7))
-        pa = Problems.cancellation(n; m, delta, aligned=true, sigma=0.5, rng=MersenneTwister(7))
+        pc = Problems.cancellation(n; m, delta, aligned = false, sigma = 0.5, rng = MersenneTwister(7))
+        pa = Problems.cancellation(n; m, delta, aligned = true, sigma = 0.5, rng = MersenneTwister(7))
         tc, oc = tape_function(pc.f, pc.x0)
         ta, oa = tape_function(pa.f, pa.x0)
         rc = cover_hessian(WithDiagnostics(), tc, oc)
         ra = cover_hessian(WithDiagnostics(), ta, oa)
-        @test isapprox(rc.grad, ra.grad; rtol=1e-12)
+        @test isapprox(rc.grad, ra.grad; rtol = 1.0e-12)
         @test rc.B == ra.B
         @test rc.h_sum == ra.h_sum
         @test rc.h_quad == ra.h_quad
@@ -118,20 +118,20 @@
 
     @testset "argument errors" begin
         @test_throws ArgumentError Problems.cancellation(1)
-        @test_throws ArgumentError Problems.cancellation(n; m=0)
-        @test_throws ArgumentError Problems.cancellation(n; delta=0)
-        @test_throws ArgumentError Problems.cancellation(n; support=[1])
-        @test_throws ArgumentError Problems.cancellation(n; support=[1, 1, 2])
-        @test_throws ArgumentError Problems.cancellation(n; support=[0, 1])
+        @test_throws ArgumentError Problems.cancellation(n; m = 0)
+        @test_throws ArgumentError Problems.cancellation(n; delta = 0)
+        @test_throws ArgumentError Problems.cancellation(n; support = [1])
+        @test_throws ArgumentError Problems.cancellation(n; support = [1, 1, 2])
+        @test_throws ArgumentError Problems.cancellation(n; support = [0, 1])
     end
 
     @testset "scale covariance" begin
-        p = Problems.cancellation(n; m, delta, aligned=false, rng=MersenneTwister(1))
+        p = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(1))
         d = exp.(0.3 .* randn(MersenneTwister(3), n))
         res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         pr = rescale(p, d)
         resr = cover_hessian(WithDiagnostics(), pr.f, pr.x0)
-        @test resr.h_sum ≈ res.h_sum ./ d rtol=1e-10
+        @test resr.h_sum ≈ res.h_sum ./ d rtol = 1.0e-10
     end
 
 end

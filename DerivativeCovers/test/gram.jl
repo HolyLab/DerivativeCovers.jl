@@ -26,9 +26,11 @@
     @testset "covers J'*W*J entrywise" begin
         w = [0.5, 2.0, 1.5]
         W = randn(MersenneTwister(3), 3, 3)
-        for (s, G) in ((gramcover(a, b, t, outidxs), J'J),
-                       (gramcover(a, b, t, outidxs, w), J' * Diagonal(w) * J),
-                       (gramcover(a, b, t, outidxs, W), J' * W * J))
+        for (s, G) in (
+                (gramcover(a, b, t, outidxs), J'J),
+                (gramcover(a, b, t, outidxs, w), J' * Diagonal(w) * J),
+                (gramcover(a, b, t, outidxs, W), J' * W * J),
+            )
             @test all(>=(0), s)
             @test all(abs(G[j, k]) <= s[j] * s[k] * GATE for j in axes(G, 1), k in axes(G, 2))
         end
@@ -39,7 +41,7 @@
         @test all(s .<= norm(a) .* b .* GATE)
         # With more than one component no component carries every row, so each supported column
         # is strictly below the global bound that sums over all of them.
-        @test all(s[j] < norm(a) * b[j] * (1 - 1e-12) for j in 1:t.ninputs if b[j] > 0)
+        @test all(s[j] < norm(a) * b[j] * (1 - 1.0e-12) for j in 1:t.ninputs if b[j] > 0)
     end
 
     @testset "invariant under the per-component gauge" begin
@@ -58,7 +60,7 @@
         ssep = gramcover(a, b, t, outidxs, Wsep)
         smix = gramcover(a, b, t, outidxs, Wmix)
         @test ssep ≈ gramcover(a, b, t, outidxs)             # identity W reproduces the J'J cover
-        @test all(smix .>= ssep .* (1 - 1e-12))              # merging can only enlarge
+        @test all(smix .>= ssep .* (1 - 1.0e-12))              # merging can only enlarge
         @test any(smix .> ssep)
         G = J' * Wmix * J
         @test all(abs(G[j, k]) <= smix[j] * smix[k] * GATE for j in axes(G, 1), k in axes(G, 2))

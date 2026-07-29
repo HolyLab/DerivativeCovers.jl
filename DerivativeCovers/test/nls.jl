@@ -42,7 +42,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test cover_ratio(J' * J, nls.h_gn) <= GATE
         @test all(nls.h_gn .<= nls.h .* GATE)
         # The residual sensitivities dominate |J| entrywise.
-        @test all(nls.Utilde .>= abs.(J) .- 1e-12)
+        @test all(nls.Utilde .>= abs.(J) .- 1.0e-12)
     end
 
     @testset "linear residuals: exactness and no curvature" begin
@@ -88,11 +88,11 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         x0 = 0.4 .* randn(rng, n)
         rmap(x) = [sin(sum(W[k, j] * x[j] for j in 1:n)) - tk[k] for k in 1:m]
         fine = cover_nls(rmap, x0)
-        coarse = cover_nls(rmap, x0; ngroups=3)
+        coarse = cover_nls(rmap, x0; ngroups = 3)
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
         @test cover_ratio(H, coarse.h) <= GATE
         # Summing residual atoms within a group before quadrature can only inflate the cover.
-        @test all(coarse.h .>= fine.h .- 1e-12)
+        @test all(coarse.h .>= fine.h .- 1.0e-12)
         @test fine.h_gn ≈ coarse.h_gn   # h_gn is formed per residual regardless of ngroups
     end
 
@@ -107,7 +107,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         a, b = gn_ab(nls)
         @test length(a) == m
         @test length(b) == n
-        @test all(a[k] * b[j] >= abs(J[k, j]) - 1e-12 for k in 1:m, j in 1:n)
+        @test all(a[k] * b[j] >= abs(J[k, j]) - 1.0e-12 for k in 1:m, j in 1:n)
     end
 
     @testset "residual that is an input node" begin
@@ -134,7 +134,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test all(iszero, nls.Utilde[1, :])
         H = ForwardDiff.hessian(floss, x0)
         @test maximum(abs.(H) ./ (nls.h * nls.h')) <= GATE
-        @test all(nls.h_gn .<= nls.h .+ 1e-12)
+        @test all(nls.h_gn .<= nls.h .+ 1.0e-12)
     end
 
     @testset "input validation" begin

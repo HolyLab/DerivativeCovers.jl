@@ -30,8 +30,8 @@
         @test all(jc.b_max .<= jc.b_quad .* GATE)
         @test all(jc.b_quad .<= jc.b_sum .* GATE)
         # The surrogate bounds |J|, and b_max is its exact per-input max.
-        @test all(jc.Utilde .>= abs.(J) .- 1e-12)
-        @test jc.b_max ≈ vec(maximum(jc.Utilde ./ jc.a; dims=1))
+        @test all(jc.Utilde .>= abs.(J) .- 1.0e-12)
+        @test jc.b_max ≈ vec(maximum(jc.Utilde ./ jc.a; dims = 1))
 
         # Group-max hybrid: one group is the sum merge, one output per group the exact merge, and
         # an intermediate partition is bracketed by and covers between them.
@@ -65,10 +65,10 @@
             @test jacobian_ratio(J, a, b) <= GATE
         end
         # Reweighting a rescales the surrogate rows but not the covering property.
-        @test jc.b_max ≈ vec(maximum(jc.Utilde ./ a; dims=1))
+        @test jc.b_max ≈ vec(maximum(jc.Utilde ./ a; dims = 1))
 
-        @test_throws DimensionMismatch cover_jacobian(r, x0; a=[1.0, 1.0])
-        @test_throws "strictly positive" cover_jacobian(r, x0; a=[1.0, 0.0, 1.0])
+        @test_throws DimensionMismatch cover_jacobian(r, x0; a = [1.0, 1.0])
+        @test_throws "strictly positive" cover_jacobian(r, x0; a = [1.0, 0.0, 1.0])
     end
 
     @testset "the b-side is covariant under input rescaling" begin
@@ -76,12 +76,12 @@
         # b → b ./ d, with the output weights a untouched. This is the property equilibration rests on.
         r = xs -> [xs[1] * xs[2], sin(xs[3]) + xs[1], exp(xs[2])]
         x0 = [0.6, -0.4, 0.9]
-        d = [1e-3, 1e2, 5.0]
+        d = [1.0e-3, 1.0e2, 5.0]
         jc = cover_jacobian(r, x0)
         jcd = cover_jacobian(xs -> r(xs ./ d), d .* x0)
-        @test jcd.b_sum ≈ jc.b_sum ./ d rtol=1e-10
-        @test jcd.b_quad ≈ jc.b_quad ./ d rtol=1e-10
-        @test jcd.b_max ≈ jc.b_max ./ d rtol=1e-10
+        @test jcd.b_sum ≈ jc.b_sum ./ d rtol = 1.0e-10
+        @test jcd.b_quad ≈ jc.b_quad ./ d rtol = 1.0e-10
+        @test jcd.b_max ≈ jc.b_max ./ d rtol = 1.0e-10
     end
 
     @testset "duplicated and input-node outputs cover correctly" begin
@@ -122,9 +122,9 @@
         Mr = exp.(randn(rng, 6, 4))
         rep = jacobian_representability(Mr)
         excess(a, b) = maximum((a[k] * b[j]) / Mr[k, j] for k in 1:6, j in 1:4)
-        jc = cover_jacobian(xs -> Mr * xs, zeros(4); check=false)   # some valid rank-1 cover of |J|=Mr
+        jc = cover_jacobian(xs -> Mr * xs, zeros(4); check = false)   # some valid rank-1 cover of |J|=Mr
         # Mr*xs has Jacobian Mr (all entries positive), so its b_max cover has excess ≥ rep.
-        @test rep <= excess(jc.a, jc.b_max) * (1 + 1e-8)
+        @test rep <= excess(jc.a, jc.b_max) * (1 + 1.0e-8)
 
         @test_throws "nonnegative" jacobian_representability([1.0 -2.0; 3.0 4.0])
     end
@@ -139,13 +139,15 @@
             best = 0.0
             for r in 2:min(m, n)
                 for rows in Iterators.product(fill(1:m, r)...),
-                    cols in Iterators.product(fill(1:n, r)...)
+                        cols in Iterators.product(fill(1:n, r)...)
 
                     (allunique(rows) && allunique(cols)) || continue
                     all(M[rows[i], cols[i]] > 0 for i in 1:r) || continue
                     all(M[rows[i], cols[mod1(i + 1, r)]] > 0 for i in 1:r) || continue
-                    v = sum(log(M[rows[i], cols[i]]) - log(M[rows[i], cols[mod1(i + 1, r)]])
-                            for i in 1:r) / r
+                    v = sum(
+                        log(M[rows[i], cols[i]]) - log(M[rows[i], cols[mod1(i + 1, r)]])
+                            for i in 1:r
+                    ) / r
                     best = max(best, v)
                 end
             end
@@ -159,7 +161,7 @@
             mm = jacobian_minimax(M)
             # Valid, attains the enumerated optimum, and is never beaten by the 2×2 bound.
             @test jacobian_ratio(M, mm.a, mm.b) <= GATE
-            @test mm.excess ≈ brute_minimax(M) rtol = 1e-8
+            @test mm.excess ≈ brute_minimax(M) rtol = 1.0e-8
             @test mm.excess >= jacobian_representability(M) / GATE
         end
 
@@ -174,26 +176,26 @@
         # On the 2×2 block matrix the 2-cycle bound is the whole story.
         eps = 0.01
         B = [1.0 1.0 eps eps; 1.0 1.0 eps eps; eps eps 1.0 1.0; eps eps 1.0 1.0]
-        @test jacobian_minimax(B).excess ≈ 1 / eps rtol = 1e-8
+        @test jacobian_minimax(B).excess ≈ 1 / eps rtol = 1.0e-8
 
         # A 3-cycle can dominate every 2-cycle: all 2×2 defects of C are mild, the 6-cycle is not.
-        C = [1.0 1e3 0.0; 0.0 1.0 1e3; 1e3 0.0 1.0]
+        C = [1.0 1.0e3 0.0; 0.0 1.0 1.0e3; 1.0e3 0.0 1.0]
         @test jacobian_representability(C) ≈ 1        # no row pair shares two columns
-        @test jacobian_minimax(C).excess ≈ 1e3 rtol = 1e-8
+        @test jacobian_minimax(C).excess ≈ 1.0e3 rtol = 1.0e-8
 
         # Zero rows and columns get exact zeros; the excess ignores them.
         Z = [0.0 0.0 0.0; 0.0 2.0 4.0; 0.0 4.0 2.0]
         mmZ = jacobian_minimax(Z)
         @test mmZ.a[1] == 0 && mmZ.b[1] == 0
-        @test mmZ.excess ≈ 2.0 rtol = 1e-8
+        @test mmZ.excess ≈ 2.0 rtol = 1.0e-8
 
         # Diagonal rescaling moves the pair covariantly and leaves the excess invariant.
         M = exp.(2 .* randn(rng, 5, 4))
         C2, D2 = exp2.(rand(rng, -10:10, 5)), exp2.(rand(rng, -10:10, 4))
-        @test jacobian_minimax(C2 .* M .* D2').excess ≈ jacobian_minimax(M).excess rtol = 1e-9
+        @test jacobian_minimax(C2 .* M .* D2').excess ≈ jacobian_minimax(M).excess rtol = 1.0e-9
 
         @test_throws "nonnegative" jacobian_minimax([1.0 -2.0; 3.0 4.0])
-        @test_throws "atol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; atol=0)
+        @test_throws "atol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; atol = 0)
     end
 
     @testset "cover_jacobian rejects a scalar program" begin
@@ -225,10 +227,10 @@
         t, outidxs = tape_function(r, x0)
         U = jacobian_surrogate(t, outidxs)
         J = ForwardDiff.jacobian(r, x0)
-        for b in ([1.0, 1.0, 1.0], [0.7, 2.0, 0.1], [1e-3, 1e2, 5.0])
+        for b in ([1.0, 1.0, 1.0], [0.7, 2.0, 0.1], [1.0e-3, 1.0e2, 5.0])
             a = marginal_weights(t, outidxs, b)
             @test a ≈ marginal_weights(U, b)                       # tape path = matrix path
-            @test a ≈ vec(sum(U ./ b'; dims=2))
+            @test a ≈ vec(sum(U ./ b'; dims = 2))
             @test jacobian_ratio(J, a, b) <= GATE                  # every (marginal a, b) covers
             @test jacobian_ratio(U, a, b) <= GATE
         end
@@ -247,9 +249,15 @@
     @testset "balance_cover: valid at every iterate, stationary at the fixed point" begin
         # The marginal (Sinkhorn) alternation converges only on total-support patterns, so both
         # maps here have fully dense surrogates.
-        maps = [("nonlinear rows", xs -> [tanh(y) - t5[k] for (k, y) in enumerate(W * xs)], [0.3, -0.2, 0.5]),
-                ("dense scalarized", xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
-                                            exp(xs[1]) + xs[2] * xs[3]], [0.6, -0.4, 0.9])]
+        maps = [
+            ("nonlinear rows", xs -> [tanh(y) - t5[k] for (k, y) in enumerate(W * xs)], [0.3, -0.2, 0.5]),
+            (
+                "dense scalarized", xs -> [
+                    xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
+                    exp(xs[1]) + xs[2] * xs[3],
+                ], [0.6, -0.4, 0.9],
+            ),
+        ]
         @testset "$name" for (name, r, x0) in maps
             t, outidxs = tape_function(r, x0)
             U = jacobian_surrogate(t, outidxs)
@@ -258,33 +266,35 @@
             bal = balance_cover(t, outidxs)
             @test jacobian_ratio(J, bal.a, bal.b) <= GATE
             @test jacobian_ratio(U, bal.a, bal.b) <= GATE
-            @test bal.delta <= 1e-10
+            @test bal.delta <= 1.0e-10
 
             # The tape path is the matrix path applied to the surrogate.
             balm = balance_cover(U)
-            @test bal.a ≈ balm.a rtol=1e-8
-            @test bal.b ≈ balm.b rtol=1e-8
+            @test bal.a ≈ balm.a rtol = 1.0e-8
+            @test bal.b ≈ balm.b rtol = 1.0e-8
 
             # Every iterate of the alternation is a valid cover: replay it from the pieces.
             a = ones(length(outidxs))
-            b = vec(sum(U ./ a; dims=1))
+            b = vec(sum(U ./ a; dims = 1))
             for _ in 1:5
                 a = marginal_weights(t, outidxs, b)
                 @test jacobian_ratio(U, a, b) <= GATE              # after the a-step
-                b = vec(sum(U ./ a; dims=1))
+                b = vec(sum(U ./ a; dims = 1))
                 @test jacobian_ratio(U, a, b) <= GATE              # after the b-step
             end
 
             # Stationarity: one more full round changes every product by at most ~rtol.
             a2 = marginal_weights(t, outidxs, bal.b)
-            b2 = vec(sum(U ./ a2; dims=1))
-            @test a2 .* b2' ≈ bal.a .* bal.b' rtol=1e-8
+            b2 = vec(sum(U ./ a2; dims = 1))
+            @test a2 .* b2' ≈ bal.a .* bal.b' rtol = 1.0e-8
 
             # :quad, :max, and the geomean a-rule reach their own fixed points and stay valid.
             # (Fixed points of different rules are not comparable entrywise; tightness
             # comparisons live in the measurement scripts.)
-            for kwargs in ((; merge=QuadMerge()), (; merge=MaxMerge()), (; arule=:geomean),
-                           (; merge=MaxMerge(), arule=:geomean))
+            for kwargs in (
+                    (; merge = QuadMerge()), (; merge = MaxMerge()), (; arule = :geomean),
+                    (; merge = MaxMerge(), arule = :geomean),
+                )
                 balv = balance_cover(t, outidxs; kwargs...)
                 @test jacobian_ratio(U, balv.a, balv.b) <= GATE
                 @test jacobian_ratio(J, balv.a, balv.b) <= GATE
@@ -301,13 +311,15 @@
 
         # The matrix form and the tape form's delegating branch (any merge/arule other than
         # sum/marginal) both take `check`; skipping verification leaves the pair unchanged.
-        for kwargs in ((;), (; merge=MaxMerge()), (; arule=:geomean),
-                       (; merge=QuadMerge(), arule=:geomean))
-            balm = balance_cover(U; check=false, kwargs...)
+        for kwargs in (
+                (;), (; merge = MaxMerge()), (; arule = :geomean),
+                (; merge = QuadMerge(), arule = :geomean),
+            )
+            balm = balance_cover(U; check = false, kwargs...)
             @test balm.a == balance_cover(U; kwargs...).a
             @test balm.b == balance_cover(U; kwargs...).b
 
-            balt = balance_cover(t, outidxs; check=false, kwargs...)
+            balt = balance_cover(t, outidxs; check = false, kwargs...)
             @test balt.a == balance_cover(t, outidxs; kwargs...).a
             @test balt.b == balance_cover(t, outidxs; kwargs...).b
         end
@@ -322,18 +334,18 @@
         t, outidxs = tape_function(r, x0)
         U = jacobian_surrogate(t, outidxs)
         J = ForwardDiff.jacobian(r, x0)
-        @test_throws "total support" balance_cover(t, outidxs; maxiter=50)
-        @test_throws "total support" balance_cover(U; maxiter=50)
-        for kwargs in ((; arule=:geomean), (; arule=:geomean, merge=MaxMerge()))
+        @test_throws "total support" balance_cover(t, outidxs; maxiter = 50)
+        @test_throws "total support" balance_cover(U; maxiter = 50)
+        for kwargs in ((; arule = :geomean), (; arule = :geomean, merge = MaxMerge()))
             bal = balance_cover(t, outidxs; kwargs...)
             @test jacobian_ratio(U, bal.a, bal.b) <= GATE
             @test jacobian_ratio(J, bal.a, bal.b) <= GATE
-            @test bal.delta <= 1e-10
+            @test bal.delta <= 1.0e-10
         end
         # The two-way log fit is exact in one round on a complete (dense) pattern.
         rng = MersenneTwister(9)
         Ud = exp.(randn(rng, 4, 3))
-        bald = balance_cover(Ud; arule=:geomean)
+        bald = balance_cover(Ud; arule = :geomean)
         @test bald.iters <= 2
     end
 
@@ -354,8 +366,8 @@
 
         # The tape route and the materialized surrogate reach the same pair.
         balm = balance_cover(U)
-        @test bal.a ≈ balm.a rtol=1e-8
-        @test bal.b ≈ balm.b rtol=1e-8
+        @test bal.a ≈ balm.a rtol = 1.0e-8
+        @test bal.b ≈ balm.b rtol = 1.0e-8
     end
 
     @testset "balance_cover: rank-1 exactness and the Sinkhorn fixed point" begin
@@ -364,22 +376,22 @@
         U = u * v'
         # The annotation supplies the rule check: there is no list of admissible spellings to
         # fall out of date, and SumMerge() is the default in both call forms.
-        @test_throws TypeError balance_cover(U; merge=:max)
-        @test_throws "arule must be :marginal or :geomean" balance_cover(U; arule=:sinkhorn)
-        @test balance_cover(U; merge=SumMerge()).b == balance_cover(U).b
+        @test_throws TypeError balance_cover(U; merge = :max)
+        @test_throws "arule must be :marginal or :geomean" balance_cover(U; arule = :sinkhorn)
+        @test balance_cover(U; merge = SumMerge()).b == balance_cover(U).b
         @test SumMerge() isa MergeRule && QuadMerge() isa MergeRule && MaxMerge() isa MergeRule
 
         # The max-merge fixed point recovers a rank-1 magnitude matrix exactly.
-        balx = balance_cover(U; merge=MaxMerge())
+        balx = balance_cover(U; merge = MaxMerge())
         @test balx.a .* balx.b' ≈ U
         # The sum-merge fixed point is the Sinkhorn scaling: every row and column of the ratio
         # matrix R = U ./ (a .* b') sums to 1 after its own half-step; on rank-1 the uniform
         # excess is exactly m.
         bals = balance_cover(U)
-        @test maximum((bals.a .* bals.b') ./ U) ≈ 6 rtol=1e-8
-        @test minimum((bals.a .* bals.b') ./ U) ≈ 6 rtol=1e-8
+        @test maximum((bals.a .* bals.b') ./ U) ≈ 6 rtol = 1.0e-8
+        @test minimum((bals.a .* bals.b') ./ U) ≈ 6 rtol = 1.0e-8
         R = U ./ (bals.a .* bals.b')
-        @test vec(sum(R; dims=1)) ≈ ones(4) rtol=1e-8              # b-step ran last
+        @test vec(sum(R; dims = 1)) ≈ ones(4) rtol = 1.0e-8              # b-step ran last
 
         # Zero rows and columns persist as exact zero weights.
         Uz = [1.0 0.0 2.0; 0.0 0.0 0.0; 3.0 0.0 1.0]
@@ -388,14 +400,16 @@
         @test balz.b[2] == 0
         @test jacobian_ratio(Uz, balz.a, balz.b) <= GATE
 
-        @test_throws "did not converge" balance_cover(exp.(randn(rng, 3, 5)); maxiter=1)
-        @test_throws "strictly positive" balance_cover(U; a0=zeros(6))
+        @test_throws "did not converge" balance_cover(exp.(randn(rng, 3, 5)); maxiter = 1)
+        @test_throws "strictly positive" balance_cover(U; a0 = zeros(6))
         @test_throws "nonnegative" balance_cover([1.0 -1.0; 1.0 1.0])
 
         # The function form tapes the program and hands the tape to the two-argument form, so on a
         # vector-valued program the two agree exactly; a scalar output has no rows to balance.
-        rvec = xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
-                      exp(xs[1]) + xs[2] * xs[3]]
+        rvec = xs -> [
+            xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
+            exp(xs[1]) + xs[2] * xs[3],
+        ]
         xvec = [0.6, -0.4, 0.9]
         balf = balance_cover(rvec, xvec)
         balt = balance_cover(tape_function(rvec, xvec)...)
@@ -427,10 +441,10 @@
         t1, o1 = tape_function(xs -> ones(4) .* rbase(xs), x0)
         tc, oc = tape_function(xs -> c .* rbase(xs), x0)
         bal1 = balance_cover(t1, o1)
-        balc = balance_cover(tc, oc; a0=c)
+        balc = balance_cover(tc, oc; a0 = c)
         @test balc.a .* balc.b' == (c .* bal1.a) .* bal1.b'
         balc0 = balance_cover(tc, oc)
-        @test balc0.a .* balc0.b' ≈ (c .* bal1.a) .* bal1.b' rtol=1e-8
+        @test balc0.a .* balc0.b' ≈ (c .* bal1.a) .* bal1.b' rtol = 1.0e-8
 
         # The marginal rule alone is exactly d-invariant and c-equivariant.
         b = [0.7, 2.0, 0.1]
@@ -444,16 +458,18 @@
         # the per-round product change plateaus at a positive constant no larger maxiter reduces.
         # It is detected as a stall (well under maxiter) and reported as a limit cycle, and the
         # geomean rule is the convergent escape.
-        Ucyc = [0.0 0.5 0.0 0.0
-                2.0 0.5 0.0 0.0
-                0.0 0.0 0.25 4.0
-                0.0 0.0 0.5 2.0
-                0.5 0.0 1.0 0.5]
+        Ucyc = [
+            0.0 0.5 0.0 0.0
+            2.0 0.5 0.0 0.0
+            0.0 0.0 0.25 4.0
+            0.0 0.0 0.5 2.0
+            0.5 0.0 1.0 0.5
+        ]
 
         @test balance_cover(Ucyc).iters < 1000               # :sum/marginal (Sinkhorn) converges
 
         stall = try
-            balance_cover(Ucyc; merge=MaxMerge(), maxiter=100_000)
+            balance_cover(Ucyc; merge = MaxMerge(), maxiter = 100_000)
             nothing
         catch e
             e
@@ -464,7 +480,7 @@
         # Detected as a stall, not by exhausting the (large) budget.
         @test occursin("stalled", stall.msg)
 
-        bal = balance_cover(Ucyc; merge=MaxMerge(), arule=:geomean)
+        bal = balance_cover(Ucyc; merge = MaxMerge(), arule = :geomean)
         @test jacobian_ratio(Ucyc, bal.a, bal.b) <= GATE
     end
 
@@ -481,12 +497,12 @@
             k > 1 && (Uslow[k, k - 1] = 0.5)
         end
 
-        bal = balance_cover(Uslow; merge=MaxMerge(), arule=:geomean)
+        bal = balance_cover(Uslow; merge = MaxMerge(), arule = :geomean)
         @test jacobian_ratio(Uslow, bal.a, bal.b) <= GATE
         @test bal.iters > 1000                                # exceeds the marginal budget
 
         undersized = try
-            balance_cover(Uslow; merge=MaxMerge(), arule=:geomean, maxiter=10)
+            balance_cover(Uslow; merge = MaxMerge(), arule = :geomean, maxiter = 10)
             nothing
         catch e
             e

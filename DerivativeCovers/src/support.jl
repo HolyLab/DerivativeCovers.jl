@@ -37,7 +37,7 @@ end
 # Number the touched vertices 1:ncomp by first-encounter order of their roots.
 function _label_components(uf::UnionFind, touched::AbstractVector{Bool})
     ids = zeros(Int, length(touched))
-    seen = Dict{Int,Int}()
+    seen = Dict{Int, Int}()
     ncomp = 0
     for p in eachindex(touched)
         touched[p] || continue

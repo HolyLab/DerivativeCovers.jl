@@ -28,8 +28,10 @@ takes the support components from [`support_components`](@ref)`(t, outidxs)`, wh
 and the roundoff guarantee. `(a, b)` is assumed to cover `J`; verify with
 [`jacobian_ratio`](@ref) if that is in doubt.
 """
-gramcover(a::AbstractVector, b::AbstractVector, t::Tape,
-          outidxs::AbstractVector{<:Integer}, args...) =
+gramcover(
+    a::AbstractVector, b::AbstractVector, t::Tape,
+    outidxs::AbstractVector{<:Integer}, args...
+) =
     gramcover(a, b, support_components(t, outidxs), args...)
 
 """
@@ -41,6 +43,8 @@ Write [`gramcover`](@ref)'s Gram-matrix cover of the tape outputs `outidxs` into
 `s` and return it. `s` must be indexed like the inputs (`eachindex(s) ==
 1:t.ninputs`).
 """
-gramcover!(s::AbstractVector, a::AbstractVector, b::AbstractVector, t::Tape,
-           outidxs::AbstractVector{<:Integer}, args...) =
+gramcover!(
+    s::AbstractVector, a::AbstractVector, b::AbstractVector, t::Tape,
+    outidxs::AbstractVector{<:Integer}, args...
+) =
     gramcover!(s, a, b, support_components(t, outidxs), args...)

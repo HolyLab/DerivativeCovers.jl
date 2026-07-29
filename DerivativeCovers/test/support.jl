@@ -15,9 +15,9 @@
         @test sc isa SupportComponents
         @test ncomponents(sc) == ncomponents(scm) == 2
         @test [rowcomponent(sc, k) for k in 1:length(outidxs)] ==
-              [rowcomponent(scm, k) for k in 1:length(outidxs)]
+            [rowcomponent(scm, k) for k in 1:length(outidxs)]
         @test [colcomponent(sc, j) for j in 1:t.ninputs] ==
-              [colcomponent(scm, j) for j in 1:t.ninputs]
+            [colcomponent(scm, j) for j in 1:t.ninputs]
     end
 
     @testset "position axes, one per output and input" begin

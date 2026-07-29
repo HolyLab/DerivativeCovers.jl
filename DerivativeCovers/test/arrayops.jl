@@ -118,17 +118,17 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         x0 = [0.3, -1.1, 0.7, 1.2]
         rp = cover_hessian(WithDiagnostics(), sum_prim, x0)
         rs = cover_hessian(WithDiagnostics(), sum_scalar, x0)
-        @test rp.grad ≈ rs.grad rtol=1e-12
-        @test rp.B ≈ rs.B rtol=1e-12
-        @test rp.h_sum ≈ rs.h_sum rtol=1e-12
-        @test rp.h_sum_rev ≈ rs.h_sum_rev rtol=1e-12
-        @test rp.h_quad ≈ rs.h_quad rtol=1e-12
+        @test rp.grad ≈ rs.grad rtol = 1.0e-12
+        @test rp.B ≈ rs.B rtol = 1.0e-12
+        @test rp.h_sum ≈ rs.h_sum rtol = 1.0e-12
+        @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
+        @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
         vp = cover_variance(sum_prim, x0)
         vs = cover_variance(sum_scalar, x0)
-        @test vp.h_sum ≈ vs.h_sum rtol=1e-12
-        @test vp.h_var ≈ vs.h_var rtol=1e-12
-        @test vp.severity ≈ vs.severity rtol=1e-12
+        @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
+        @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
+        @test vp.severity ≈ vs.severity rtol = 1.0e-12
 
         H = ForwardDiff.hessian(sum_prim, x0)
         @test bound_ratio(H, rp.B) <= GATE
@@ -142,10 +142,10 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         # sum(f, xs) parity: sum(abs2, z) vs the chained abs2 twin.
         rpf = cover_hessian(WithDiagnostics(), sumf_prim, x0)
         rsf = cover_hessian(WithDiagnostics(), sumf_scalar, x0)
-        @test rpf.grad ≈ rsf.grad rtol=1e-12
-        @test rpf.B ≈ rsf.B rtol=1e-12
-        @test rpf.h_sum ≈ rsf.h_sum rtol=1e-12
-        @test rpf.h_quad ≈ rsf.h_quad rtol=1e-12
+        @test rpf.grad ≈ rsf.grad rtol = 1.0e-12
+        @test rpf.B ≈ rsf.B rtol = 1.0e-12
+        @test rpf.h_sum ≈ rsf.h_sum rtol = 1.0e-12
+        @test rpf.h_quad ≈ rsf.h_quad rtol = 1.0e-12
 
         @test_throws "cannot record an empty sum" sum(TVar[])
     end
@@ -167,25 +167,25 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             fs = softmax_scalar(C0_5)
             rp = cover_hessian(WithDiagnostics(), f, x0)
             rs = cover_hessian(WithDiagnostics(), fs, x0)
-            @test rp.grad ≈ rs.grad rtol=1e-12
-            @test rp.B ≈ rs.B rtol=1e-12
-            @test rp.h_sum ≈ rs.h_sum rtol=1e-12
-            @test rp.h_sum_rev ≈ rs.h_sum_rev rtol=1e-12
-            @test rp.h_quad ≈ rs.h_quad rtol=1e-12
+            @test rp.grad ≈ rs.grad rtol = 1.0e-12
+            @test rp.B ≈ rs.B rtol = 1.0e-12
+            @test rp.h_sum ≈ rs.h_sum rtol = 1.0e-12
+            @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
+            @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
             vp = cover_variance(f, x0)
             vs = cover_variance(fs, x0)
-            @test vp.h_sum ≈ vs.h_sum rtol=1e-12
-            @test vp.h_var ≈ vs.h_var rtol=1e-12
-            @test vp.severity ≈ vs.severity rtol=1e-12
+            @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
+            @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
+            @test vp.severity ≈ vs.severity rtol = 1.0e-12
         end
 
         @testset "shift transparency of the detached max" begin
             res = cover_hessian(WithDiagnostics(), f, x0)
             fshift = z -> dot(C0_5, softmax(z .+ 10.0))
             res_shift = cover_hessian(WithDiagnostics(), fshift, x0 .- 10.0)
-            @test res_shift.h_sum ≈ res.h_sum rtol=1e-12
-            @test res_shift.h_quad ≈ res.h_quad rtol=1e-12
+            @test res_shift.h_sum ≈ res.h_sum rtol = 1.0e-12
+            @test res_shift.h_quad ≈ res.h_quad rtol = 1.0e-12
         end
 
         @testset "detached vs taped max" begin
@@ -196,8 +196,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
 
             @test cover_ratio(H, res_t.h_sum) <= GATE
             @test cover_ratio(H, res_t.h_quad) <= GATE
-            @test all(res_d.h_sum .<= res_t.h_sum .* (1 + 1e-9))
-            @test all(res_d.h_quad .<= res_t.h_quad .* (1 + 1e-9))
+            @test all(res_d.h_sum .<= res_t.h_sum .* (1 + 1.0e-9))
+            @test all(res_d.h_quad .<= res_t.h_quad .* (1 + 1.0e-9))
             ratio = maximum(res_t.h_sum ./ res_d.h_sum)
             @test ratio > 1.1
         end
@@ -231,29 +231,29 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             fs = layernorm_scalar(C0_5)
             rp = cover_hessian(WithDiagnostics(), f, x0)
             rs = cover_hessian(WithDiagnostics(), fs, x0)
-            @test rp.grad ≈ rs.grad rtol=1e-12
-            @test rp.B ≈ rs.B rtol=1e-12
-            @test rp.h_sum ≈ rs.h_sum rtol=1e-12
-            @test rp.h_sum_rev ≈ rs.h_sum_rev rtol=1e-12
-            @test rp.h_quad ≈ rs.h_quad rtol=1e-12
+            @test rp.grad ≈ rs.grad rtol = 1.0e-12
+            @test rp.B ≈ rs.B rtol = 1.0e-12
+            @test rp.h_sum ≈ rs.h_sum rtol = 1.0e-12
+            @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
+            @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
             vp = cover_variance(f, x0)
             vs = cover_variance(fs, x0)
-            @test vp.h_sum ≈ vs.h_sum rtol=1e-12
-            @test vp.h_var ≈ vs.h_var rtol=1e-12
-            @test vp.severity ≈ vs.severity rtol=1e-12
+            @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
+            @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
+            @test vp.severity ≈ vs.severity rtol = 1.0e-12
         end
 
         @testset "plain-vector sanity" begin
             n = 6
             xv = [0.4, -1.1, 2.3, -0.7, 1.5, 0.2]
             yv = layernorm(xv)
-            @test sum(yv) ≈ 0 atol=1e-12
-            @test sum(abs2, yv) / n ≈ 1 atol=1e-12
+            @test sum(yv) ≈ 0 atol = 1.0e-12
+            @test sum(abs2, yv) / n ≈ 1 atol = 1.0e-12
         end
 
         @testset "epsilon keyword" begin
-            fe = z -> dot(C0_5, tanh.(layernorm(z; epsilon=1e-5)))
+            fe = z -> dot(C0_5, tanh.(layernorm(z; epsilon = 1.0e-5)))
             H = ForwardDiff.hessian(fe, x0)
             res = cover_hessian(WithDiagnostics(), fe, x0)
             @test res.grad ≈ ForwardDiff.gradient(fe, x0)
@@ -275,15 +275,25 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         x0 = [0.4, -1.1, 0.7]
         v0 = vec(M)
 
-        @testset "$wrap" for wrap in (UpperTriangular, LowerTriangular,
-                                      UnitUpperTriangular, UnitLowerTriangular)
-            cases = [("constant matrix", z -> sum(abs2, wrap(M) * z),
-                      z -> sum(abs2, Matrix(wrap(M)) * z), x0),
-                     ("variable matrix", v -> sum(abs2, wrap(reshape(v, 3, 3)) * v[1:3]),
-                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * v[1:3]), v0),
-                     ("variable matrix, constant vector",
-                      v -> sum(abs2, wrap(reshape(v, 3, 3)) * x0),
-                      v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * x0), v0)]
+        @testset "$wrap" for wrap in (
+                UpperTriangular, LowerTriangular,
+                UnitUpperTriangular, UnitLowerTriangular,
+            )
+            cases = [
+                (
+                    "constant matrix", z -> sum(abs2, wrap(M) * z),
+                    z -> sum(abs2, Matrix(wrap(M)) * z), x0,
+                ),
+                (
+                    "variable matrix", v -> sum(abs2, wrap(reshape(v, 3, 3)) * v[1:3]),
+                    v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * v[1:3]), v0,
+                ),
+                (
+                    "variable matrix, constant vector",
+                    v -> sum(abs2, wrap(reshape(v, 3, 3)) * x0),
+                    v -> sum(abs2, Matrix(wrap(reshape(v, 3, 3))) * x0), v0,
+                ),
+            ]
             @testset "$name" for (name, f, fd, z0) in cases
                 res = cover_hessian(WithDiagnostics(), f, z0)
                 @test res.grad ≈ ForwardDiff.gradient(fd, z0)
@@ -293,29 +303,49 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         end
 
         @testset "$name" for (name, f, fd, z0) in
-            [("Diagonal, constant matrix", z -> sum(abs2, Diagonal(c) * z),
-              z -> sum(abs2, Matrix(Diagonal(c)) * z), x0),
-             ("Diagonal, variable matrix", v -> sum(abs2, Diagonal(v[1:3]) * v[4:6]),
-              v -> sum(abs2, Matrix(Diagonal(v[1:3])) * v[4:6]), [c; x0]),
-             ("adjoint row vector, constant row", z -> abs2(c' * z), z -> abs2(sum(c .* z)), x0),
-             ("adjoint row vector, variable row", v -> abs2(v[1:3]' * v[4:6]),
-              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0]),
-             ("adjoint row vector, constant vector", v -> abs2(v[1:3]' * c),
-              v -> abs2(sum(v[1:3] .* c)), [c; x0]),
-             ("transpose row vector, variable row", v -> abs2(transpose(v[1:3]) * v[4:6]),
-              v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0]),
-             ("transpose row vector, constant vector", v -> abs2(transpose(v[1:3]) * c),
-              v -> abs2(sum(v[1:3] .* c)), [c; x0]),
-             # `transpose` and `adjoint` are defined on TVar itself, so a wrapper around variable
-             # data has element type TVar: the row-vector methods dispatch on it, and an entry that
-             # is itself transposed on access resolves rather than erroring.
-             ("transposed variable matrix", v -> sum(abs2, transpose(reshape(v, 3, 3)) * v[1:3]),
-              v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * v[1:3]), v0),
-             ("transposed variable matrix, constant vector",
-              v -> sum(abs2, transpose(reshape(v, 3, 3)) * x0),
-              v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * x0), v0),
-             ("adjointed variable matrix", v -> sum(abs2, reshape(v, 3, 3)' * v[1:3]),
-              v -> sum(abs2, Matrix(reshape(v, 3, 3)') * v[1:3]), v0)]
+            [
+                (
+                    "Diagonal, constant matrix", z -> sum(abs2, Diagonal(c) * z),
+                    z -> sum(abs2, Matrix(Diagonal(c)) * z), x0,
+                ),
+                (
+                    "Diagonal, variable matrix", v -> sum(abs2, Diagonal(v[1:3]) * v[4:6]),
+                    v -> sum(abs2, Matrix(Diagonal(v[1:3])) * v[4:6]), [c; x0],
+                ),
+                ("adjoint row vector, constant row", z -> abs2(c' * z), z -> abs2(sum(c .* z)), x0),
+                (
+                    "adjoint row vector, variable row", v -> abs2(v[1:3]' * v[4:6]),
+                    v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0],
+                ),
+                (
+                    "adjoint row vector, constant vector", v -> abs2(v[1:3]' * c),
+                    v -> abs2(sum(v[1:3] .* c)), [c; x0],
+                ),
+                (
+                    "transpose row vector, variable row", v -> abs2(transpose(v[1:3]) * v[4:6]),
+                    v -> abs2(sum(v[1:3] .* v[4:6])), [c; x0],
+                ),
+                (
+                    "transpose row vector, constant vector", v -> abs2(transpose(v[1:3]) * c),
+                    v -> abs2(sum(v[1:3] .* c)), [c; x0],
+                ),
+                # `transpose` and `adjoint` are defined on TVar itself, so a wrapper around variable
+                # data has element type TVar: the row-vector methods dispatch on it, and an entry that
+                # is itself transposed on access resolves rather than erroring.
+                (
+                    "transposed variable matrix", v -> sum(abs2, transpose(reshape(v, 3, 3)) * v[1:3]),
+                    v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * v[1:3]), v0,
+                ),
+                (
+                    "transposed variable matrix, constant vector",
+                    v -> sum(abs2, transpose(reshape(v, 3, 3)) * x0),
+                    v -> sum(abs2, Matrix(transpose(reshape(v, 3, 3))) * x0), v0,
+                ),
+                (
+                    "adjointed variable matrix", v -> sum(abs2, reshape(v, 3, 3)' * v[1:3]),
+                    v -> sum(abs2, Matrix(reshape(v, 3, 3)') * v[1:3]), v0,
+                ),
+            ]
             res = cover_hessian(WithDiagnostics(), f, z0)
             @test res.grad ≈ ForwardDiff.gradient(fd, z0)
             @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
@@ -324,21 +354,27 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
     end
 
     @testset "covariance — softmax and layernorm" begin
-        cases = [("softmax", softmax_prim(C0_5), [0.3, -1.7, 2.1, -0.4, 1.0],
-                  [1e-3, 1e2, 1.0, 1e-1, 1e4]),
-                 ("layernorm", layernorm_prim(C0_5), [0.3, -1.7, 2.1, -0.4, 1.0],
-                  [1e-2, 1e3, 1.0, 1e-1, 1e2])]
+        cases = [
+            (
+                "softmax", softmax_prim(C0_5), [0.3, -1.7, 2.1, -0.4, 1.0],
+                [1.0e-3, 1.0e2, 1.0, 1.0e-1, 1.0e4],
+            ),
+            (
+                "layernorm", layernorm_prim(C0_5), [0.3, -1.7, 2.1, -0.4, 1.0],
+                [1.0e-2, 1.0e3, 1.0, 1.0e-1, 1.0e2],
+            ),
+        ]
         @testset "$name" for (name, f, x0, d) in cases
             res = cover_hessian(WithDiagnostics(), f, x0)
 
             resd = cover_hessian(WithDiagnostics(), xt -> f(xt ./ d), d .* x0)
-            @test resd.h_sum ≈ res.h_sum ./ d rtol=1e-12
-            @test resd.h_quad ≈ res.h_quad ./ d rtol=1e-12
+            @test resd.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
+            @test resd.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
 
             c = 7.3
             resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
-            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol=1e-12
-            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol=1e-12
+            @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol = 1.0e-12
+            @test resc.h_quad ≈ sqrt(c) .* res.h_quad rtol = 1.0e-12
         end
     end
 

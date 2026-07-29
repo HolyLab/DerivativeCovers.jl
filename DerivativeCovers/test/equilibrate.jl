@@ -8,14 +8,18 @@
 
     W = [0.5 -1.0 2.0; 1.5 0.0 -0.5; -1.0 1.0 1.0; 0.25 0.5 -2.0]
     programs = [
-        ("scalarized",
-         xs -> [xs[1] * xs[2], sin(xs[3]), xs[1] + xs[3], exp(xs[2])],
-         [0.7, -0.4, 1.1]),
+        (
+            "scalarized",
+            xs -> [xs[1] * xs[2], sin(xs[3]), xs[1] + xs[3], exp(xs[2])],
+            [0.7, -0.4, 1.1],
+        ),
         ("array-native matvec", xs -> W * xs, [0.7, -0.4, 1.1]),
         ("nonlinear rows", xs -> [tanh(y) for y in W * xs], [0.3, -0.2, 0.5]),
-        ("duplicated and input outputs",
-         xs -> [xs[1], xs[1], xs[2] * xs[3], xs[3]],
-         [0.7, -0.4, 1.1]),
+        (
+            "duplicated and input outputs",
+            xs -> [xs[1], xs[1], xs[2] * xs[3], xs[3]],
+            [0.7, -0.4, 1.1],
+        ),
     ]
 
     @testset "jvp and vjp match ForwardDiff — $name" for (name, f, x0) in programs
@@ -111,11 +115,11 @@
         b = max.(c.b_sum, eps())            # the power iteration needs strict positivity
 
         exact = scaled_singular_value(J, c.a, b)
-        est = scaled_singular_value(t, outidxs, c.a, b; rtol=1e-10, maxiter=2000)
+        est = scaled_singular_value(t, outidxs, c.a, b; rtol = 1.0e-10, maxiter = 2000)
         # Every iterate is norm(Jhat*v) at a unit v, hence a lower bound. This direction is what
         # forces `safety > 1` in `jacobian_shrink`; an estimate from above would need no guard.
         @test est <= exact * GATE
-        @test est ≈ exact rtol = 1e-6
+        @test est ≈ exact rtol = 1.0e-6
         # The spectral norm dominates every entry, which is the whole basis of the shrink.
         @test exact >= maximum(abs, equilibrate(J, c.a, b)) / GATE
     end
@@ -126,11 +130,15 @@
         c = cover_jacobian(t, outidxs)
         @test_throws "strictly positive" scaled_singular_value(t, outidxs, c.a, zeros(3))
         @test_throws "expected 3 (one per input)" scaled_singular_value(t, outidxs, c.a, ones(2))
-        @test_throws "a and outidxs must share indices" scaled_singular_value(t, outidxs, ones(2),
-                                                                             c.b_max)
+        @test_throws "a and outidxs must share indices" scaled_singular_value(
+            t, outidxs, ones(2),
+            c.b_max
+        )
         # Non-convergence is an error, never a silently returned partial estimate.
-        @test_throws "did not converge" scaled_singular_value(t, outidxs, c.a, c.b_max;
-                                                              rtol=1e-15, maxiter=2)
+        @test_throws "did not converge" scaled_singular_value(
+            t, outidxs, c.a, c.b_max;
+            rtol = 1.0e-15, maxiter = 2
+        )
     end
 
     @testset "jacobian_shrink" begin
@@ -165,7 +173,7 @@
         @test as * bs' ≈ 0.25 .* (a * b')
 
         @test_throws "sigma must be nonnegative" jacobian_shrink(a, b, -1.0)
-        @test_throws "safety must be positive" jacobian_shrink(a, b, 0.5; safety=0.0)
+        @test_throws "safety must be positive" jacobian_shrink(a, b, 0.5; safety = 0.0)
     end
 
 end

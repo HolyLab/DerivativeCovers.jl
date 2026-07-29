@@ -52,17 +52,29 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
 # declaration goes through `eval` where the parser never sees the keyword.
 @static if VERSION >= v"1.11"
     # Tape construction and the invariants a new elemental must satisfy.
-    eval(Expr(:public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-              :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
-              :split_scales, :value, :isconstant, :nnodes))
+    eval(
+        Expr(
+            :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
+            :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
+            :split_scales, :value, :isconstant, :nnodes
+        )
+    )
     # Ratios, bounds, and rescalings defined on a cover from any source.
-    eval(Expr(:public, :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
-              :jacobian_representability, :jacobian_minimax, :dependency_severity,
-              :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink, :jacobian_shrink,
-              :equilibrate))
+    eval(
+        Expr(
+            :public, :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
+            :jacobian_representability, :jacobian_minimax, :dependency_severity,
+            :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink, :jacobian_shrink,
+            :equilibrate
+        )
+    )
     # Adapters between the result types and the functions that take bare vectors.
-    eval(Expr(:public, :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
-              :declare_submap, :submap))
+    eval(
+        Expr(
+            :public, :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
+            :declare_submap, :submap
+        )
+    )
 end
 
 include("tape.jl")

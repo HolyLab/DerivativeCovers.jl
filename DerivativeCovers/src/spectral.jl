@@ -148,10 +148,12 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
     return opnorm(Hhat, 2)
 end
 
-function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
-                                maxiter::Integer=200,
-                                rtol::Real=cbrt(eps(float(real(eltype(h))))),
-                                rng::AbstractRNG=Xoshiro(0))
+function scaled_spectral_radius(
+        t::Tape, outidx::Integer, h::AbstractVector;
+        maxiter::Integer = 200,
+        rtol::Real = cbrt(eps(float(real(eltype(h))))),
+        rng::AbstractRNG = Xoshiro(0)
+    )
     n = t.ninputs
     Base.require_one_based_indexing(h)
     length(h) == n ||
@@ -189,7 +191,7 @@ improvement exactly when `safety*lambda < 1`; the clamp keeps a spectrally satur
 upper bound on the true spectral norm: with an exact `lambda` the default `1` is correct, but the
 power-iteration estimate converges from below and needs `safety > 1`.
 """
-function spectral_shrink(h::AbstractVector, lambda::Real; safety::Real=1)
+function spectral_shrink(h::AbstractVector, lambda::Real; safety::Real = 1)
     lambda >= 0 || throw(ArgumentError("lambda must be nonnegative, got $lambda"))
     safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
     return h .* sqrt(min(one(float(lambda)), safety * lambda))

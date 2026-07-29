@@ -57,7 +57,7 @@ quadrature merge it can recover; [`cyclic_partition`](@ref) is the default for t
 function level_partition(t::Tape, ngroups::Integer)
     ngroups >= 1 || throw(ArgumentError("ngroups must be positive, got $ngroups"))
     levels = node_levels(t)
-    lmax = maximum(levels; init=0)
+    lmax = maximum(levels; init = 0)
     groups = ones(Int, nnodes(t))
     lmax == 0 && return groups
     for k in (t.ninputs + 1):nnodes(t)
@@ -160,26 +160,32 @@ julia> round.(cover_hybrid(f, [0.5, 2.0], 6); digits=4)   # a group per node: th
  1.7321
 ```
 """
-function cover_hybrid(t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool=true,
-                      rule::SplitRule=ValueSplit())
+function cover_hybrid(
+        t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     return _cover_hybrid(t, adjoints(t, outidx), groups; check, rule)
 end
 
 # The merge itself, taking the adjoints as an argument: a caller that needs the gradient too
 # (`cover_nls`) passes the sweep it already ran instead of paying for a second one.
-function _cover_hybrid(t::Tape, vbar::AbstractVector, groups::AbstractVector{<:Integer};
-                       check::Bool=true, rule::SplitRule=ValueSplit())
+function _cover_hybrid(
+        t::Tape, vbar::AbstractVector, groups::AbstractVector{<:Integer};
+        check::Bool = true, rule::SplitRule = ValueSplit()
+    )
     rhos, _ = local_covers(t, vbar; check, rule)
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
     return [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs]
 end
 
-function cover_hybrid(t::Tape, outidx::Integer, ngroups::Integer; check::Bool=true,
-                      rule::SplitRule=ValueSplit())
+function cover_hybrid(
+        t::Tape, outidx::Integer, ngroups::Integer; check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
     return cover_hybrid(t, outidx, cyclic_partition(t, ngroups); check, rule)
 end
 
-function cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, rule::SplitRule=ValueSplit())
+function cover_hybrid(f, x0::AbstractVector, spec; check::Bool = true, rule::SplitRule = ValueSplit())
     t, outidx = tape_function(f, x0)
     return cover_hybrid(t, outidx, spec; check, rule)
 end
