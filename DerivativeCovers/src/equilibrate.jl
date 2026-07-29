@@ -67,6 +67,8 @@ Outputs that name the same node accumulate their seeds, so a repeated entry in `
 contributes the sum of the corresponding entries of `u` — the transpose of [`jvp`](@ref)'s
 duplicated rows.
 
+The seed `u` shares the axes of `outidxs`, the mirror of [`jvp`](@ref)'s `Jv`.
+
 `vjp!` writes into `Jtu`, which is indexed by the tape's inputs, `Base.OneTo(t.ninputs)`. It
 saves the result allocation only: the sweep still allocates its own `O(L)` working vector, so it
 is not allocation-free.
@@ -76,14 +78,13 @@ vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) =
 
 function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector)
     n, N = t.ninputs, nnodes(t)
-    length(u) == length(outidxs) ||
-        throw(DimensionMismatch("u has length $(length(u)), expected $(length(outidxs)) (one per output)"))
+    axes(u) == axes(outidxs) ||
+        throw(DimensionMismatch("u and outidxs must share indices: $(axes(u)) vs $(axes(outidxs))"))
     axes(Jtu, 1) == Base.OneTo(n) ||
         throw(DimensionMismatch("Jtu has axes $(axes(Jtu)), expected $((Base.OneTo(n),)) (one per input)"))
-    Base.require_one_based_indexing(u)
 
     vbar = zeros(N)
-    for k in eachindex(outidxs)
+    for k in eachindex(u, outidxs)
         vbar[outidxs[k]] += u[k]
     end
     # Tape order is topological, so N:-1:1 fully accumulates vbar[k] before k feeds its parents.
@@ -170,11 +171,12 @@ function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
                                maxiter::Integer=200,
                                rtol::Real=cbrt(eps(float(real(promote_type(eltype(a), eltype(b)))))),
                                rng::AbstractRNG=Xoshiro(0))
-    n, m = t.ninputs, length(outidxs)
+    n = t.ninputs
+    Base.require_one_based_indexing(b)
     length(b) == n ||
         throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
-    length(a) == m ||
-        throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
+    axes(a) == axes(outidxs) ||
+        throw(DimensionMismatch("a and outidxs must share indices: $(axes(a)) vs $(axes(outidxs))"))
     all(>(0), a) && all(>(0), b) ||
         throw(ArgumentError("the matrix-free singular value requires strictly positive a and b"))
 

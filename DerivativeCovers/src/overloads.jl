@@ -261,7 +261,10 @@ end
 # gain is tape length: one node instead of n-1.
 function Base.sum(xs::AbstractArray{TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
-    any(isconstant, xs) || return linearnode(ones(length(xs)), vec(xs))
+    # `linearnode` pairs coefficients with terms by index, so the unit coefficients carry `v`'s
+    # axes.
+    v = vec(xs)
+    any(isconstant, xs) || return linearnode(fill!(similar(v, Float64), 1), v)
     # Constants in the sum are an additive offset, which the unary constant node carries; a sum of
     # constants alone has nothing to record and stays a constant.
     recording = [x for x in xs if !isconstant(x)]

@@ -91,8 +91,8 @@ and an input-node entry a unit row. Costs `O(m*L)` time and memory: a diagnostic
 function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
     m, N = length(outidxs), nnodes(t)
     Vbar = zeros(m, N)
-    for k in 1:m
-        Vbar[k, outidxs[k]] += 1.0
+    for (k, o) in enumerate(outidxs)
+        Vbar[k, o] += 1.0
     end
     # Tape order is topological, so N:-1:1 fully accumulates each Vbar[:, j] before j feeds parents.
     for j in N:-1:1

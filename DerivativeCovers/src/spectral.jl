@@ -135,6 +135,7 @@ function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
                                 rtol::Real=cbrt(eps(float(real(eltype(h))))),
                                 rng::AbstractRNG=Xoshiro(0))
     n = t.ninputs
+    Base.require_one_based_indexing(h)
     length(h) == n ||
         throw(DimensionMismatch("h has length $(length(h)), expected $n (one per input)"))
     all(>(0), h) ||

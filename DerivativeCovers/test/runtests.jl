@@ -29,6 +29,7 @@ using Aqua
 using ExplicitImports
 using ForwardDiff
 using LinearAlgebra
+using OffsetArrays
 using Random
 using Test
 
@@ -53,6 +54,7 @@ include("jacobianconverse.jl")
 include("equilibrate.jl")
 include("compose.jl")
 include("paired.jl")
+include("genericaxes.jl")
 
 @testset "DerivativeCovers.jl" begin
 
