@@ -78,6 +78,10 @@
         @test z + 0.0 !== z
         @test nnodes(t) == 4
 
+        # A scaling by a non-unit constant does record, and records as a linear node: its
+        # curvature is zero, which is the empty second-partial matrix rather than a 1×1 zero.
+        @test isempty(t.Cs[scaled.idx])
+
         # An accumulator seeded with `zero(eltype(x))`, the shape generic numerical code takes,
         # records the tape the direct expression does.
         seeded = function (x)
