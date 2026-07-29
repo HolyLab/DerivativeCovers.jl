@@ -257,11 +257,10 @@ How [`balance_cover`](@ref)'s b-step combines a column of the scaled surrogate i
 weight: given the entries `Ũ_kj/a_k` over the outputs `k`, it returns `b_j`. Every rule that
 dominates each of its terms yields a valid cover, so the choice trades tightness, never validity.
 
-The family is open, and deliberately so. [`cover_jacobian_hybrid`](@ref) computes a group-max
-merge that interpolates between [`SumMerge`](@ref) (one group) and [`MaxMerge`](@ref) (one output
-per group); it carries a partition, so it could only ever join this family as a type, never as a
-name. It is not a `MergeRule` today — it reaches the inputs by its own sweep rather than through
-this b-step. A new rule defines a method of the b-step accumulation for its own type.
+[`SumMerge`](@ref), [`QuadMerge`](@ref) and [`MaxMerge`](@ref) are the `p = 1, 2, ∞` members of
+one family, so a parameterized member (a `p`-norm merge) is reachable through the same b-step
+without an API break. They are types rather than names so that the b-step's doubly-nested loop
+specializes on the choice, and so that the non-convergence hint can dispatch per rule.
 
 `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
 see that function's docstring.
@@ -295,7 +294,7 @@ struct MaxMerge <: MergeRule end
                   maxiter=nothing, rtol=eps(eltype(t.vals))^(2//3), check=true)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; merge=SumMerge(), arule=:marginal, a0=nothing,
-                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3))
+                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3), check=true)
 
 Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
 with the [`MergeRule`](@ref) b-step ([`SumMerge`](@ref), [`QuadMerge`](@ref) or
@@ -307,11 +306,11 @@ within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → 
 fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
 untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
 
-The two strategy axes are spelled differently because only one of them is open. `merge` is a
-[`MergeRule`](@ref) type: the family is a continuum whose interpolating member, the group-max
-merge of [`cover_jacobian_hybrid`](@ref), carries a partition and so cannot be a `Symbol`.
-`arule` is a `Symbol`: `:marginal` and `:geomean` are a closed pair of distinct algorithms that
-carry no data and admit no obvious third member.
+The two strategy axes are spelled differently. `merge` is a [`MergeRule`](@ref) type: its members
+are the `p = 1, 2, ∞` points of one continuum, so the b-step loop specializes on the choice and a
+parameterized member would fit the existing hook. `arule` is a `Symbol`: `:marginal` and
+`:geomean` are a closed pair of distinct algorithms that carry no data and admit no obvious third
+member.
 
 `maxiter = nothing` (the default) selects a per-rule budget: `1000` rounds for the marginal
 alternation, `10000` for the slower `:geomean` fit; pass an explicit count to override.
@@ -349,9 +348,12 @@ needs per-output separation, so the tape form forms the surrogate once (`O(mL)`,
 and balances it explicitly. The matrix form accepts any nonnegative magnitude matrix (a surrogate
 `Ũ`, or `abs.(J)`).
 
-`check` verifies the returned pair covers the surrogate (`O(mL)`; matrix form checks against
-`Utilde` directly). A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a
-zero column (a dead input) gets `b_j = 0`; both are exact and minimal.
+`check` verifies the returned pair covers the surrogate. The tape form must form `Ũ` to do so,
+so checking costs `O(mL)` on top of the `O(L)` production path; the matrix form already holds
+`Utilde` and checks against it for the cost of one pass over its entries.
+
+A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero column (a dead
+input) gets `b_j = 0`; both are exact and minimal.
 """
 function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule=SumMerge(),
                        arule::Symbol=:marginal, a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
@@ -361,7 +363,7 @@ function balance_cover(t::Tape, outidxs::AbstractVector{<:Integer}; merge::Merge
     if !(merge isa SumMerge) || arule !== :marginal
         # Anything beyond the sum/marginal alternation needs per-output channels, so balance the
         # explicit surrogate instead.
-        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol)
+        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol, check)
     end
     a = _balance_start(a0, m)
 
@@ -410,7 +412,7 @@ end
 
 function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arule::Symbol=:marginal,
                        a0=nothing, maxiter::Union{Nothing,Integer}=nothing,
-                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3))
+                       rtol::Real=eps(float(real(eltype(Utilde))))^(2//3), check::Bool=true)
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     maxiter = _resolve_maxiter(maxiter, arule)
@@ -428,9 +430,11 @@ function balance_cover(Utilde::AbstractMatrix; merge::MergeRule=SumMerge(), arul
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
-    r = jacobian_ratio(Utilde, a, b)
-    r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
-        error("balanced pair does not cover the matrix: worst ratio $r")
+    if check
+        r = jacobian_ratio(Utilde, a, b)
+        r <= 1 + eps(float(real(eltype(Utilde))))^(2//3) ||
+            error("balanced pair does not cover the matrix: worst ratio $r")
+    end
     return (; a, b, iters, delta)
 end
 
@@ -479,7 +483,7 @@ function _geomean_fit(U, a, maxiter, rtol)
             U[k, j] == 0 && continue
             i = dim == 1 ? k : j
             w = dim == 1 ? weights[j] : weights[k]
-            out[i] += log(U[k, j] / w)
+            out[i] += log(U[k, j]) - log(w)
             cnt[i] += 1
         end
         [cnt[i] > 0 ? exp(out[i] / cnt[i]) : 0.0 for i in eachindex(out)]
@@ -704,6 +708,7 @@ exact forced excess: longer support cycles can dominate it, and [`jacobian_minim
 computes the exact value together with a pair attaining it.
 """
 function jacobian_representability(M::AbstractMatrix)
+    Base.require_one_based_indexing(M)
     m, n = size(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
     worst = 0.0

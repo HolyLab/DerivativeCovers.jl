@@ -30,6 +30,10 @@
         @test size(Vbar) == (m, nnodes(t))
         J = Vbar[:, 1:t.ninputs]
         @test J ≈ ForwardDiff.jacobian(f, x0)
+
+        # Row k accumulates in the same order as the single-output sweep for the same node, so
+        # the two agree to the last bit and one traversal can stand in for m of them.
+        @test all(k -> Vbar[k, :] == adjoints(t, outidxs[k]), 1:m)
     end
 
     @testset "duplicated outputs are distinct rows" begin

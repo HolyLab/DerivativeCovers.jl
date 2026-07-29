@@ -1,0 +1,52 @@
+# Summary displays for the recorded program and the cover results. A `TVar` holds a reference to
+# the whole `Tape`, so the field-by-field default would dump every node of the program each time
+# a single scalar is inspected; these keep the output proportional to the summary, not the tape.
+
+Base.show(io::IO, t::Tape) = print(io, "Tape(", nnodes(t), " nodes, ", t.ninputs, " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", t::Tape) =
+    print(io, "Tape: ", nnodes(t), " nodes, ", t.ninputs, " inputs")
+
+function Base.show(io::IO, x::TVar)
+    if isconstant(x)
+        print(io, "TVar(", x.val, ")")
+    else
+        print(io, "TVar(node ", x.idx, ", ", x.val, ")")
+    end
+end
+
+function Base.show(io::IO, ::MIME"text/plain", x::TVar)
+    if isconstant(x)
+        print(io, "TVar: ", x.val, " (constant)")
+    else
+        print(io, "TVar: ", x.val, " (node ", x.idx, " of ", nnodes(x.tape), ")")
+    end
+end
+
+Base.show(io::IO, c::HessianCover) = print(io, "HessianCover(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::HessianCover) =
+    print(io, "HessianCover: ", length(c.grad), " inputs; grad, h_sum")
+
+Base.show(io::IO, c::HessianDiagnostics) =
+    print(io, "HessianDiagnostics(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::HessianDiagnostics) =
+    print(io, "HessianDiagnostics: ", length(c.grad),
+          " inputs; grad, B, h_sum, h_quad, h_sum_rev")
+
+Base.show(io::IO, c::JacobianCover) = print(io, "JacobianCover(", c.m, "x", c.n, ")")
+
+Base.show(io::IO, ::MIME"text/plain", c::JacobianCover) =
+    print(io, "JacobianCover: ", c.m, " outputs x ", c.n, " inputs; a, b_sum, b_quad, b_max")
+
+Base.show(io::IO, c::NLSCover) =
+    print(io, "NLSCover(", c.m, " residuals, ", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::NLSCover) =
+    print(io, "NLSCover: ", c.m, " residuals, ", length(c.grad), " inputs; grad, h, h_gn")
+
+Base.show(io::IO, c::VarianceCover) = print(io, "VarianceCover(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::VarianceCover) =
+    print(io, "VarianceCover: ", length(c.grad), " inputs; grad, h_sum, h_var, severity")

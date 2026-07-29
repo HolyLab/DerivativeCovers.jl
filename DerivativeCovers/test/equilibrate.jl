@@ -89,6 +89,19 @@
         @test_throws "b[1] is zero but column 1" equilibrate(J, [1.0, 1.0], [0.0, 1.0])
         @test scaled_singular_value(zeros(2, 2), zeros(2), zeros(2)) == 0.0
         @test_throws DimensionMismatch equilibrate(J, [1.0, 1.0, 1.0], [1.0, 1.0])
+
+        # The empty-support branch carries the element type of the computation, as the
+        # normal path does.
+        J32, a32, b32 = Float32[1 2; 3 4], ones(Float32, 2), ones(Float32, 2)
+        @test scaled_singular_value(J32, a32, b32) isa Float32
+        @test scaled_singular_value(zeros(Float32, 2, 2), zeros(Float32, 2), b32) isa Float32
+        H32, h32 = Float32[1 0; 0 1], ones(Float32, 2)
+        @test scaled_spectral_radius(H32, h32) isa Float32
+        @test scaled_spectral_radius(zeros(Float32, 2, 2), zeros(Float32, 2)) isa Float32
+
+        # The matrix-free path returns early when the Hessian vanishes on the whole support.
+        tlin, olin = tape_function(xs -> sum(xs), [1.0, 2.0, 3.0])
+        @test scaled_spectral_radius(tlin, olin, ones(3)) === 0.0
     end
 
     @testset "matrix-free singular value converges from below — $name" for (name, f, x0) in programs

@@ -232,7 +232,7 @@ Record a node `y = sum_j coeffs[j]*xs[j]` for constant `coeffs`. First partials 
 constants and `TVar`s has no second-order term.
 """
 function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
-    isempty(xs) && throw(ArgumentError("cannot record an empty inner product"))
+    isempty(xs) && throw(ArgumentError("cannot record an empty linear combination"))
     idxs = eachindex(coeffs, xs)
     t, _ = noderef(xs[first(idxs)])
     val = 0.0

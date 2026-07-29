@@ -18,7 +18,10 @@ with `v`, then one reverse sweep carrying both the adjoints `vbar` and their tan
     vbardot_i += (∂φ_k/∂v_i) * vbardot_k + vbar_k * sum_j (∂²φ_k/∂v_i∂v_j) * dv_j.
 
 A node with an empty second-partial matrix (see [`Tape`](@ref)) has no curvature term; the sweep
-skips it rather than indexing an empty `C`. A declared sub-map output ([`submapnode`](@ref))
+skips it rather than indexing an empty `C`. A [`PairedPartials`](@ref) node has only `2q` nonzero
+entries out of `(2q)^2`, so its curvature term is read off those pairs rather than by scanning the
+dense `C`; without that, a program built from `q`-long inner products would cost `O(q)` gradients
+instead of two. A declared sub-map output ([`submapnode`](@ref))
 carries only a *bound* on its second partials, so an exact product is impossible: `hvp` throws
 on any tape containing one, unconditionally, rather than letting success depend on whether the
 node's adjoint happens to vanish. The tape method of [`scaled_spectral_radius`](@ref) inherits
@@ -65,6 +68,15 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
             for (i, p) in enumerate(ps)
                 vbardot[p] += ds[i] * ak
             end
+        elseif C isa PairedPartials
+            # Slot j pairs with slot q+j and with nothing else, so the curvature term is one
+            # lookup per slot rather than a scan of the (2q)^2 entries.
+            qh = C.q
+            for j in 1:qh
+                pw, px = ps[j], ps[qh + j]
+                vbardot[pw] += ds[j] * ak + bk * dv[px]
+                vbardot[px] += ds[qh + j] * ak + bk * dv[pw]
+            end
         else
             for (i, p) in enumerate(ps)
                 curv = 0.0
@@ -78,6 +90,8 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     Hv .= view(vbardot, 1:n)
     return Hv
 end
+
+@doc (@doc hvp) hvp!
 
 function hvp(f, x0::AbstractVector, v::AbstractVector)
     t, outidx = tape_function(f, x0)
@@ -111,7 +125,7 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
         all(j -> iszero(H[i, j]), axes(H, 2)) ||
             throw(ArgumentError("h[$i] is zero but row $i of H is not: h does not cover H"))
     end
-    isempty(supp) && return 0.0
+    isempty(supp) && return zero(real(one(eltype(H)) / (one(eltype(h)) * one(eltype(h)))))
     Hhat = [H[i, j] / (h[i] * h[j]) for i in supp, j in supp]
     return opnorm(Hhat, 2)
 end
@@ -132,7 +146,7 @@ function scaled_spectral_radius(t::Tape, outidx::Integer, h::AbstractVector;
     for _ in 1:maxiter
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v
-        lambdanew == 0 && return 0.0             # the Hessian vanishes on the whole support
+        lambdanew == 0 && return lambdanew       # the Hessian vanishes on the whole support
         converged = abs(lambdanew - lambda) <= rtol * lambdanew
         lambda = lambdanew
         v = u ./ lambdanew

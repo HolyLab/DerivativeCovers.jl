@@ -4,7 +4,9 @@
 # The construction, the roundoff inflation, and the coupling of components by a
 # general W all live in MatrixCovers; the tape forms here only supply the support
 # components (via the O(L) route that never forms Ũ) and delegate. The matrix forms
-# `gramcover(a, b, Ũ[, w or W])` are MatrixCovers' own and are re-exported unchanged.
+# `gramcover(a, b, Ũ[, w or W])` are MatrixCovers' own; this package adds Tape methods to
+# the same functions but does not export them, so reaching the matrix forms unqualified
+# needs `using MatrixCovers`.
 
 """
     gramcover(a, b, t::Tape, outidxs) -> s

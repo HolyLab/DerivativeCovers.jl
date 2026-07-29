@@ -144,6 +144,44 @@ include("paired.jl")
         end
     end
 
+    @testset "show summarizes rather than dumps the tape" begin
+        f = xs -> sum(xs .^ 2)
+        t, _ = tape_function(f, collect(1.0:60.0))
+        x = TVar(t, 5)
+
+        @test sprint(show, t) == "Tape($(nnodes(t)) nodes, 60 inputs)"
+        @test occursin("$(nnodes(t)) nodes", sprint(show, MIME"text/plain"(), t))
+        @test sprint(show, x) == "TVar(node 5, 5.0)"
+        @test occursin("node 5", sprint(show, MIME"text/plain"(), x))
+        @test occursin("constant", sprint(show, MIME"text/plain"(), TVar(2.5)))
+        @test sprint(show, TVar(2.5)) == "TVar(2.5)"
+
+        # A TVar carries a reference to the whole tape, so the default display would grow with
+        # the program. Both displays must stay bounded as the tape gets ten times longer.
+        tbig, _ = tape_function(f, collect(1.0:600.0))
+        for v in (tbig, TVar(tbig, 5))
+            @test length(sprint(show, v)) < 50
+            @test length(sprint(show, MIME"text/plain"(), v)) < 50
+        end
+
+        x0 = [0.6, -0.4, 0.9]
+        results = (cover_hessian(f, x0),
+                   cover_hessian(WithDiagnostics(), f, x0),
+                   cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
+                   cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
+                   cover_variance(f, x0))
+        for c in results
+            # Each names its own type and its dimensions, and holds vectors it must not print.
+            for s in (sprint(show, c), sprint(show, MIME"text/plain"(), c))
+                @test occursin(string(nameof(typeof(c))), s)
+                @test occursin("3", s)
+                @test length(s) < 100
+            end
+        end
+        @test sprint(show, results[3]) == "JacobianCover(2x3)"
+        @test sprint(show, results[4]) == "NLSCover(2 residuals, 3 inputs)"
+    end
+
     @testset "tape mechanics" begin
         f = x -> x[1] * x[2] + exp(x[3])
         x0 = [2.0, -3.0, 0.5]
@@ -519,6 +557,19 @@ include("paired.jl")
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
         @test declare_submap(Fsub, xp; rule=SensitivitySplit()).S == [1.0 1.0]
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
+
+        # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
+        # The Gauss-Newton pair is seeded at the residual nodes instead, and the gradient is an
+        # ordinary adjoint sweep, so neither moves.
+        nv = cover_nls(Fsub, xp)
+        ns = cover_nls(Fsub, xp; rule=SensitivitySplit())
+        @test nv.h != ns.h
+        @test nv.h_gn == ns.h_gn
+        @test nv.grad == ns.grad
+        let H = ForwardDiff.hessian(x -> 0.5 * sum(abs2, Fsub(x)), xp)
+            @test cover_ratio(H, nv.h) <= GATE
+            @test cover_ratio(H, ns.h) <= GATE
+        end
     end
 
     @testset "node levels and partitions" begin
@@ -1149,6 +1200,14 @@ include("paired.jl")
         @test spiked.x ≈ A \ b
 
         @test_throws "strictly positive" cover_cg(A, b, [0.0, 2.0, 3.0])
+
+        # An indefinite A gives a direction of nonpositive curvature; without the guard the
+        # division by it would fill x and the whole history with NaN.
+        Aneg = Matrix(Diagonal([1.0, -4.0, 9.0]))
+        @test_throws "nonpositive curvature" cover_cg(Aneg, b, h)
+        @test_throws ArgumentError cover_cg(Aneg, b, h)
+        # A singular direction is caught on the same test.
+        @test_throws "nonpositive curvature" cover_cg(zeros(3, 3), b, h)
     end
 
     @testset "cover quality is step quality under a truncated CG" begin

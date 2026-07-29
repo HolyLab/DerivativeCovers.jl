@@ -132,8 +132,11 @@ SensitivitySplit
 
 ```@docs
 hvp
+hvp!
 jvp
+jvp!
 vjp
+vjp!
 ```
 
 ```@index

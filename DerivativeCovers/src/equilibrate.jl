@@ -47,6 +47,8 @@ function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v
     return Jv
 end
 
+@doc (@doc jvp) jvp!
+
 function jvp(r, x0::AbstractVector, v::AbstractVector)
     t, outidxs = tape_function(r, x0)
     return jvp(t, outidxs, v)
@@ -95,6 +97,8 @@ function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, 
     Jtu .= view(vbar, 1:n)
     return Jtu
 end
+
+@doc (@doc vjp) vjp!
 
 function vjp(r, x0::AbstractVector, u::AbstractVector)
     t, outidxs = tape_function(r, x0)
@@ -157,7 +161,7 @@ function scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::Abstract
     Jhat = equilibrate(J, a, b)
     rows = [k for k in eachindex(a) if a[k] > 0]
     cols = [j for j in eachindex(b) if b[j] > 0]
-    (isempty(rows) || isempty(cols)) && return 0.0
+    (isempty(rows) || isempty(cols)) && return zero(real(eltype(Jhat)))
     return opnorm(Jhat[rows, cols], 2)
 end
 
@@ -180,7 +184,7 @@ function scaled_singular_value(t::Tape, outidxs::AbstractVector{<:Integer},
     for _ in 1:maxiter
         u = jvp(t, outidxs, v ./ b) ./ a          # u = Jhat * v
         signew = norm(u)                          # <= opnorm(Jhat) for any unit v
-        signew == 0 && return 0.0                 # the Jacobian vanishes on the whole support
+        signew == 0 && return signew              # the Jacobian vanishes on the whole support
         w = vjp(t, outidxs, u ./ a) ./ b          # w = Jhat' * u; nonzero since dot(w, v) = signew^2
         converged = abs(signew - sigma) <= rtol * signew
         sigma = signew

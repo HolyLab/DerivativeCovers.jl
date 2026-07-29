@@ -169,7 +169,7 @@ function psd_excess(A::AbstractMatrix, h::AbstractVector, hd::AbstractVector)
         # Scaling by a positive diagonal cannot change the sign of the spectrum, so a PSD matrix
         # needs no shift under any cover.
         iszero(tau_dist) ||
-            error("A needs no shift under h but a shift $tau_dist under hd; A is not symmetric?")
+            error("A needs no shift under h but a shift $tau_dist under hd; rescaling by a positive diagonal cannot change the sign of the spectrum, so this is eigmin roundoff on a near-singular A")
         return (; tau_ref, tau_dist, excess = fill!(similar(h, float(eltype(h))), 1))
     end
     excess = @. (tau_dist * hd^2) / (tau_ref * h^2)
@@ -199,8 +199,9 @@ Note that the convergence test is itself stated in the cover's metric, so two ru
 covers stop at genuinely different accuracies; comparing them requires a metric fixed outside the
 iteration, as [`step_degradation`](@ref) does.
 
-Requires a strictly positive cover. `A` must be symmetric positive definite for the iteration to
-be meaningful.
+Requires a strictly positive cover, and a symmetric positive definite `A`. Definiteness is
+enforced as the iteration goes: a search direction of nonpositive curvature throws rather than
+producing the NaN iterates that dividing by it would.
 """
 function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
                   x0::AbstractVector = zero(b), maxiter::Integer = length(b),
@@ -221,7 +222,10 @@ function cover_cg(A::AbstractMatrix, b::AbstractVector, h::AbstractVector;
     iters = 0
     while errold > tol && iters < maxiter
         Ap = A * p
-        alpha = errold / dot(p, Ap)
+        pAp = dot(p, Ap)
+        pAp > 0 ||
+            throw(ArgumentError("cover_cg requires a positive definite A; direction $(iters + 1) has nonpositive curvature dot(p, A*p) = $pAp"))
+        alpha = errold / pAp
         @. x += alpha * p
         if (iters + 1) % reset == 0
             r .= b .- A * x
