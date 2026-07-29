@@ -40,13 +40,32 @@ end
 -(x::TVar) = isconstant(x) ? TVar(-value(x)) : unarynode(x, -value(x), -1.0, 0)
 
 # --- TVar with a numeric constant, folded into a unary node ---
-+(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) + c) : unarynode(x, value(x) + c, 1.0, 0)
+# An operation that leaves the operand alone returns it rather than recording a node. Generic
+# numerical code seeds accumulators with `zero(T)` and scales by unit factors, so these identities
+# are common enough to lengthen a tape appreciably, and the node they would record has unit first
+# partial and no curvature: dropping it leaves every derivative unchanged.
+#
+# An additive shift qualifies whenever it leaves the value alone, which also declines the case
+# where it would turn a negative zero positive. A scaling qualifies only for a unit factor: the
+# coefficient is the node's first partial, so a product that happens to leave the value alone --
+# any factor at all, when the value is zero -- still has a derivative to record.
+function +(x::TVar, c::Real)
+    isconstant(x) && return TVar(value(x) + c)
+    v = value(x)
+    return v + c === v ? x : unarynode(x, v + c, 1.0, 0)
+end
 +(c::Real, x::TVar) = x + c
--(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) - c) : unarynode(x, value(x) - c, 1.0, 0)
+function -(x::TVar, c::Real)
+    isconstant(x) && return TVar(value(x) - c)
+    v = value(x)
+    return v - c === v ? x : unarynode(x, v - c, 1.0, 0)
+end
 -(c::Real, x::TVar) = isconstant(x) ? TVar(c - value(x)) : unarynode(x, c - value(x), -1.0, 0)
-*(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) : unarynode(x, value(x) * c, float(c), 0)
+*(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) :
+    isone(c) ? x : unarynode(x, value(x) * c, float(c), 0)
 *(c::Real, x::TVar) = x * c
-/(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) : unarynode(x, value(x) / c, 1 / c, 0)
+/(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) :
+    isone(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
 # TVar is not a Number, so define scalar-array multiplication explicitly.
 *(x::TVar, c::AbstractArray{<:Real}) = x .* c
 *(c::AbstractArray{<:Real}, x::TVar) = c .* x
