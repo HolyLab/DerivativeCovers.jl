@@ -106,7 +106,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-        # The primitive form's inner-product nodes carry `PairedPartials`, the scalarized twin's
+        # The primitive form's inner-product nodes carry `PairedCurvature`, the scalarized twin's
         # multiply nodes a dense 2x2, so this pins the two curvature branches of `hvp!` together.
         v = Float64[cos(3i) for i in eachindex(x0)]
         @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol = 1.0e-12
@@ -230,9 +230,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test resw.grad ≈ ForwardDiff.gradient(f_constW, z0)
         @test cover_ratio(Hw, resw.h_sum) <= GATE
         @test cover_ratio(Hw, resw.h_quad) <= GATE
-        # A constant-W matvec records only linear nodes: no PairedPartials atom on the tape.
+        # A constant-W matvec records only linear nodes: no PairedCurvature atom on the tape.
         t, _ = tape_function(f_constW, z0)
-        @test !any(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
+        @test !any(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
         # H = A'A exactly (each residual is linear in z), so the minimal cover is the row norms.
         @test Hw ≈ Aconst' * Aconst
     end
@@ -316,25 +316,46 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test_throws DimensionMismatch Diagonal([1.0]) * xs
 
         # A node with three or more parents carries second partials only in the forms the cover
-        # sweep knows how to split; a dense C among them is not one, and says so rather than
-        # reading the 2x2 corner of a larger block.
+        # sweep knows how to split; a general dense C is not one, and says so rather than
+        # reading the 2x2 corner of a larger block. The bound and the product still read it.
         t3 = Tape([1.0, 2.0, 3.0])
-        DerivativeCovers.pushnode!(t3, 6.0, [1, 2, 3], ones(3), ones(3, 3))
+        DerivativeCovers.pushnode!(
+            t3, 6.0, [1, 2, 3], ones(3), DerivativeCovers.DenseCurvature(ones(3, 3))
+        )
         vbar = [0.0, 0.0, 0.0, 1.0]
-        @test_throws "node 4 has 3 parents; only unary and binary elementals are supported" (
+        @test_throws "the rank-1 cover is defined for the unary and binary forms" (
             local_covers(t3, vbar)
         )
+        @test DerivativeCovers.hessian_bound(t3, vbar, sensitivities(t3)) == ones(3, 3)
+        @test hvp(t3, 4, [1.0, 0.0, 0.0]) == ones(3)
     end
 
-    @testset "PairedPartials entries" begin
+    @testset "inline unary and binary curvature" begin
+        # The elementals record their blocks inline; `getindex` and `size` report them as the
+        # matrices they stand for.
+        t, _ = tape_function(x -> exp(x[1]) * x[2], [0.5, 2.0])
+        Cu = t.Cs[findfirst(C -> C isa DerivativeCovers.UnaryCurvature, t.Cs)]
+        @test size(Cu) == (1, 1)
+        @test Cu[1, 1] == exp(0.5)
+        @test_throws BoundsError Cu[1, 2]
+        Cb = t.Cs[findfirst(C -> C isa DerivativeCovers.BinaryCurvature, t.Cs)]
+        @test size(Cb) == (2, 2)
+        @test Cb[1, 2] == Cb[2, 1] == 1.0        # d²(u*v)/du dv
+        @test Cb[1, 1] == Cb[2, 2] == 0.0
+        @test_throws BoundsError Cb[3, 1]
+        # No elemental records the general dense form.
+        @test !any(C -> C isa DerivativeCovers.DenseCurvature, t.Cs)
+    end
+
+    @testset "PairedCurvature entries" begin
         # An inner-product node's second partials are the cross terms alone: slots are ordered
         # (w_1..w_q, x_1..x_q), so the only nonzeros are the pairs q apart.
         t, _ = tape_function(v -> dot(v[1:3], v[4:6]), [0.9, -0.4, 1.3, 0.4, -1.1, 0.7])
-        k = findfirst(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
+        k = findfirst(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
         C = t.Cs[k]
         @test size(C) == (6, 6)
-        @test C == [Float64(abs(i - j) == 3) for i in 1:6, j in 1:6]
-        @test C == C'
+        @test all(C[i, j] == Float64(abs(i - j) == 3) for i in 1:6, j in 1:6)
+        @test all(C[i, j] == C[j, i] for i in 1:6, j in 1:6)
     end
 
 end

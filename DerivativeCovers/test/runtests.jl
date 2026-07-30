@@ -38,6 +38,7 @@ include("programs.jl")
 const GATE = 1 + 1.0e-10
 
 include("constants.jl")
+include("elementtype.jl")
 include("primitives.jl")
 include("composites.jl")
 include("arrayops.jl")
@@ -95,7 +96,8 @@ include("genericaxes.jl")
                 :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
                 :cover_hybrid, :cover_jacobian_hybrid,
                 :CoverOnly, :WithDiagnostics,
-                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
+                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :NLSDiagnostics,
+                :VarianceCover,
                 :SplitRule, :ValueSplit, :SensitivitySplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
@@ -106,6 +108,8 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
             :submapnode, :split_scales, :value, :isconstant, :nnodes,
+            :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
+            :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
             :jacobian_representability, :jacobian_minimax, :dependency_severity,
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
@@ -125,6 +129,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
             :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+            :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
         )
@@ -183,6 +188,7 @@ include("genericaxes.jl")
             cover_hessian(WithDiagnostics(), f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
+            cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_variance(f, x0),
         )
         for c in results
@@ -195,6 +201,7 @@ include("genericaxes.jl")
         end
         @test sprint(show, results[3]) == "JacobianCover(2x3)"
         @test sprint(show, results[4]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[5]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin
@@ -233,7 +240,7 @@ include("genericaxes.jl")
         @test scaled_spectral_radius(t, oi, h; maxiter = Int32(50)) ≈
             scaled_spectral_radius(t, outidx, h; maxiter = 50)
         # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
-        k = something(findfirst(C -> !isempty(C), t.Cs))
+        k = something(findfirst(C -> !(C isa DerivativeCovers.NoCurvature), t.Cs))
         @test DerivativeCovers.local_cover_slots(t, Int32(k), 1) ==
             DerivativeCovers.local_cover_slots(t, k, 1.0)
     end
@@ -597,7 +604,7 @@ include("genericaxes.jl")
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
 
         # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
-        # The Gauss-Newton pair is seeded at the residual nodes instead, and the gradient is an
+        # The residual channels carry unit atoms, which admit no split, and the gradient is an
         # ordinary adjoint sweep, so neither moves.
         nv = cover_nls(Fsub, xp)
         ns = cover_nls(Fsub, xp; rule = SensitivitySplit())

@@ -8,9 +8,10 @@
 # that cover comes from overlapping paths.
 
 """
-    VarianceCover
+    VarianceCover{T}
 
-Result of [`cover_variance`](@ref).
+Result of [`cover_variance`](@ref), in the element type `T` of the [`Tape`](@ref) it was computed
+from.
 
 - `grad`: gradient of the scalar function.
 - `h_sum`: certified sum-merge Hessian cover.
@@ -21,11 +22,11 @@ Result of [`cover_variance`](@ref).
 The estimates satisfy `h_var <= h_quad <= h_sum` coordinatewise. Because `h_var` drops
 covariances between reconvergent contributions, it need not bound the Hessian.
 """
-struct VarianceCover
-    grad::Vector{Float64}
-    h_sum::Vector{Float64}
-    h_var::Vector{Float64}
-    severity::Vector{Float64}
+struct VarianceCover{T}
+    grad::Vector{T}
+    h_sum::Vector{T}
+    h_var::Vector{T}
+    severity::Vector{T}
 end
 
 """
@@ -36,9 +37,9 @@ with `t.parents[k][i] == j`. This is the variance-channel counterpart of the lin
 that [`local_covers`](@ref) returns, and it seeds the squared channel of
 [`dependency_sweep`](@ref).
 """
-function variance_seeds(t::Tape, rhos::AbstractVector)
+function variance_seeds(t::Tape{T}, rhos::AbstractVector) where {T}
     N = nnodes(t)
-    theta2 = zeros(N)
+    theta2 = zeros(T, N)
     for k in (t.ninputs + 1):N
         rho = rhos[k]
         isempty(rho) && continue

@@ -125,7 +125,7 @@ cover_hybrid
 cover_jacobian_hybrid
 ```
 
-## Selecting what `cover_hessian` returns
+## Selecting what `cover_hessian` and `cover_nls` return
 
 ```@docs
 CoverOnly
@@ -139,6 +139,7 @@ HessianCover
 HessianDiagnostics
 JacobianCover
 NLSCover
+NLSDiagnostics
 VarianceCover
 ```
 

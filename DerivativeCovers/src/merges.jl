@@ -74,13 +74,13 @@ contiguous. `groups[k]` is the group of node k; `maximum(groups)` sets the chann
 With `rhos` from [`local_covers`](@ref), column `j` collects exactly the seeds that
 [`abs_reverse`](@ref) propagates into the group partial sums.
 """
-function group_seeds(t::Tape, rhos::AbstractVector, groups::AbstractVector{<:Integer})
+function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:Integer}) where {T}
     N = nnodes(t)
     length(groups) == N ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $N (one per node)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
     G = maximum(groups)
-    Theta = zeros(G, N)
+    Theta = zeros(T, G, N)
     for k in (t.ninputs + 1):N
         rho = rhos[k]
         isempty(rho) && continue

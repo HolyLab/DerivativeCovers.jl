@@ -14,15 +14,14 @@ with `v`, then one reverse sweep carrying both the adjoints `vbar` and their tan
 
     vbardot_i += (∂φ_k/∂v_i) * vbardot_k + vbar_k * sum_j (∂²φ_k/∂v_i∂v_j) * dv_j.
 
-A node with an empty second-partial matrix (see [`Tape`](@ref)) has no curvature term; the sweep
-skips it rather than indexing an empty `C`. A [`PairedPartials`](@ref) node has only `2q` nonzero
-entries out of `(2q)^2`, so its curvature term is read off those pairs rather than by scanning the
-dense `C`; without that, a program built from `q`-long inner products would cost `O(q)` gradients
-instead of two. A declared sub-map output ([`submapnode`](@ref))
-carries only a *bound* on its second partials, so an exact product is impossible: `hvp` throws
-on any tape containing one, unconditionally, rather than letting success depend on whether the
-node's adjoint happens to vanish. The tape method of [`scaled_spectral_radius`](@ref) inherits
-this restriction; its dense method does not.
+The curvature term of each node comes from [`curvature_apply!`](@ref), which every
+[`Curvature`](@ref) supplies in the form its structure allows — a [`PairedCurvature`](@ref) node
+reads its `2q` nonzeros off the pairs rather than scanning a `2q × 2q` matrix, without which a
+program built from `q`-long inner products would cost `O(q)` gradients instead of two. A node
+whose second partials are only *declared* ([`has_exact_partials`](@ref) is `false`) makes an
+exact product impossible: `hvp` throws on any tape containing one, unconditionally, rather than
+letting success depend on whether the node's adjoint happens to vanish. The tape method of
+[`scaled_spectral_radius`](@ref) inherits this restriction; its dense method does not.
 
 Costs about two gradients and `O(L)` memory.
 
@@ -57,14 +56,16 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     axes(Hv) == axes(v) ||
         throw(DimensionMismatch("Hv and v must share indices: $(axes(Hv)) vs $(axes(v))"))
     Base.require_one_based_indexing(v)
-    kdecl = findfirst(C -> C isa CoveredPartials, t.Cs)
+    kdecl = findfirst(!has_exact_partials, t.Cs)
     kdecl === nothing ||
         throw(ArgumentError("hvp is unavailable: node $kdecl is a declared sub-map output (see submapnode) whose exact second partials are not recorded"))
 
-    dv = zeros(N)
+    # The product runs in the tape's element type promoted with the tangent's.
+    T = promote_type(eltype(t), eltype(Hv))
+    dv = zeros(T, N)
     copyto!(view(dv, 1:n), v)
     for k in (n + 1):N
-        acc = 0.0
+        acc = zero(T)
         for (i, p) in enumerate(t.parents[k])
             acc += t.ds[k][i] * dv[p]
         end
@@ -72,32 +73,20 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     end
 
     vbar = adjoints(t, outidx)
-    vbardot = zeros(N)          # tangent of vbar; vbar[outidx] = 1 is constant, so this seeds at 0
+    vbardot = zeros(T, N)       # tangent of vbar; vbar[outidx] = 1 is constant, so this seeds at 0
     for k in N:-1:1
         ps = t.parents[k]
         isempty(ps) && continue
         bk, ak = vbar[k], vbardot[k]
         (bk == 0 && ak == 0) && continue
-        ds, C = t.ds[k], t.Cs[k]
-        if isempty(C)
-            for (i, p) in enumerate(ps)
-                vbardot[p] += ds[i] * ak
-            end
-        elseif C isa PairedPartials
-            # PairedPartials has one partner per slot; avoid scanning structural zeros.
-            qh = C.q
-            for j in 1:qh
-                pw, px = ps[j], ps[qh + j]
-                vbardot[pw] += ds[j] * ak + bk * dv[px]
-                vbardot[px] += ds[qh + j] * ak + bk * dv[pw]
-            end
-        else
-            for (i, p) in enumerate(ps)
-                curv = 0.0
-                for (j, q) in enumerate(ps)
-                    curv += C[i, j] * dv[q]
-                end
-                vbardot[p] += ds[i] * ak + bk * curv
+        ds = t.ds[k]
+        for (i, p) in enumerate(ps)
+            vbardot[p] += ds[i] * ak
+        end
+        if bk != 0
+            # The ladder resolves the forms the tape recorded, whatever type the tangents carry.
+            dispatchcurvature(t.Cs[k], eltype(t)) do C
+                curvature_apply!(vbardot, C, ps, bk, dv)
             end
         end
     end
@@ -157,9 +146,10 @@ function scaled_spectral_radius(
     all(>(0), h) ||
         throw(ArgumentError("the matrix-free spectral radius requires a strictly positive h"))
 
-    v = randn(rng, n)
+    T = promote_type(eltype(t), float(real(eltype(h))))
+    v = randn(rng, T, n)
     v ./= norm(v)
-    lambda = 0.0
+    lambda = zero(T)
     for _ in 1:maxiter
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v

@@ -118,7 +118,7 @@ function declare_submap(F, x0::AbstractVector; rule::SplitRule = ValueSplit())
     # local covers.
     Vbar = adjoints(t, outidxs)
     J = Vbar[:, 1:n]
-    S = Matrix{Float64}(undef, q, n)
+    S = Matrix{eltype(t)}(undef, q, n)
     for k in 1:q
         _, theta = local_covers(t, Vbar[k, :]; rule)
         S[k, :] = abs_reverse(t, theta)[1:n]
@@ -127,7 +127,7 @@ function declare_submap(F, x0::AbstractVector; rule::SplitRule = ValueSplit())
 end
 
 """
-    submap(F, xs::AbstractVector{TVar}; rule=ValueSplit()) -> Vector{TVar}
+    submap(F, xs::AbstractVector{<:TVar}; rule=ValueSplit()) -> Vector{TVar}
 
 Record `F` as a single declared call on the tape of `xs`: evaluate [`declare_submap`](@ref) at
 the parent values and embed the result via [`submapnode`](@ref). The recording tape gains one
@@ -136,7 +136,7 @@ price that exact Hessian-vector products ([`hvp`](@ref)) become unavailable on t
 scalar-valued `F` yields a one-element vector. `rule` is passed to [`declare_submap`](@ref)
 and governs only the declaration's curvature covers.
 """
-function submap(F, xs::AbstractVector{TVar}; rule::SplitRule = ValueSplit())
+function submap(F, xs::AbstractVector{<:TVar}; rule::SplitRule = ValueSplit())
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
     d = declare_submap(F, [value(x) for x in xs]; rule)
     return submapnode(xs, d.y, d.J, d.S)
