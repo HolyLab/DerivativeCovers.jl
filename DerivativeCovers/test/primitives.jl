@@ -316,16 +316,35 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test_throws DimensionMismatch Diagonal([1.0]) * xs
 
         # A node with three or more parents carries second partials only in the forms the cover
-        # sweep knows how to split; a dense C among them is not one, and says so rather than
-        # reading the 2x2 corner of a larger block.
+        # sweep knows how to split; a general dense C is not one, and says so rather than
+        # reading the 2x2 corner of a larger block. The bound and the product still read it.
         t3 = Tape([1.0, 2.0, 3.0])
         DerivativeCovers.pushnode!(
             t3, 6.0, [1, 2, 3], ones(3), DerivativeCovers.DenseCurvature(ones(3, 3))
         )
         vbar = [0.0, 0.0, 0.0, 1.0]
-        @test_throws "node 4 has 3 parents; only unary and binary elementals are supported" (
+        @test_throws "the rank-1 cover is defined for the unary and binary forms" (
             local_covers(t3, vbar)
         )
+        @test DerivativeCovers.hessian_bound(t3, vbar, sensitivities(t3)) == ones(3, 3)
+        @test hvp(t3, 4, [1.0, 0.0, 0.0]) == ones(3)
+    end
+
+    @testset "inline unary and binary curvature" begin
+        # The elementals record their blocks inline; `getindex` and `size` report them as the
+        # matrices they stand for.
+        t, _ = tape_function(x -> exp(x[1]) * x[2], [0.5, 2.0])
+        Cu = t.Cs[findfirst(C -> C isa DerivativeCovers.UnaryCurvature, t.Cs)]
+        @test size(Cu) == (1, 1)
+        @test Cu[1, 1] == exp(0.5)
+        @test_throws BoundsError Cu[1, 2]
+        Cb = t.Cs[findfirst(C -> C isa DerivativeCovers.BinaryCurvature, t.Cs)]
+        @test size(Cb) == (2, 2)
+        @test Cb[1, 2] == Cb[2, 1] == 1.0        # d²(u*v)/du dv
+        @test Cb[1, 1] == Cb[2, 2] == 0.0
+        @test_throws BoundsError Cb[3, 1]
+        # No elemental records the general dense form.
+        @test !any(C -> C isa DerivativeCovers.DenseCurvature, t.Cs)
     end
 
     @testset "PairedCurvature entries" begin

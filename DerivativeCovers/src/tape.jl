@@ -12,9 +12,10 @@ The first `ninputs` nodes represent the function inputs. Later nodes are appende
 order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
 `parents[k]`, first partials `ds[k][i] = ∂φ_k/∂v_{p_i}`, and the second partials `Cs[k]`, a
 [`Curvature`](@ref) holding the symmetric `∂²φ_k/∂v_{p_i}∂v_{p_j}` in whatever form the elemental
-supplies: [`DenseCurvature`](@ref) for unary and binary elementals, [`PairedCurvature`](@ref) for
-an inner-product node (see [`dotnode`](@ref)), [`DeclaredCurvature`](@ref) for a declared sub-map
-output (see [`submapnode`](@ref)), and [`NoCurvature`](@ref) for a node with no second-order term.
+supplies: [`UnaryCurvature`](@ref) or [`BinaryCurvature`](@ref) for a unary or binary elemental,
+[`PairedCurvature`](@ref) for an inner-product node (see [`dotnode`](@ref)),
+[`DeclaredCurvature`](@ref) for a declared sub-map output (see [`submapnode`](@ref)), and
+[`NoCurvature`](@ref) for a node with no second-order term.
 
 Input nodes and constant output nodes have no parents and no second partials.
 """
@@ -185,13 +186,14 @@ constantnode(t::Tape{T}, c::Real) where {T} =
 
 Record a node `φ(x)` with value `val`, `φ'(x) = d`, and `φ''(x) = c`.
 
-A zero `c` is stored as [`NoCurvature`](@ref) rather than as a `1×1` zero: the node contributes
-no second-order term either way, and that form says so without a matrix to allocate and scan.
+A zero `c` is stored as [`NoCurvature`](@ref) rather than as a zero [`UnaryCurvature`](@ref): the
+node contributes no second-order term either way, and that form says so without an entry to load
+and test.
 """
 function unarynode(x::TVar, val, d, c)
     t, i = noderef(x)
     T = eltype(t)
-    C = iszero(c) ? NoCurvature() : DenseCurvature(fill(convert(T, c), 1, 1))
+    C = iszero(c) ? NoCurvature() : UnaryCurvature(convert(T, c))
     return pushnode!(t, val, [i], T[d], C)
 end
 
@@ -206,7 +208,8 @@ function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     ty, iy = noderef(y)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
     T = eltype(tx)
-    return pushnode!(tx, val, [ix, iy], T[d1, d2], DenseCurvature(T[c11 c12; c12 c22]))
+    C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
+    return pushnode!(tx, val, [ix, iy], T[d1, d2], C)
 end
 
 """

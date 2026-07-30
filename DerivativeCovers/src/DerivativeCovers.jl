@@ -48,9 +48,9 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.
     eval(
         Expr(
-            :public, :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature,
-            :DeclaredCurvature, :cover_slots, :bound_contribution!, :curvature_apply!,
-            :has_exact_partials
+            :public, :Curvature, :NoCurvature, :UnaryCurvature, :BinaryCurvature,
+            :DenseCurvature, :PairedCurvature, :DeclaredCurvature, :cover_slots,
+            :bound_contribution!, :curvature_apply!, :has_exact_partials
         )
     )
     # Ratios, bounds, and rescalings defined on a cover from any source.

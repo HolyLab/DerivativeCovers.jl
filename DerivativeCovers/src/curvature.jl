@@ -42,14 +42,45 @@ inspecting a matrix of zeros.
 struct NoCurvature <: Curvature end
 
 """
+    UnaryCurvature(c) <: Curvature
+
+The second partial `φ''(x)` of a unary elemental, held inline as the single number it is.
+
+A tape stores its curvatures in a container with abstract element type, so every form is reached
+through a reference; holding the entry inline rather than in a `1×1` matrix saves the second
+reference on the way to it, once per node per sweep, and an allocation per node while recording.
+"""
+struct UnaryCurvature{T} <: Curvature
+    c::T
+end
+
+"""
+    BinaryCurvature(c11, c12, c22) <: Curvature
+
+The second partials `[c11 c12; c12 c22]` of a binary elemental, slot-aligned with the node's two
+parents and held inline. Symmetry is structural: one entry stands for both off-diagonal slots.
+
+Inline for the reason [`UnaryCurvature`](@ref) is.
+"""
+struct BinaryCurvature{T} <: Curvature
+    c11::T
+    c12::T
+    c22::T
+end
+
+"""
     DenseCurvature(C::AbstractMatrix) <: Curvature
 
-Recorded second partials of a unary or binary elemental, a symmetric `1×1` or `2×2` matrix
-slot-aligned with the node's parents.
+Recorded second partials as an explicit symmetric matrix, slot-aligned with the node's parents.
+
+This is the general form, for a curvature with no structure to exploit and no fixed arity. The
+elementals of `overloads.jl` do not use it: a unary or binary block is [`UnaryCurvature`](@ref) or
+[`BinaryCurvature`](@ref), which hold their entries inline.
 
 The rank-1 cover of a block larger than `2×2` is not a single split, so [`cover_slots`](@ref)
-accepts only these two arities; an elemental with more parents supplies its curvature in a form
-that carries its own structure, as [`PairedCurvature`](@ref) and [`DeclaredCurvature`](@ref) do.
+rejects one; the elementwise bound and the Hessian-vector product read any arity. An elemental
+with more parents whose curvature *does* have structure supplies a form that carries it, as
+[`PairedCurvature`](@ref) and [`DeclaredCurvature`](@ref) do.
 """
 struct DenseCurvature{T, M <: AbstractMatrix{T}} <: Curvature
     C::M
@@ -110,15 +141,26 @@ type, branching at run time, is the intended shape.
 """
 @inline function dispatchcurvature(f::F, @nospecialize(C::Curvature), ::Type{T}) where {F, T}
     C isa NoCurvature && return f(C)
+    C isa UnaryCurvature{T} && return f(C)
+    C isa BinaryCurvature{T} && return f(C)
     C isa PairedCurvature && return f(C)
-    C isa DenseCurvature{T, Matrix{T}} && return f(C)
     C isa DeclaredCurvature{T, Vector{T}} && return f(C)
     return f(C)
 end
 
 # Introspection. A curvature that records entries reports them; DeclaredCurvature has none.
+Base.size(::UnaryCurvature) = (1, 1)
+Base.size(::BinaryCurvature) = (2, 2)
 Base.size(C::DenseCurvature) = size(C.C)
 Base.size(C::PairedCurvature) = (2C.q, 2C.q)
+function Base.getindex(C::UnaryCurvature, i::Int, j::Int)
+    (i == 1 && j == 1) || throw(BoundsError(C, (i, j)))
+    return C.c
+end
+function Base.getindex(C::BinaryCurvature, i::Int, j::Int)
+    (1 <= i <= 2 && 1 <= j <= 2) || throw(BoundsError(C, (i, j)))
+    return i == j == 1 ? C.c11 : i == j == 2 ? C.c22 : C.c12
+end
 Base.getindex(C::DenseCurvature, i::Int, j::Int) = C.C[i, j]
 Base.getindex(C::PairedCurvature, i::Int, j::Int) = abs(i - j) == C.q ? 1.0 : 0.0
 
@@ -194,42 +236,50 @@ function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = t
     return rho
 end
 
-function cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = true)
-    T = eltype(t)
-    ps = t.parents[k]
-    if length(ps) == 1
-        c11 = av * abs(C[1, 1])
-        c11 == 0 && return nothing
-        return T[sqrt(c11)]
-    elseif length(ps) == 2
-        c11 = av * abs(C[1, 1])
-        c12 = av * abs(C[1, 2])
-        c22 = av * abs(C[2, 2])
-        (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
-        s1, s2 = scales[ps[1]], scales[ps[2]]
-        if certifies_dead(rule) && (s1 == 0 || s2 == 0)
-            # A dead slot contributes no diagonal or cross term; only its live partner needs
-            # cover weight.
-            return T[s1 == 0 ? 0 : sqrt(c11), s2 == 0 ? 0 : sqrt(c22)]
-        end
-        if c12^2 <= c11 * c22
-            rho1, rho2 = sqrt(c11), sqrt(c22)
-        else
-            rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
-        end
-        if check
-            check_finite_partials(t, k, av, (c11, c12, c22))
-            rtol = sqrt(eps(float(real(T))))
-            (
-                rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-                    rho1 * rho2 >= c12 * (1 - rtol)
-            ) ||
-                error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
-        end
-        return T[rho1, rho2]
-    end
-    return error("node $k has $(length(ps)) parents; only unary and binary elementals are supported")
+function cover_slots(C::UnaryCurvature, rule, t, k, av, scales; check::Bool = true)
+    c11 = av * abs(C.c)
+    c11 == 0 && return nothing
+    check && check_finite_partials(t, k, av, (c11,))
+    return eltype(t)[sqrt(c11)]
 end
+
+function cover_slots(C::BinaryCurvature, rule, t, k, av, scales; check::Bool = true)
+    T = eltype(t)
+    c11 = av * abs(C.c11)
+    c12 = av * abs(C.c12)
+    c22 = av * abs(C.c22)
+    (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
+    ps = t.parents[k]
+    s1, s2 = scales[ps[1]], scales[ps[2]]
+    if certifies_dead(rule) && (s1 == 0 || s2 == 0)
+        # A dead slot contributes no diagonal or cross term; only its live partner needs
+        # cover weight.
+        return T[s1 == 0 ? 0 : sqrt(c11), s2 == 0 ? 0 : sqrt(c22)]
+    end
+    if c12^2 <= c11 * c22
+        rho1, rho2 = sqrt(c11), sqrt(c22)
+    else
+        rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
+    end
+    if check
+        check_finite_partials(t, k, av, (c11, c12, c22))
+        rtol = sqrt(eps(float(real(T))))
+        (
+            rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
+                rho1 * rho2 >= c12 * (1 - rtol)
+        ) ||
+            error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
+    end
+    return T[rho1, rho2]
+end
+
+# The general form carries no fixed arity, and the rank-1 cover of a block larger than 2x2 is not
+# a single split.
+cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = true) =
+    error(
+    "node $k carries a $(join(size(C), "x")) dense curvature; the rank-1 cover is defined for " *
+        "the unary and binary forms, not for a general dense block"
+)
 
 """
     bound_contribution!(B, C::Curvature, av, ps, utilde)
@@ -273,7 +323,9 @@ function bound_contribution!(B, C::PairedCurvature, av, ps, utilde)
     return B
 end
 
-function bound_contribution!(B, C::DenseCurvature, av, ps, utilde)
+function bound_contribution!(
+        B, C::Union{UnaryCurvature, BinaryCurvature, DenseCurvature}, av, ps, utilde
+    )
     n = size(B, 1)
     for i in eachindex(ps), j in eachindex(ps)
         cij = av * abs(C[i, j])
@@ -306,6 +358,20 @@ function curvature_apply!(vbardot, C::PairedCurvature, ps, bk, dv)
         vbardot[pw] += bk * dv[px]
         vbardot[px] += bk * dv[pw]
     end
+    return vbardot
+end
+
+function curvature_apply!(vbardot, C::UnaryCurvature, ps, bk, dv)
+    p = ps[1]
+    vbardot[p] += bk * C.c * dv[p]
+    return vbardot
+end
+
+function curvature_apply!(vbardot, C::BinaryCurvature, ps, bk, dv)
+    p1, p2 = ps[1], ps[2]
+    d1, d2 = dv[p1], dv[p2]
+    vbardot[p1] += bk * (C.c11 * d1 + C.c12 * d2)
+    vbardot[p2] += bk * (C.c12 * d1 + C.c22 * d2)
     return vbardot
 end
 

@@ -36,8 +36,12 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test all(d -> eltype(d) === Float32, t.ds)
         # The curvature forms the sweeps resolve statically hold the same element type; without
         # this the dispatch ladder falls through to its open branch on every node.
-        for C in t.Cs
-            C isa DerivativeCovers.DenseCurvature && @test C isa DerivativeCovers.DenseCurvature{Float32}
+        @test any(C -> C isa DerivativeCovers.UnaryCurvature{Float32}, t.Cs)
+        @test any(C -> C isa DerivativeCovers.BinaryCurvature{Float32}, t.Cs)
+        @test all(t.Cs) do C
+            C isa DerivativeCovers.NoCurvature ||
+                C isa DerivativeCovers.UnaryCurvature{Float32} ||
+                C isa DerivativeCovers.BinaryCurvature{Float32}
         end
 
         # A Float64 literal in the program is a coefficient, converted on the way onto the tape.
