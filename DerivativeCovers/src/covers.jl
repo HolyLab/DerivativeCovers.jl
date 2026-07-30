@@ -136,12 +136,10 @@ which satisfies `B >= abs.(H)` entrywise. Diagnostic only: `B` is `n × n`, and 
 inequalities it discards — cancellation along paths (inside each `utilde`) and cancellation
 across elementals — are exactly the looseness this bound trades for its cost.
 
-A node with an empty `C` (see [`Tape`](@ref)) contributes nothing and is skipped. A
-[`PairedPartials`](@ref) node has only `2q` nonzero entries out of `(2q)^2`, so its contribution
-is accumulated directly from those pairs rather than by scanning the dense `C`. A
-[`CoveredPartials`](@ref) node contributes its declared bound `s[i]*s[j] >= abs(C[i, j])`, so
-`B >= abs.(H)` remains valid conditional on the declaration; the bound factorizes, so the
-contribution is the rank-1 term `w*w'` with `w = sum_i s[i]*utilde[ps[i]]`.
+Each node's term is accumulated by [`bound_contribution!`](@ref), which every [`Curvature`](@ref)
+supplies in the form its structure allows. A [`DeclaredCurvature`](@ref) node contributes its
+declared bound `s[i]*s[j] >= abs(C[i, j])`, so `B >= abs.(H)` remains valid conditional on the
+declaration.
 """
 function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -149,40 +147,9 @@ function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
     for k in (n + 1):N
         av = abs(vbar[k])
         av == 0 && continue
-        ps, C = t.parents[k], t.Cs[k]
-        if C isa CoveredPartials
-            w = zeros(n)
-            for (i, p) in enumerate(ps)
-                si = C.s[i]
-                si == 0 && continue
-                up = utilde[p]
-                for q in 1:n
-                    w[q] += si * up[q]
-                end
-            end
-            for q in 1:n, r in 1:n
-                B[q, r] += av * w[q] * w[r]
-            end
-            continue
-        end
-        isempty(C) && continue
-        if C isa PairedPartials
-            qh = C.q
-            for j in 1:qh
-                ui, uj = utilde[ps[j]], utilde[ps[qh + j]]
-                for q in 1:n, r in 1:n
-                    B[q, r] += av * (ui[q] * uj[r] + uj[q] * ui[r])
-                end
-            end
-            continue
-        end
-        for i in eachindex(ps), j in eachindex(ps)
-            cij = av * abs(C[i, j])
-            cij == 0 && continue
-            ui, uj = utilde[ps[i]], utilde[ps[j]]
-            for q in 1:n, r in 1:n
-                B[q, r] += cij * ui[q] * uj[r]
-            end
+        ps = t.parents[k]
+        dispatchcurvature(t.Cs[k]) do C
+            bound_contribution!(B, C, av, ps, utilde)
         end
     end
     return B
@@ -395,18 +362,10 @@ with no second-order contribution get an empty `rhos[k]`. `theta[j] = sum_k rhos
 the weight each node receives as a parent, which seeds the reverse sweep of
 [`abs_reverse`](@ref).
 
-A [`PairedPartials`](@ref) node (an inner product, see [`dotnode`](@ref)) has `c = abs(vbar[k])`
-on each of its `q` off-diagonal pairs and zero elsewhere, so its `2q×2q` local cover problem
-separates into `q` independent 2×2 multiplication-node problems; `rhos[k]` collects the `q`
-per-pair splits from [`balanced_split`](@ref), slot-aligned with the node's parents. A node with
-an empty `C` (a linear n-ary node, see [`linearnode`](@ref)) contributes no second-order term
-and is skipped before the arity check below.
-
-A [`CoveredPartials`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings
-its own rank-1 cover: `rhos[k] = sqrt(abs(vbar[k])) * s` satisfies the covering invariant
-against the *declared* bound `s[i]*s[j] >= abs(C[i, j])` by construction, so the arity
-restriction below does not apply to it. There is no recorded `C` to check the declaration
-against, so `check` cannot audit these nodes — validity is conditional on the declaration.
+Each node's cover comes from [`cover_slots`](@ref), dispatching on its [`Curvature`](@ref). A
+[`DeclaredCurvature`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings its
+own rank-1 cover, and there is no recorded `C` to check it against, so `check` cannot audit those
+nodes — validity is conditional on the declaration.
 
 `rule` selects the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks.
 `check` verifies the covering invariant at every recorded node.
@@ -436,10 +395,11 @@ end
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
 `rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
-`nothing` when the node contributes no second-order term (`av == 0`, or an empty `C`). This is
-the per-node kernel shared by [`local_covers`](@ref), which accumulates the results into
-`(rhos, theta)`, and the [`CoverOnly`](@ref) sweep, which deposits them directly into the
-absolute adjoint channel; see [`local_covers`](@ref) for the constructions per node type. `check`
+`nothing` when the node contributes no second-order term (`av == 0`, or a
+[`NoCurvature`](@ref) node). This is the per-node kernel shared by [`local_covers`](@ref), which
+accumulates the results into `(rhos, theta)`, and the [`CoverOnly`](@ref) sweep, which deposits
+them directly into the absolute adjoint channel. It reads the node's [`Curvature`](@ref) off the
+tape and forwards to [`cover_slots`](@ref), which holds the construction for each form. `check`
 verifies the covering invariant on recorded nodes.
 
 The first form uses [`ValueSplit`](@ref). The second takes any [`SplitRule`](@ref) together
@@ -484,68 +444,12 @@ function local_cover_slots(
         rule::SplitRule, t::Tape, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
     )
-    ps, C = t.parents[k], t.Cs[k]
-    if C isa PairedPartials
-        c = av
-        c == 0 && return nothing
-        q = C.q
-        rho = zeros(2q)
-        for j in 1:q
-            s1 = scales[ps[j]]
-            s2 = scales[ps[q + j]]
-            if certifies_dead(rule) && (s1 == 0 || s2 == 0)
-                continue   # dead pair: both slots stay zero; see the docstring
-            end
-            a, b = balanced_split(0.0, c, 0.0, s1, s2)
-            if check
-                check_finite_partials(t, k, av, (c,))
-                # Allow for roundoff accumulated across the tape, not just this comparison.
-                rtol = sqrt(eps(float(real(eltype(t.vals)))))
-                a * b >= c * (1 - rtol) ||
-                    error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
-            end
-            rho[j] = a
-            rho[q + j] = b
-        end
-        return rho
-    elseif C isa CoveredPartials
-        av == 0 && return nothing
-        return sqrt(av) .* C.s
-    elseif isempty(C)
-        return nothing
-    elseif length(ps) == 1
-        c11 = av * abs(C[1, 1])
-        c11 == 0 && return nothing
-        return [sqrt(c11)]
-    elseif length(ps) == 2
-        c11 = av * abs(C[1, 1])
-        c12 = av * abs(C[1, 2])
-        c22 = av * abs(C[2, 2])
-        (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
-        s1, s2 = scales[ps[1]], scales[ps[2]]
-        if certifies_dead(rule) && (s1 == 0 || s2 == 0)
-            # A dead slot contributes no diagonal or cross term; only its live partner needs
-            # cover weight.
-            return [s1 == 0 ? 0.0 : sqrt(c11), s2 == 0 ? 0.0 : sqrt(c22)]
-        end
-        if c12^2 <= c11 * c22
-            rho1, rho2 = sqrt(c11), sqrt(c22)
-        else
-            rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
-        end
-        if check
-            check_finite_partials(t, k, av, (c11, c12, c22))
-            rtol = sqrt(eps(float(real(eltype(t.vals)))))
-            (
-                rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-                    rho1 * rho2 >= c12 * (1 - rtol)
-            ) ||
-                error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
-        end
-        return [rho1, rho2]
-    else
-        error("node $k has $(length(ps)) parents; only unary and binary elementals are supported")
-    end
+    # The assertion is the return type [`cover_slots`](@ref) promises. Without it inference gives
+    # up at the open fallback inside `dispatchcurvature` and the sweeps, which call this once per
+    # node, box every result.
+    return dispatchcurvature(t.Cs[k]) do C
+        cover_slots(C, rule, t, k, av, scales; check)
+    end::Union{Nothing, Vector{Float64}}
 end
 
 """
@@ -569,18 +473,6 @@ function abs_reverse(t::Tape, theta::AbstractVector)
     end
     return abar
 end
-
-"""
-    atom_slots(C, nslots) -> atoms
-
-The groups of a node's parent slots that the quadrature merge of [`cover_hessian`](@ref)
-combines separately. A dense `C` (unary or binary) forms one atom spanning every slot. A
-[`PairedPartials`](@ref)`(q)` forms `q` atoms, one per pair `(j, q+j)`, matching the
-block-diagonal structure of its second partials — the atoms it contributes are independent
-rank-1 terms, not one combined term for the whole node.
-"""
-atom_slots(C, nslots) = (1:nslots,)
-atom_slots(C::PairedPartials, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
     CoverOnly()

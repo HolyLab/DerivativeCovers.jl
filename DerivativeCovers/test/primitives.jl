@@ -106,7 +106,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-        # The primitive form's inner-product nodes carry `PairedPartials`, the scalarized twin's
+        # The primitive form's inner-product nodes carry `PairedCurvature`, the scalarized twin's
         # multiply nodes a dense 2x2, so this pins the two curvature branches of `hvp!` together.
         v = Float64[cos(3i) for i in eachindex(x0)]
         @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol = 1.0e-12
@@ -230,9 +230,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test resw.grad ≈ ForwardDiff.gradient(f_constW, z0)
         @test cover_ratio(Hw, resw.h_sum) <= GATE
         @test cover_ratio(Hw, resw.h_quad) <= GATE
-        # A constant-W matvec records only linear nodes: no PairedPartials atom on the tape.
+        # A constant-W matvec records only linear nodes: no PairedCurvature atom on the tape.
         t, _ = tape_function(f_constW, z0)
-        @test !any(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
+        @test !any(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
         # H = A'A exactly (each residual is linear in z), so the minimal cover is the row norms.
         @test Hw ≈ Aconst' * Aconst
     end
@@ -319,22 +319,24 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         # sweep knows how to split; a dense C among them is not one, and says so rather than
         # reading the 2x2 corner of a larger block.
         t3 = Tape([1.0, 2.0, 3.0])
-        DerivativeCovers.pushnode!(t3, 6.0, [1, 2, 3], ones(3), ones(3, 3))
+        DerivativeCovers.pushnode!(
+            t3, 6.0, [1, 2, 3], ones(3), DerivativeCovers.DenseCurvature(ones(3, 3))
+        )
         vbar = [0.0, 0.0, 0.0, 1.0]
         @test_throws "node 4 has 3 parents; only unary and binary elementals are supported" (
             local_covers(t3, vbar)
         )
     end
 
-    @testset "PairedPartials entries" begin
+    @testset "PairedCurvature entries" begin
         # An inner-product node's second partials are the cross terms alone: slots are ordered
         # (w_1..w_q, x_1..x_q), so the only nonzeros are the pairs q apart.
         t, _ = tape_function(v -> dot(v[1:3], v[4:6]), [0.9, -0.4, 1.3, 0.4, -1.1, 0.7])
-        k = findfirst(C -> C isa DerivativeCovers.PairedPartials, t.Cs)
+        k = findfirst(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
         C = t.Cs[k]
         @test size(C) == (6, 6)
-        @test C == [Float64(abs(i - j) == 3) for i in 1:6, j in 1:6]
-        @test C == C'
+        @test all(C[i, j] == Float64(abs(i - j) == 3) for i in 1:6, j in 1:6)
+        @test all(C[i, j] == C[j, i] for i in 1:6, j in 1:6)
     end
 
 end

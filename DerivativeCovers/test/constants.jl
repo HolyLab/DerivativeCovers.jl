@@ -80,7 +80,7 @@
 
         # A scaling by a non-unit constant does record, and records as a linear node: its
         # curvature is zero, which is the empty second-partial matrix rather than a 1×1 zero.
-        @test isempty(t.Cs[scaled.idx])
+        @test t.Cs[scaled.idx] isa DerivativeCovers.NoCurvature
 
         # An accumulator seeded with `zero(eltype(x))`, the shape generic numerical code takes,
         # records the tape the direct expression does.
@@ -148,7 +148,7 @@
         x0 = [1.0, 2.0, 3.0]
         tc, oc = tape_function(wc, x0)
         @test nnodes(tc) == nnodes(first(tape_function(wn, x0)))
-        @test isempty(tc.Cs[oc])
+        @test tc.Cs[oc] isa DerivativeCovers.NoCurvature
     end
 
     @testset "an operand mixing the two states is split by pair" begin
@@ -158,7 +158,7 @@
         mixed = x -> dot([TVar(2.0), x[2], TVar(0.5)], x)
         t, o = tape_function(mixed, x0)
         @test t.vals[o] ≈ 2.0 * 1.0 + 2.0 * 2.0 + 0.5 * 3.0
-        @test count(C -> C isa DerivativeCovers.PairedPartials, t.Cs) == 1
+        @test count(C -> C isa DerivativeCovers.PairedCurvature, t.Cs) == 1
 
         # A pair constant on both sides is an additive offset.
         withoffset = x -> dot([TVar(2.0), x[1]], [TVar(3.0), x[2]])

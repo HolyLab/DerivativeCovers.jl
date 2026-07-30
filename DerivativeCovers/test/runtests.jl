@@ -106,6 +106,8 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
             :submapnode, :split_scales, :value, :isconstant, :nnodes,
+            :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
+            :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
             :jacobian_representability, :jacobian_minimax, :dependency_severity,
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
@@ -125,6 +127,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
             :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+            :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
         )
@@ -233,7 +236,7 @@ include("genericaxes.jl")
         @test scaled_spectral_radius(t, oi, h; maxiter = Int32(50)) ≈
             scaled_spectral_radius(t, outidx, h; maxiter = 50)
         # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
-        k = something(findfirst(C -> !isempty(C), t.Cs))
+        k = something(findfirst(C -> !(C isa DerivativeCovers.NoCurvature), t.Cs))
         @test DerivativeCovers.local_cover_slots(t, Int32(k), 1) ==
             DerivativeCovers.local_cover_slots(t, k, 1.0)
     end

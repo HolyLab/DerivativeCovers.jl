@@ -135,7 +135,7 @@
 
     @testset "nested declared calls" begin
         # declare_submap over a program that itself contains a declared call: the scratch-tape
-        # sweeps handle CoveredPartials nodes, so declarations compose.
+        # sweeps handle DeclaredCurvature nodes, so declarations compose.
         G = xs -> begin
             ys = submap(Fsub, xs)
             [ys[1] + ys[2]^2, ys[3] * ys[4]]

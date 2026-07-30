@@ -1,56 +1,17 @@
 # Wengert tape and the overloaded scalar variable that records onto it.
 
 """
-    PairedPartials(q::Int) <: AbstractMatrix{Float64}
-
-Second-partial matrix of an inner-product node with `q` pairs of parent slots ordered
-`(w_1, ..., w_q, x_1, ..., x_q)`. Entry `(i, j)` is `1` when `i` and `j` are paired
-(`abs(i - j) == q`), the sole nonzero second partials `∂²y/∂w_j∂x_j` of `y = sum_j w_j*x_j`, and
-`0` otherwise. Avoids materializing the dense `2q × 2q` matrix, almost all of whose entries are
-zero.
-"""
-struct PairedPartials <: AbstractMatrix{Float64}
-    q::Int
-end
-
-Base.size(P::PairedPartials) = (2P.q, 2P.q)
-Base.getindex(P::PairedPartials, i::Int, j::Int) = abs(i - j) == P.q ? 1.0 : 0.0
-
-"""
-    CoveredPartials(s::Vector{Float64})
-
-Declared bound on the second partials of a sub-map output node (see [`submapnode`](@ref)):
-`abs(C[i, j]) <= s[i]*s[j]`, with the true `C` not recorded. `s` is nonnegative and slot-aligned
-with the node's parents. Cover constructions consume second partials only through bounds on
-`abs.(C)`, so the declaration substitutes for the recorded matrix everywhere except
-[`hvp`](@ref), which needs the signed entries and fails fast. Deliberately not an
-`AbstractMatrix`: it has no entries to index, only a bound.
-"""
-struct CoveredPartials
-    s::Vector{Float64}
-end
-
-"""
     Tape
 
 A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs.
 
 The first `ninputs` nodes represent the function inputs. Later nodes are appended in topological
 order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
-`parents[k]`, first partials
-`ds[k][i] = ∂φ_k/∂v_{p_i}`, and the second partials `Cs[k]`, a symmetric `∂²φ_k/∂v_{p_i}∂v_{p_j}`
-in one of four forms:
-
-  - a dense `Matrix{Float64}`, for unary and binary elementals;
-  - a [`PairedPartials`](@ref), for an inner-product node (see [`dotnode`](@ref)): parent slots
-    are ordered `(w_1, ..., w_q, x_1, ..., x_q)` and the only nonzero entries are the cross terms
-    `∂²y/∂w_j∂x_j = 1`;
-  - an empty `Matrix{Float64}(undef, 0, 0)`, for a node with no second-order term: the input nodes
-    themselves, linear n-ary nodes such as [`linearnode`](@ref), and any elemental whose recorded
-    curvature is zero. It contributes nothing to any cover;
-  - a [`CoveredPartials`](@ref), for a declared sub-map output (see [`submapnode`](@ref)): the
-    true second partials are not recorded, only the declared rank-1 bound
-    `abs(C[i, j]) <= s[i]*s[j]`.
+`parents[k]`, first partials `ds[k][i] = ∂φ_k/∂v_{p_i}`, and the second partials `Cs[k]`, a
+[`Curvature`](@ref) holding the symmetric `∂²φ_k/∂v_{p_i}∂v_{p_j}` in whatever form the elemental
+supplies: [`DenseCurvature`](@ref) for unary and binary elementals, [`PairedCurvature`](@ref) for
+an inner-product node (see [`dotnode`](@ref)), [`DeclaredCurvature`](@ref) for a declared sub-map
+output (see [`submapnode`](@ref)), and [`NoCurvature`](@ref) for a node with no second-order term.
 
 Input nodes and constant output nodes have no parents and no second partials.
 """
@@ -58,7 +19,7 @@ struct Tape
     vals::Vector{Float64}
     parents::Vector{Vector{Int}}
     ds::Vector{Vector{Float64}}
-    Cs::Vector{Union{Matrix{Float64}, PairedPartials, CoveredPartials}}
+    Cs::Vector{Curvature}
     ninputs::Int
 end
 
@@ -89,7 +50,7 @@ function Tape(x0::AbstractVector)
         Float64[float(x) for x in x0],
         [Int[] for _ in 1:n],
         [Float64[] for _ in 1:n],
-        Union{Matrix{Float64}, PairedPartials, CoveredPartials}[Matrix{Float64}(undef, 0, 0) for _ in 1:n],
+        Curvature[NoCurvature() for _ in 1:n],
         n
     )
 end
@@ -197,20 +158,19 @@ node indices and a constant needs an index to be one: a fixed offset among a pro
 such as the unit residual that carries an additive constant of a least-squares loss.
 """
 constantnode(t::Tape, c::Real) =
-    pushnode!(t, float(c), Int[], Float64[], Matrix{Float64}(undef, 0, 0))
+    pushnode!(t, float(c), Int[], Float64[], NoCurvature())
 
 """
     unarynode(x::TVar, val, d, c) -> TVar
 
 Record a node `φ(x)` with value `val`, `φ'(x) = d`, and `φ''(x) = c`.
 
-A zero `c` is stored as the empty second-partial matrix (see [`Tape`](@ref)) rather than as a
-`1×1` zero: the node contributes no second-order term either way, and the empty form says so
-without a matrix to allocate and scan.
+A zero `c` is stored as [`NoCurvature`](@ref) rather than as a `1×1` zero: the node contributes
+no second-order term either way, and that form says so without a matrix to allocate and scan.
 """
 function unarynode(x::TVar, val, d, c)
     t, i = noderef(x)
-    C = iszero(c) ? Matrix{Float64}(undef, 0, 0) : fill(float(c), 1, 1)
+    C = iszero(c) ? NoCurvature() : DenseCurvature(fill(float(c), 1, 1))
     return pushnode!(t, val, [i], [float(d)], C)
 end
 
@@ -226,7 +186,7 @@ function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
     return pushnode!(
         tx, val, [ix, iy], [float(d1), float(d2)],
-        Float64[c11 c12; c12 c22]
+        DenseCurvature(Float64[c11 c12; c12 c22])
     )
 end
 
@@ -235,7 +195,7 @@ end
 
 Record an inner-product node `y = sum_j w_j*x_j`. Parent slots are ordered
 `(w_1, ..., w_q, x_1, ..., x_q)`, first partials are `(x_1, ..., x_q, w_1, ..., w_q)`, and the
-second-partial matrix is [`PairedPartials`](@ref)`(q)`. Parent slots are independent even when
+second-partial matrix is [`PairedCurvature`](@ref)`(q)`. Parent slots are independent even when
 `ws` and `xs` share entries (e.g. `dotnode(xs, xs)`): the decomposition is over slots, not values.
 """
 function dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
@@ -258,7 +218,7 @@ function dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
         ds[n] = value(x)
         ds[q + n] = value(w)
     end
-    return pushnode!(t, val, parents, ds, PairedPartials(q))
+    return pushnode!(t, val, parents, ds, PairedCurvature(q))
 end
 
 """
@@ -282,7 +242,7 @@ function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
         parents[n] = ix
         ds[n] = float(coeffs[j])
     end
-    return pushnode!(t, val, parents, ds, Matrix{Float64}(undef, 0, 0))
+    return pushnode!(t, val, parents, ds, NoCurvature())
 end
 
 """
@@ -292,9 +252,9 @@ end
 Record a declared sub-map call `y = F(v)` as one node per output, without retracing `F`'s
 internals: node `k` carries the value `y[k]`, the arguments `xs` as parents, the exact signed
 Jacobian row `J[k, :]` (`J[k, i] = ∂F_k/∂v_i` at the parent values) as its first partials, and
-the declared curvature cover `S[k, :]` as a [`CoveredPartials`](@ref):
+the declared curvature cover `S[k, :]` as a [`DeclaredCurvature`](@ref):
 `abs(∂²F_k/∂v_i∂v_j) <= S[k, i]*S[k, j]`. `S = nothing`, or an all-zero row of `S`, declares
-that output linear in the arguments (an empty second-partial matrix).
+that output linear in the arguments ([`NoCurvature`](@ref)).
 
 Gradients and every first-order sweep through the call are exact. Hessian covers are valid
 conditional on the declaration, which is the caller's assertion — nothing on the tape can verify
@@ -330,9 +290,9 @@ function submapnode(
     return [
         begin
                 C = if S === nothing || all(iszero, view(S, k, :))
-                    Matrix{Float64}(undef, 0, 0)
+                    NoCurvature()
             else
-                    CoveredPartials([float(S[k, i]) for i in 1:p])
+                    DeclaredCurvature([float(S[k, i]) for i in 1:p])
             end
                 pushnode!(t, float(y[k]), parents, [float(J[k, i]) for i in 1:p], C)
             end for k in 1:q
