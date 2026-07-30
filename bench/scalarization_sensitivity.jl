@@ -2,47 +2,19 @@
 #
 # `cover_hybrid` sums cover contributions within a group and combines the group totals in
 # quadrature, so what it can recover depends on which contributions the partition is able to
-# separate. `cyclic_partition` deals nodes round-robin, which separates siblings because a scalar
-# tape lists them consecutively. An array primitive puts those same siblings inside one node, and
-# groups contain whole nodes, so no partition separates them.
+# separate. It deals cover atoms, and dealing atoms is blind to how many of them one elemental
+# carries: on the programs below the two recordings give the same curve. A node-granular partition
+# (`cyclic_partition`) is not blind to it. It separates siblings on a scalar tape, which lists them
+# consecutively, but an array primitive holds those same siblings inside one node, where no such
+# partition reaches them.
 #
-# The atomwise quadrature merge of `cover_hessian(WithDiagnostics())` is unaffected: `atom_slots`
-# lets one node expose several atoms, and `dotnode` does. The question this script answers is how
-# much of that atomwise limit the production merge can still reach on each recording, and it
-# reports node and atom counts alongside, since those are exact.
+# Both recordings are scored against the atomwise quadrature merge of
+# `cover_hessian(WithDiagnostics())`, which neither granularity affects. Node, curvature-node, and
+# atom counts are reported alongside, since those are exact.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Statistics, Printf
-using DerivativeCovers: value, cover_ratio, atom_slots, local_covers, adjoints, nnodes,
-    abs_reverse
-
-"""
-    hybrid_atomwise(t, outidx, G; rule=ValueSplit()) -> h
-
-`cover_hybrid` with the partition applied to atoms rather than to whole nodes: atoms are numbered
-in tape order and dealt round-robin over `G` groups, so a node exposing several atoms can spread
-them. Every slot of a node belongs to exactly one of its atoms, so the seeds a node contributes
-are the same ones `group_seeds` contributes, only distributed differently.
-"""
-function hybrid_atomwise(t, outidx, G; rule = ValueSplit())
-    T = eltype(t)
-    rhos, _ = local_covers(t, adjoints(t, outidx); check = false, rule)
-    Theta = zeros(T, G, nnodes(t))
-    a = 0
-    for k in 1:nnodes(t)
-        rho = rhos[k]
-        isempty(rho) && continue
-        ps = t.parents[k]
-        for atom in atom_slots(t.Cs[k], length(ps))
-            g = 1 + a % G
-            a += 1
-            for i in atom
-                Theta[g, ps[i]] += rho[i]
-            end
-        end
-    end
-    Abar = abs_reverse(t, Theta)
-    return [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:t.ninputs]
-end
+using DerivativeCovers: value, cover_ratio, local_covers, adjoints, nnodes, natoms,
+    cyclic_partition
 
 "`dot(z, A*z)/2`, whose taped-by-taped inner product records as one node carrying `n` atoms."
 quadform_prim(A) = z -> dot(z, A * z) / 2
@@ -127,27 +99,22 @@ end
 """
     structure(f, z) -> (; nodes, curvnodes, atoms)
 
-Tape size, the number of nodes carrying a second-order contribution, and the number of quadrature
-atoms those nodes expose. `atoms > curvnodes` exactly where a node carries more than one atom.
+Tape size, the number of nodes carrying a second-order contribution, and the number of cover atoms
+those nodes expose. `atoms > curvnodes` exactly where a node carries more than one atom.
 """
 function structure(f, z)
     t, outidx = tape_function(f, z)
     rhos, _ = local_covers(t, adjoints(t, outidx); check = false)
-    curvnodes = count(!isempty, rhos)
-    atoms = 0
-    for k in 1:nnodes(t)
-        isempty(rhos[k]) && continue
-        atoms += length(collect(atom_slots(t.Cs[k], length(t.parents[k]))))
-    end
-    return (nodes = nnodes(t), curvnodes, atoms)
+    return (nodes = nnodes(t), curvnodes = count(!isempty, rhos), atoms = natoms(t))
 end
 
 """
-    merge_curve(f, z, Gs) -> (; sum_loose, quad_loose, hybrid, recovered)
+    merge_curve(f, z, Gs) -> (; sum_loose, quad_loose, byatom, bynode, recovered, recovered_node)
 
 Looseness `1/cover_ratio` of the sum merge, the atomwise quadrature merge, and `cover_hybrid` at
-each group count in `Gs`. `recovered` is the fraction of the sum-to-quadrature gap that the finest
-partition reaches, measured in log space, and is `NaN` when there is no gap to recover.
+each group count in `Gs`, under both granularities of partition. `recovered` is the fraction of the
+sum-to-quadrature gap that the finest partition reaches, measured in log space, and is `NaN` when
+there is no gap to recover.
 """
 function merge_curve(f, z, Gs)
     H = ForwardDiff.hessian(f, z)
@@ -155,11 +122,14 @@ function merge_curve(f, z, Gs)
     d = cover_hessian(WithDiagnostics(), t, outidx)
     sum_loose = 1 / cover_ratio(H, d.h_sum)
     quad_loose = 1 / cover_ratio(H, d.h_quad)
-    hybrid = [1 / cover_ratio(H, cover_hybrid(t, outidx, G)) for G in Gs]
-    atomwise = [1 / cover_ratio(H, hybrid_atomwise(t, outidx, G)) for G in Gs]
+    byatom = [1 / cover_ratio(H, cover_hybrid(t, outidx, G)) for G in Gs]
+    bynode = [1 / cover_ratio(H, cover_hybrid(t, outidx, cyclic_partition(t, G))) for G in Gs]
     span = log(sum_loose) - log(quad_loose)
     frac = h -> span > 1.0e-12 ? (log(sum_loose) - log(minimum(h))) / span : NaN
-    return (; sum_loose, quad_loose, hybrid, atomwise, recovered = frac(hybrid), recovered_atom = frac(atomwise))
+    return (;
+        sum_loose, quad_loose, byatom, bynode,
+        recovered = frac(byatom), recovered_node = frac(bynode),
+    )
 end
 
 function report(name, fprim, fscalar, z, Gs)
@@ -168,7 +138,7 @@ function report(name, fprim, fscalar, z, Gs)
     ms = Dict(label => merge_curve(f, z, Gs) for (label, f) in forms)
     @printf(
         "%8s %7s %10s %7s %9s %9s %11s %11s\n",
-        "form", "nodes", "curvnodes", "atoms", "sum", "quad", "recovered", "rec/atomwise"
+        "form", "nodes", "curvnodes", "atoms", "sum", "quad", "rec/atom", "rec/node"
     )
     for (label, f) in forms
         s = structure(f, z)
@@ -176,7 +146,7 @@ function report(name, fprim, fscalar, z, Gs)
         @printf(
             "%8s %7d %10d %7d %9.4g %9.4g %11.3f %11.3f\n",
             label, s.nodes, s.curvnodes, s.atoms, m.sum_loose, m.quad_loose,
-            m.recovered, m.recovered_atom
+            m.recovered, m.recovered_node
         )
     end
     @printf("%18s", "G:")
@@ -184,7 +154,7 @@ function report(name, fprim, fscalar, z, Gs)
         @printf(" %8d", G)
     end
     println()
-    for (label, _) in forms, (kind, curve) in ("by node" => ms[label].hybrid, "by atom" => ms[label].atomwise)
+    for (label, _) in forms, (kind, curve) in ("by atom" => ms[label].byatom, "by node" => ms[label].bynode)
         @printf("%8s %9s", label, kind)
         for h in curve
             @printf(" %8.4g", h)
@@ -204,7 +174,8 @@ function main()
     Gs = (1, 2, 4, 8, 16, 32, 64, 128)
 
     println("Looseness is 1/cover_ratio: 1 is exact, larger is looser.")
-    println("`recovered` is the fraction of the sum-to-quadrature gap the finest partition reaches.")
+    println("`rec/atom` and `rec/node` are the fractions of the sum-to-quadrature gap the finest")
+    println("partition of each granularity reaches.")
     println()
     report("dot(z, A*z)/2", quadform_prim(A), quadform_scalar(A), z, Gs)
     report("dot(c0, softmax(z))", softmax_prim(c0), softmax_scalar(c0), z, Gs)

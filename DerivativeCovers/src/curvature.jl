@@ -180,9 +180,15 @@ The groups of a node's parent slots that the quadrature merge of [`cover_hessian
 combines separately. One atom spanning every slot is correct whenever the node's cover is a
 single rank-1 term. A [`PairedCurvature`](@ref)`(q)` instead forms `q` atoms, one per pair
 `(j, q+j)`, matching the block-diagonal structure of its second partials: the atoms it
-contributes are independent rank-1 terms, not one combined term for the whole node.
+contributes are independent rank-1 terms, not one combined term for the whole node. A
+[`NoCurvature`](@ref) forms none.
+
+The atoms must *partition* the slots carrying cover weight: a slot left out of every atom drops
+its contribution from the quadrature merge and from [`cover_hybrid`](@ref), and a slot named twice
+counts it twice.
 """
 atom_slots(::Curvature, nslots) = (1:nslots,)
+atom_slots(::NoCurvature, nslots) = ()
 atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """

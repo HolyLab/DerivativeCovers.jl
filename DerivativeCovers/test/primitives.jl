@@ -106,6 +106,16 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
+        # The grouped merge deals atoms, so an inner-product node holding several of them spans the
+        # same range as the multiply-add chain that spells them out. Which atoms share a group at
+        # an intermediate count still depends on the order they appear in, and recording an
+        # operation as one node can change that order, so only the endpoints must agree.
+        for f in (fp, fs)
+            t, oi = tape_function(f, x0)
+            @test cover_hybrid(t, oi, 1) ≈ rp.h_sum rtol = 1.0e-12
+            @test cover_hybrid(t, oi, natoms(t)) ≈ rp.h_quad rtol = 1.0e-12
+        end
+
         # The primitive form's inner-product nodes carry `PairedCurvature`, the scalarized twin's
         # multiply nodes a dense 2x2, so this pins the two curvature branches of `hvp!` together.
         v = Float64[cos(3i) for i in eachindex(x0)]
@@ -246,10 +256,13 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
 
         @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol = 1.0e-12
 
+        # Dealing atoms reaches the quadrature merge even though each of the matvec's row nodes
+        # holds three of them; dealing nodes keeps a node's atoms together and can only be looser.
+        @test cover_hybrid(t, outidx, natoms(t)) ≈ res.h_quad rtol = 1.0e-12
         h_nodewise = cover_hybrid(t, outidx, collect(1:N))
         @test all(>=(0), h_nodewise)
         @test cover_ratio(H, h_nodewise) <= GATE
-        @test all(res.h_quad .<= h_nodewise .* GATE)      # atoms travel together within a node
+        @test all(res.h_quad .<= h_nodewise .* GATE)
 
         rng = MersenneTwister(41)
         groups = rand(rng, 1:5, N)

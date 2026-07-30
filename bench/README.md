@@ -40,15 +40,17 @@ Two controls run alongside the sweep:
 
 Records the same function twice — once through array primitives, once as explicit scalar chains —
 and compares how much of the sum-to-quadrature gap
-[`cover_hybrid`](../DerivativeCovers/src/merges.jl) reaches on each.
+[`cover_hybrid`](../DerivativeCovers/src/merges.jl) reaches on each, at both granularities of
+partition.
 
 `cover_hybrid` sums contributions within a group, so what it recovers depends on which
-contributions the partition can separate, and its groups contain whole nodes. An array primitive
-carrying curvature holds several atoms in one node and no partition separates them; a primitive
-that is linear carries no curvature and costs nothing. Node, curvature-node, and atom counts are
-reported alongside the merges, since those counts are exact.
+contributions the partition can separate. Dealing cover atoms, as its integer argument does, is
+insensitive to the recording: the curves for the two forms coincide, and both reach the atomwise
+quadrature merge once the group count matches the atom count. Dealing whole nodes
+(`cyclic_partition`) is sensitive to it, because an array primitive carrying curvature holds
+several atoms in one node. Node, curvature-node, and atom counts are reported alongside the merges,
+since those counts are exact.
 
-The script also carries `hybrid_atomwise`, a partition applied to atoms rather than nodes. It is a
-prototype living here rather than in the package, and it establishes two things: that the merge
-becomes invariant to how the program was recorded, and that it reaches the atomwise quadrature
-merge once the group count matches the atom count.
+A primitive that is linear carries no curvature and costs nothing either way, which is why the
+softmax and layernorm heads — whose reductions are linear — lose little under node granularity
+while `dot(z, A*z)/2` loses everything.

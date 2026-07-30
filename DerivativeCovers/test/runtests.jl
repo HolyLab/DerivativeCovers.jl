@@ -10,7 +10,7 @@ include(
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
-using DerivativeCovers: submapnode, value, isconstant, nnodes, cover_ratio, bound_ratio,
+using DerivativeCovers: submapnode, value, isconstant, nnodes, natoms, cover_ratio, bound_ratio,
     rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
     jacobian_minimax, dependency_severity, scaled_spectral_radius,
     scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
@@ -107,7 +107,7 @@ include("genericaxes.jl")
         internals = (
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
-            :submapnode, :split_scales, :value, :isconstant, :nnodes,
+            :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
@@ -638,6 +638,16 @@ include("genericaxes.jl")
         @test cyclic_partition(t, N) == 1:N
         @test sort(cyclic_partition(t, 3)) == sort(repeat(1:3, outer = N)[1:N])
         @test_throws ArgumentError cyclic_partition(t, 0)
+        @test_throws ArgumentError cover_hybrid(t, outidx, 0)
+
+        # The product and the exponential each carry one atom; the addition and the inputs none.
+        @test natoms(t) == 2
+        # A program of linear nodes carries none, whatever their arity.
+        tl, _ = tape_function(x -> 3 * x[1] - x[2] / 2, [1.0, 2.0])
+        @test natoms(tl) == 0
+        # An inner-product node carries one atom per parent pair.
+        td, _ = tape_function(z -> dot(z[1:3], z[4:6]), [0.3, -1.1, 0.7, 1.2, -0.4, 0.9])
+        @test natoms(td) == 3
     end
 
     @testset "hybrid merge — $name" for (name, f, x0) in PROBLEMS
@@ -646,10 +656,16 @@ include("genericaxes.jl")
         N = nnodes(t)
         res = cover_hessian(WithDiagnostics(), t, outidx)
 
-        # One group sums every node: the sum merge. One node per group: the quadrature merge.
+        # One group sums every atom: the sum merge. One atom per group: the quadrature merge.
         @test cover_hybrid(t, outidx, 1) ≈ res.h_sum rtol = 1.0e-12
-        @test cover_hybrid(t, outidx, N) ≈ res.h_quad rtol = 1.0e-12
+        @test cover_hybrid(t, outidx, natoms(t)) ≈ res.h_quad rtol = 1.0e-12
+        @test cover_hybrid(t, outidx, 10 * natoms(t) + 1) ≈ res.h_quad rtol = 1.0e-12
         @test cover_hybrid(t, outidx, collect(1:N)) ≈ res.h_quad rtol = 1.0e-12
+
+        # Dealing over 2G groups refines dealing over G, so it can only tighten.
+        for G in (1, 2, 3, 7)
+            @test all(cover_hybrid(t, outidx, 2G) .<= cover_hybrid(t, outidx, G) .* GATE)
+        end
 
         rng = MersenneTwister(hash(name))
         for groups in (
