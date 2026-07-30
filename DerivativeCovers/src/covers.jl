@@ -436,6 +436,24 @@ function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
     )
 end
 
+"""
+    worst_severity(severity::AbstractArray) -> (s, idx)
+
+Largest entry of `severity` and where it occurs, treating `NaN` as passing.
+
+Checks over a whole array score every entry and reduce, rather than testing entries in turn and
+raising at the first failure: the score is an array computation and only its reduction is
+inspected, so the decision to raise is taken once, by the caller, on a single scalar. Each caller
+normalizes its `severity` so that entries `<= 1` pass, which also makes the reported number the
+factor by which the worst entry misses. A `NaN` entry comes from a vacuous comparison — zero
+against zero — and scores as `0`.
+"""
+function worst_severity(severity::AbstractArray)
+    finite = map(s -> ifelse(isnan(s), zero(s), s), severity)
+    idx = argmax(finite)
+    return finite[idx], idx
+end
+
 function local_cover_slots(
         rule::SplitRule, t::Tape{T}, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
@@ -600,21 +618,19 @@ function cover_hessian(
     if check
         # These two computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(T)))^(3 // 4)
-        for q in 1:n
-            denom = max(abs(h_sum[q]), one(T))
-            abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
-                error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
-        end
+        # Relative disagreement in units of the tolerance, so `> 1` is a mismatch.
+        disagreement(x, y) = @. abs(x - y) / (rtol * max(abs(x), one(T)))
+        s, q = worst_severity(disagreement(h_sum, h_sum_rev))
+        s > 1 &&
+            error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         # local_covers already checked the node invariants.
         pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
-        for q in 1:n
-            gdenom = max(abs(vbar[q]), one(T))
-            abs(vbar[q] - pr.grad[q]) <= rtol * gdenom ||
-                error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-            hdenom = max(abs(h_sum[q]), one(T))
-            abs(h_sum[q] - pr.h_sum[q]) <= rtol * hdenom ||
-                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
-        end
+        s, q = worst_severity(disagreement(view(vbar, 1:n), pr.grad))
+        s > 1 &&
+            error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
+        s, q = worst_severity(disagreement(h_sum, pr.h_sum))
+        s > 1 &&
+            error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
     end
 
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)

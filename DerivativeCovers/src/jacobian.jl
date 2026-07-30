@@ -101,9 +101,10 @@ function cover_jacobian(
 
     if check
         rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
-        for j in 1:n, k in 1:m
-            a[k] * b_max[j] >= Utilde[k, j] * (1 - rtol) ||
-                error(
+        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (a .* b_max'))
+        if s > 1
+            k, j = Tuple(idx)
+            error(
                 "b_max does not cover the surrogate at output $k, input $j: " *
                     "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])"
             )
@@ -186,9 +187,10 @@ function cover_jacobian_hybrid(
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
-        for j in 1:n, k in 1:m
-            a[k] * b[j] >= Utilde[k, j] * (1 - rtol) ||
-                error(
+        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (a .* b'))
+        if s > 1
+            k, j = Tuple(idx)
+            error(
                 "group-max cover does not cover the surrogate at output $k, input $j: " *
                     "a*b = $(a[k] * b[j]) < Ũ = $(Utilde[k, j])"
             )

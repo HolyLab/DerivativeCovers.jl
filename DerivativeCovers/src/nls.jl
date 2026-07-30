@@ -208,18 +208,20 @@ end
 function _check_gn_channels(h_gn, Utilde::AbstractMatrix{T}, rgroups, gres) where {T}
     S = zeros(T, gres)
     rtol = eps(float(real(T)))^(3 // 4)
+    ref = similar(h_gn, axes(Utilde, 2))
     for j in axes(Utilde, 2)
         fill!(S, 0)
         for (k, g) in enumerate(rgroups)
             S[g] += Utilde[k, j]
         end
-        ref = sqrt(sum(abs2, S))
-        abs(h_gn[j] - ref) <= rtol * max(ref, one(T)) ||
-            error(
-            "grouped Gauss–Newton channels disagree with the surrogate at input $j: " *
-                "sweep = $(h_gn[j]), surrogate = $ref"
-        )
+        ref[j] = sqrt(sum(abs2, S))
     end
+    # Relative disagreement in units of the tolerance, so `> 1` is a mismatch.
+    s, j = worst_severity(@. abs(h_gn - ref) / (rtol * max(ref, one(T))))
+    s > 1 && error(
+        "grouped Gauss–Newton channels disagree with the surrogate at input $j: " *
+            "sweep = $(h_gn[j]), surrogate = $(ref[j])"
+    )
     return nothing
 end
 
