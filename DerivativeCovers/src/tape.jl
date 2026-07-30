@@ -1,9 +1,12 @@
 # Wengert tape and the overloaded scalar variable that records onto it.
 
 """
-    Tape
+    Tape{T}
 
-A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs.
+A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs, holding its values and
+partials in the element type `T`. `eltype(t)` reports `T`, and every cover computed from `t`
+returns it: `T` is the working precision of the whole construction, and a value or weight a caller
+supplies is converted into it.
 
 The first `ninputs` nodes represent the function inputs. Later nodes are appended in topological
 order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
@@ -15,18 +18,23 @@ output (see [`submapnode`](@ref)), and [`NoCurvature`](@ref) for a node with no 
 
 Input nodes and constant output nodes have no parents and no second partials.
 """
-struct Tape
-    vals::Vector{Float64}
+struct Tape{T}
+    vals::Vector{T}
     parents::Vector{Vector{Int}}
-    ds::Vector{Vector{Float64}}
+    ds::Vector{Vector{T}}
     Cs::Vector{Curvature}
     ninputs::Int
 end
 
+Base.eltype(::Type{Tape{T}}) where {T} = T
+
 """
     Tape(x0::AbstractVector)
+    Tape{T}(x0::AbstractVector)
 
-Create a tape seeded with the entries of `x0` as its input nodes.
+Create a tape seeded with the entries of `x0` as its input nodes. The element type defaults to
+`float(eltype(x0))`, so an integer starting point records in `Float64`; give `T` explicitly to
+record in another precision.
 
 # Examples
 
@@ -41,15 +49,20 @@ julia> y = exp(x[1]) + x[1] * x[2]^2;
 
 julia> DerivativeCovers.nnodes(t), y.idx
 (6, 6)
+
+julia> eltype(Tape{Float32}([0.5, 2.0]))
+Float32
 ```
 """
-function Tape(x0::AbstractVector)
+Tape(x0::AbstractVector) = Tape{float(eltype(x0))}(x0)
+
+function Tape{T}(x0::AbstractVector) where {T}
     Base.require_one_based_indexing(x0)
     n = length(x0)
-    return Tape(
-        Float64[float(x) for x in x0],
+    return Tape{T}(
+        T[x for x in x0],
         [Int[] for _ in 1:n],
-        [Float64[] for _ in 1:n],
+        [T[] for _ in 1:n],
         Curvature[NoCurvature() for _ in 1:n],
         n
     )
@@ -63,13 +76,15 @@ Number of nodes recorded on `t`, inputs included. This is the tape length `L`.
 nnodes(t::Tape) = length(t.vals)
 
 """
-    TVar(t::Tape, idx::Integer)
+    TVar(t::Tape{T}, idx::Integer)
     TVar(c::Real)
+    TVar{T}(c::Real)
 
-A scalar used while recording a function.
+A scalar used while recording a function, carrying a value of type `T`.
 
-`TVar(t, idx)` refers to node `idx` on `t`. `TVar(c)` creates a constant with a value but no
-tape; this supports typed literals such as `zero(eltype(x))` in generic numerical code.
+`TVar(t, idx)` refers to node `idx` on `t` and takes the tape's element type. `TVar(c)` creates a
+constant with a value but no tape; this supports typed literals such as `zero(eltype(x))` in
+generic numerical code, which reach `TVar{T}(c)` and so stay in the program's precision.
 Operations involving only constants are folded immediately. Operations that mix a constant and
 a recorded variable store the constant as a coefficient.
 
@@ -89,14 +104,15 @@ julia> DerivativeCovers.isconstant(c * TVar(4.0)), DerivativeCovers.value(c * TV
 (true, 12.0)
 ```
 """
-struct TVar
-    tape::Union{Tape, Nothing}
+struct TVar{T}
+    tape::Union{Tape{T}, Nothing}
     idx::Int
-    val::Float64
+    val::T
 end
 
-TVar(t::Tape, idx::Integer) = TVar(t, Int(idx), t.vals[idx])
-TVar(c::Real) = TVar(nothing, 0, float(c))
+TVar(t::Tape{T}, idx::Integer) where {T} = TVar{T}(t, Int(idx), t.vals[idx])
+TVar{T}(c::Real) where {T} = TVar{T}(nothing, 0, c)
+TVar(c::Real) = TVar{typeof(float(c))}(float(c))
 TVar(x::TVar) = x
 
 """
@@ -137,6 +153,10 @@ end
 
 Append a node with value `val`, parent indices `parents`, first partials `d`, and second
 partials `C`, and return a [`TVar`](@ref) referring to it.
+
+`val` and `d` are converted to the tape's element type. `C` is stored as it is given, and every
+[`Curvature`](@ref) form the sweeps resolve statically holds that same element type, so an
+elemental should build its curvature in `eltype(t)` too.
 """
 function pushnode!(t::Tape, val, parents, d, C)
     push!(t.vals, val)
@@ -157,8 +177,8 @@ Elementals fold a constant operand into the node that consumes it rather than gi
 node indices and a constant needs an index to be one: a fixed offset among a program's outputs,
 such as the unit residual that carries an additive constant of a least-squares loss.
 """
-constantnode(t::Tape, c::Real) =
-    pushnode!(t, float(c), Int[], Float64[], NoCurvature())
+constantnode(t::Tape{T}, c::Real) where {T} =
+    pushnode!(t, c, Int[], T[], NoCurvature())
 
 """
     unarynode(x::TVar, val, d, c) -> TVar
@@ -170,8 +190,9 @@ no second-order term either way, and that form says so without a matrix to alloc
 """
 function unarynode(x::TVar, val, d, c)
     t, i = noderef(x)
-    C = iszero(c) ? NoCurvature() : DenseCurvature(fill(float(c), 1, 1))
-    return pushnode!(t, val, [i], [float(d)], C)
+    T = eltype(t)
+    C = iszero(c) ? NoCurvature() : DenseCurvature(fill(convert(T, c), 1, 1))
+    return pushnode!(t, val, [i], T[d], C)
 end
 
 """
@@ -184,28 +205,27 @@ function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     tx, ix = noderef(x)
     ty, iy = noderef(y)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
-    return pushnode!(
-        tx, val, [ix, iy], [float(d1), float(d2)],
-        DenseCurvature(Float64[c11 c12; c12 c22])
-    )
+    T = eltype(tx)
+    return pushnode!(tx, val, [ix, iy], T[d1, d2], DenseCurvature(T[c11 c12; c12 c22]))
 end
 
 """
-    dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar}) -> TVar
+    dotnode(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar}) -> TVar
 
 Record an inner-product node `y = sum_j w_j*x_j`. Parent slots are ordered
 `(w_1, ..., w_q, x_1, ..., x_q)`, first partials are `(x_1, ..., x_q, w_1, ..., w_q)`, and the
 second-partial matrix is [`PairedCurvature`](@ref)`(q)`. Parent slots are independent even when
 `ws` and `xs` share entries (e.g. `dotnode(xs, xs)`): the decomposition is over slots, not values.
 """
-function dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
+function dotnode(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar})
     isempty(ws) && throw(ArgumentError("cannot record an empty inner product"))
     idxs = eachindex(ws, xs)
     q = length(idxs)
     t, _ = noderef(ws[first(idxs)])
-    val = 0.0
+    T = eltype(t)
+    val = zero(T)
     parents = Vector{Int}(undef, 2q)
-    ds = Vector{Float64}(undef, 2q)
+    ds = Vector{T}(undef, 2q)
     for (n, j) in enumerate(idxs)
         w, x = ws[j], xs[j]
         tw, iw = noderef(w)
@@ -222,31 +242,32 @@ function dotnode(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
 end
 
 """
-    linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar}) -> TVar
+    linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:TVar}) -> TVar
 
 Record a node `y = sum_j coeffs[j]*xs[j]` for constant `coeffs`. First partials are the
-(floated) coefficients; the second-partial matrix is empty, since a linear combination of
-constants and `TVar`s has no second-order term.
+coefficients converted to the tape's element type; the second-partial matrix is empty, since a
+linear combination of constants and `TVar`s has no second-order term.
 """
-function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
+function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty linear combination"))
     idxs = eachindex(coeffs, xs)
     t, _ = noderef(xs[first(idxs)])
-    val = 0.0
+    T = eltype(t)
+    val = zero(T)
     parents = Vector{Int}(undef, length(idxs))
-    ds = Vector{Float64}(undef, length(idxs))
+    ds = Vector{T}(undef, length(idxs))
     for (n, j) in enumerate(idxs)
         tx, ix = noderef(xs[j])
         tx === t || throw(ArgumentError("cannot combine TVars from different tapes"))
         val += coeffs[j] * value(xs[j])
         parents[n] = ix
-        ds[n] = float(coeffs[j])
+        ds[n] = coeffs[j]
     end
     return pushnode!(t, val, parents, ds, NoCurvature())
 end
 
 """
-    submapnode(xs::AbstractVector{TVar}, y::AbstractVector{<:Real}, J::AbstractMatrix{<:Real},
+    submapnode(xs::AbstractVector{<:TVar}, y::AbstractVector{<:Real}, J::AbstractMatrix{<:Real},
                S::Union{Nothing,AbstractMatrix{<:Real}}=nothing) -> Vector{TVar}
 
 Record a declared sub-map call `y = F(v)` as one node per output, without retracing `F`'s
@@ -267,7 +288,7 @@ declarations with both properties. The covers are then invariant to the output g
 cancels between each output's adjoint and its declared curvature.
 """
 function submapnode(
-        xs::AbstractVector{TVar}, y::AbstractVector{<:Real},
+        xs::AbstractVector{<:TVar}, y::AbstractVector{<:Real},
         J::AbstractMatrix{<:Real},
         S::Union{Nothing, AbstractMatrix{<:Real}} = nothing
     )
@@ -286,15 +307,16 @@ function submapnode(
     t, _ = noderef(xs[1])
     all(x -> first(noderef(x)) === t, xs) ||
         throw(ArgumentError("cannot combine TVars from different tapes"))
+    T = eltype(t)
     parents = [last(noderef(x)) for x in xs]   # shared by all q nodes; parent lists are never mutated
     return [
         begin
                 C = if S === nothing || all(iszero, view(S, k, :))
                     NoCurvature()
             else
-                    DeclaredCurvature([float(S[k, i]) for i in 1:p])
+                    DeclaredCurvature(T[S[k, i] for i in 1:p])
             end
-                pushnode!(t, float(y[k]), parents, [float(J[k, i]) for i in 1:p], C)
+                pushnode!(t, y[k], parents, T[J[k, i] for i in 1:p], C)
             end for k in 1:q
     ]
 end

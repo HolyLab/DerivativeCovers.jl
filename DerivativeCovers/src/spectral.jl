@@ -60,10 +60,12 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     kdecl === nothing ||
         throw(ArgumentError("hvp is unavailable: node $kdecl is a declared sub-map output (see submapnode) whose exact second partials are not recorded"))
 
-    dv = zeros(N)
+    # The product runs in the tape's element type promoted with the tangent's.
+    T = promote_type(eltype(t), eltype(Hv))
+    dv = zeros(T, N)
     copyto!(view(dv, 1:n), v)
     for k in (n + 1):N
-        acc = 0.0
+        acc = zero(T)
         for (i, p) in enumerate(t.parents[k])
             acc += t.ds[k][i] * dv[p]
         end
@@ -71,7 +73,7 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     end
 
     vbar = adjoints(t, outidx)
-    vbardot = zeros(N)          # tangent of vbar; vbar[outidx] = 1 is constant, so this seeds at 0
+    vbardot = zeros(T, N)       # tangent of vbar; vbar[outidx] = 1 is constant, so this seeds at 0
     for k in N:-1:1
         ps = t.parents[k]
         isempty(ps) && continue
@@ -82,7 +84,8 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
             vbardot[p] += ds[i] * ak
         end
         if bk != 0
-            dispatchcurvature(t.Cs[k]) do C
+            # The ladder resolves the forms the tape recorded, whatever type the tangents carry.
+            dispatchcurvature(t.Cs[k], eltype(t)) do C
                 curvature_apply!(vbardot, C, ps, bk, dv)
             end
         end
@@ -143,9 +146,10 @@ function scaled_spectral_radius(
     all(>(0), h) ||
         throw(ArgumentError("the matrix-free spectral radius requires a strictly positive h"))
 
-    v = randn(rng, n)
+    T = promote_type(eltype(t), float(real(eltype(h))))
+    v = randn(rng, T, n)
     v ./= norm(v)
-    lambda = 0.0
+    lambda = zero(T)
     for _ in 1:maxiter
         u = hvp(t, outidx, v ./ h) ./ h          # u = Hhat * v
         lambdanew = norm(u)                      # <= opnorm(Hhat) for any unit v

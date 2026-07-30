@@ -88,9 +88,9 @@ struct DeclaredCurvature{T, V <: AbstractVector{T}} <: Curvature
 end
 
 """
-    dispatchcurvature(f, C::Curvature)
+    dispatchcurvature(f, C::Curvature, ::Type{T})
 
-Call `f(C)`, branching on the built-in [`Curvature`](@ref) forms first.
+Call `f(C)`, branching on the built-in [`Curvature`](@ref) forms over the element type `T` first.
 
 [`Tape`](@ref) stores its curvatures in a container with abstract element type, so an interface
 method invoked on one is a dynamic dispatch — once per node per sweep, which is a large fraction
@@ -99,20 +99,20 @@ calls statically. A form defined elsewhere falls through to the same call, dispa
 ordinary way: this is an optimization for the common cases, not a restriction on which forms are
 allowed.
 
-The concrete parameters listed are those the elementals of `overloads.jl` record. A curvature of
-the same form over some other element or matrix type is correct here, just not statically
-resolved.
+`T` is the element type of the tape the curvature came from, which is the one the elementals of
+`overloads.jl` record in. A curvature over some other element or matrix type is correct here, just
+not statically resolved.
 
 `C` is `@nospecialize`d because specializing on it would defeat the point: a caller that knows
 the concrete form would compile an instance in which every branch below but one is dead, having
-already paid the dispatch this ladder exists to avoid. One instance per call site, branching at
-run time, is the intended shape.
+already paid the dispatch this ladder exists to avoid. One instance per call site and element
+type, branching at run time, is the intended shape.
 """
-@inline function dispatchcurvature(f::F, @nospecialize(C::Curvature)) where {F}
+@inline function dispatchcurvature(f::F, @nospecialize(C::Curvature), ::Type{T}) where {F, T}
     C isa NoCurvature && return f(C)
     C isa PairedCurvature && return f(C)
-    C isa DenseCurvature{Float64, Matrix{Float64}} && return f(C)
-    C isa DeclaredCurvature{Float64, Vector{Float64}} && return f(C)
+    C isa DenseCurvature{T, Matrix{T}} && return f(C)
+    C isa DeclaredCurvature{T, Vector{T}} && return f(C)
     return f(C)
 end
 
@@ -144,11 +144,14 @@ atom_slots(::Curvature, nslots) = (1:nslots,)
 atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
-    cover_slots(C::Curvature, rule, t, k, av, scales; check=true) -> Union{Nothing,Vector{Float64}}
+    cover_slots(C::Curvature, rule, t, k, av, scales; check=true) -> Union{Nothing,Vector{T}}
 
 The rank-1 cover of node `k` of `t`, slot-aligned with its parents: nonnegative `rho` with
 `rho[i]*rho[j] >= av*abs(C[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
 `nothing` when the node contributes no second-order term.
+
+`rho` must be a `Vector{T}` for `T = eltype(t)`: [`local_cover_slots`](@ref) asserts that type so
+that the sweeps, which call it once per node, need not box the result.
 
 `rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks and `scales`
 its per-node scale references, as [`split_scales`](@ref) supplies them. `check` verifies the
@@ -162,7 +165,7 @@ cover_slots(::NoCurvature, rule, t, k, av, scales; check::Bool = true) = nothing
 
 function cover_slots(C::DeclaredCurvature, rule, t, k, av, scales; check::Bool = true)
     av == 0 && return nothing
-    return sqrt(av) .* C.s
+    return eltype(t)[sqrt(av) * s for s in C.s]
 end
 
 function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = true)
@@ -170,18 +173,18 @@ function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = t
     c == 0 && return nothing
     q = C.q
     ps = t.parents[k]
-    rho = zeros(2q)
+    rho = zeros(eltype(t), 2q)
     for j in 1:q
         s1 = scales[ps[j]]
         s2 = scales[ps[q + j]]
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
             continue   # dead pair: both slots stay zero; see `local_cover_slots`
         end
-        a, b = balanced_split(0.0, c, 0.0, s1, s2)
+        a, b = balanced_split(zero(c), c, zero(c), s1, s2)
         if check
             check_finite_partials(t, k, av, (c,))
             # Allow for roundoff accumulated across the tape, not just this comparison.
-            rtol = sqrt(eps(float(real(eltype(t.vals)))))
+            rtol = sqrt(eps(float(real(eltype(t)))))
             a * b >= c * (1 - rtol) ||
                 error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
         end
@@ -192,11 +195,12 @@ function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = t
 end
 
 function cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = true)
+    T = eltype(t)
     ps = t.parents[k]
     if length(ps) == 1
         c11 = av * abs(C[1, 1])
         c11 == 0 && return nothing
-        return [sqrt(c11)]
+        return T[sqrt(c11)]
     elseif length(ps) == 2
         c11 = av * abs(C[1, 1])
         c12 = av * abs(C[1, 2])
@@ -206,7 +210,7 @@ function cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = tr
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
             # A dead slot contributes no diagonal or cross term; only its live partner needs
             # cover weight.
-            return [s1 == 0 ? 0.0 : sqrt(c11), s2 == 0 ? 0.0 : sqrt(c22)]
+            return T[s1 == 0 ? 0 : sqrt(c11), s2 == 0 ? 0 : sqrt(c22)]
         end
         if c12^2 <= c11 * c22
             rho1, rho2 = sqrt(c11), sqrt(c22)
@@ -215,14 +219,14 @@ function cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = tr
         end
         if check
             check_finite_partials(t, k, av, (c11, c12, c22))
-            rtol = sqrt(eps(float(real(eltype(t.vals)))))
+            rtol = sqrt(eps(float(real(T))))
             (
                 rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
                     rho1 * rho2 >= c12 * (1 - rtol)
             ) ||
                 error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
         end
-        return [rho1, rho2]
+        return T[rho1, rho2]
     end
     return error("node $k has $(length(ps)) parents; only unary and binary elementals are supported")
 end
@@ -242,7 +246,7 @@ bound_contribution!(B, ::NoCurvature, av, ps, utilde) = B
 
 function bound_contribution!(B, C::DeclaredCurvature, av, ps, utilde)
     n = size(B, 1)
-    w = zeros(n)
+    w = zeros(eltype(B), n)
     for (i, p) in enumerate(ps)
         si = C.s[i]
         si == 0 && continue
@@ -307,7 +311,7 @@ end
 
 function curvature_apply!(vbardot, C::DenseCurvature, ps, bk, dv)
     for (i, p) in enumerate(ps)
-        curv = 0.0
+        curv = zero(eltype(vbardot))
         for (j, q) in enumerate(ps)
             curv += C[i, j] * dv[q]
         end

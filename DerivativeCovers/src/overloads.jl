@@ -24,9 +24,9 @@ eitherconstant(x::TVar, y::TVar) = isconstant(x) | isconstant(y)
 
 # --- binary, both TVar ---
 +(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) + unfold(y)) :
-    binarynode(x, y, value(x) + value(y), 1.0, 1.0, 0, 0, 0)
+    binarynode(x, y, value(x) + value(y), 1, 1, 0, 0, 0)
 -(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) - unfold(y)) :
-    binarynode(x, y, value(x) - value(y), 1.0, -1.0, 0, 0, 0)
+    binarynode(x, y, value(x) - value(y), 1, -1, 0, 0, 0)
 *(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) * unfold(y)) :
     binarynode(x, y, value(x) * value(y), value(y), value(x), 0, 1, 0)
 function /(x::TVar, y::TVar)
@@ -37,7 +37,7 @@ end
 
 # --- unary sign ---
 +(x::TVar) = x
--(x::TVar) = isconstant(x) ? TVar(-value(x)) : unarynode(x, -value(x), -1.0, 0)
+-(x::TVar) = isconstant(x) ? TVar(-value(x)) : unarynode(x, -value(x), -1, 0)
 
 # --- TVar with a numeric constant, folded into a unary node ---
 # An operation that leaves the operand alone returns it rather than recording a node. Generic
@@ -52,17 +52,17 @@ end
 function +(x::TVar, c::Real)
     isconstant(x) && return TVar(value(x) + c)
     v = value(x)
-    return v + c === v ? x : unarynode(x, v + c, 1.0, 0)
+    return v + c === v ? x : unarynode(x, v + c, 1, 0)
 end
 +(c::Real, x::TVar) = x + c
 function -(x::TVar, c::Real)
     isconstant(x) && return TVar(value(x) - c)
     v = value(x)
-    return v - c === v ? x : unarynode(x, v - c, 1.0, 0)
+    return v - c === v ? x : unarynode(x, v - c, 1, 0)
 end
--(c::Real, x::TVar) = isconstant(x) ? TVar(c - value(x)) : unarynode(x, c - value(x), -1.0, 0)
+-(c::Real, x::TVar) = isconstant(x) ? TVar(c - value(x)) : unarynode(x, c - value(x), -1, 0)
 *(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) :
-    isone(c) ? x : unarynode(x, value(x) * c, float(c), 0)
+    isone(c) ? x : unarynode(x, value(x) * c, c, 0)
 *(c::Real, x::TVar) = x * c
 /(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) :
     isone(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
@@ -77,14 +77,20 @@ end
 
 # --- values of the element type obtained from numbers ---
 # Generic code obtains typed literals through zero, one, conversion, and constructors. These
-# return constant TVars because no tape is available at the type level.
+# return constant TVars because no tape is available at the type level. Written against
+# `TVar{T}` they keep the program's precision, since generic code reaches them through
+# `eltype(x)`; the unparameterized forms have no `T` to preserve and default to Float64.
+Base.zero(::Type{TVar{T}}) where {T} = TVar{T}(0)
+Base.one(::Type{TVar{T}}) where {T} = TVar{T}(1)
+Base.oneunit(::Type{TVar{T}}) where {T} = TVar{T}(1)
 Base.zero(::Type{TVar}) = TVar(0.0)
 Base.one(::Type{TVar}) = TVar(1.0)
 Base.oneunit(::Type{TVar}) = TVar(1.0)
-Base.zero(x::TVar) = TVar(0.0)
-Base.one(x::TVar) = TVar(1.0)
-Base.oneunit(x::TVar) = TVar(1.0)
+Base.zero(x::TVar) = zero(typeof(x))
+Base.one(x::TVar) = one(typeof(x))
+Base.oneunit(x::TVar) = oneunit(typeof(x))
 Base.convert(::Type{TVar}, c::Real) = TVar(c)
+Base.convert(::Type{TVar{T}}, c::Real) where {T} = TVar{T}(c)
 
 # --- power with a constant exponent ---
 # Apply zero derivative factors before singular powers so x^0 and x^1 remain constant and linear
@@ -174,7 +180,7 @@ abs2(x::TVar) = isconstant(x) ? TVar(value(x)^2) : unarynode(x, value(x)^2, 2 * 
 # --- inner products and matrix-vector products ---
 # Variable-variable products use inner-product nodes; constant coefficients use linear nodes.
 # Mixed TVar vectors are partitioned by pair.
-function dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
+function dot(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar})
     wconst, xconst = count(isconstant, ws), count(isconstant, xs)
     wconst == 0 && xconst == 0 && return dotnode(ws, xs)
     xconst == 0 && wconst == length(ws) && return linearnode(map(value, ws), xs)
@@ -183,80 +189,83 @@ function dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
 end
 
 # Partition a mixed dot product into a bilinear node, a linear node, and a constant offset. This
-# preserves the scalarized atom set with at most three nodes.
-function _partitioned_dot(ws::AbstractVector{TVar}, xs::AbstractVector{TVar})
+# preserves the scalarized atom set with at most three nodes. The staging vectors take their
+# element types from the operands, so the coefficients reach the recorders in the operands' own
+# precision; `offset` accumulates as a constant TVar, which folds rather than recording a node.
+function _partitioned_dot(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar})
     idxs = eachindex(ws, xs)
     isempty(idxs) && throw(ArgumentError("cannot record an empty inner product"))
-    wpair, xpair = TVar[], TVar[]     # both sides recording
-    wcoef, wrest = Float64[], TVar[]  # ws[j] constant, xs[j] recording
-    xcoef, xrest = Float64[], TVar[]  # xs[j] constant, ws[j] recording
-    offset = 0.0
+    wpair, xpair = similar(ws, 0), similar(xs, 0)     # both sides recording
+    wconst, wrest = similar(ws, 0), similar(xs, 0)    # ws[j] constant, xs[j] recording
+    xconst, xrest = similar(xs, 0), similar(ws, 0)    # xs[j] constant, ws[j] recording
+    offset = zero(eltype(ws))
     for j in idxs
         w, x = ws[j], xs[j]
         if isconstant(w) && isconstant(x)
-            offset += value(w) * value(x)
+            offset += w * x
         elseif isconstant(w)
-            push!(wcoef, value(w)); push!(wrest, x)
+            push!(wconst, w); push!(wrest, x)
         elseif isconstant(x)
-            push!(xcoef, value(x)); push!(xrest, w)
+            push!(xconst, x); push!(xrest, w)
         else
             push!(wpair, w); push!(xpair, x)
         end
     end
-    parts = TVar[]
+    parts = similar(ws, 0)
     isempty(wpair) || push!(parts, dotnode(wpair, xpair))
-    isempty(wrest) || push!(parts, linearnode(wcoef, wrest))
-    isempty(xrest) || push!(parts, linearnode(xcoef, xrest))
-    isempty(parts) && return TVar(offset)   # every pair constant on both sides
-    total = length(parts) == 1 ? only(parts) : linearnode(ones(length(parts)), parts)
-    return iszero(offset) ? total : total + offset
+    isempty(wrest) || push!(parts, linearnode(map(value, wconst), wrest))
+    isempty(xrest) || push!(parts, linearnode(map(value, xconst), xrest))
+    isempty(parts) && return offset   # every pair constant on both sides
+    total = length(parts) == 1 ? only(parts) : linearnode(ones(Bool, length(parts)), parts)
+    # A zero offset leaves the value alone, which `+` declines to record.
+    return total + offset
 end
-dot(w::AbstractVector{<:Real}, xs::AbstractVector{TVar}) = _linear_dot(w, xs)
-dot(ws::AbstractVector{TVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
+dot(w::AbstractVector{<:Real}, xs::AbstractVector{<:TVar}) = _linear_dot(w, xs)
+dot(ws::AbstractVector{<:TVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
 
 # Fold constant entries into an offset; only recording entries become parents of the linear node.
-function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{TVar})
+function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:TVar})
     any(isconstant, xs) || return linearnode(coeffs, xs)
     idxs = eachindex(coeffs, xs)
-    rcoef, rest = Float64[], TVar[]
-    offset = 0.0
+    rcoef, rest = similar(coeffs, 0), similar(xs, 0)
+    offset = zero(eltype(xs))
     for j in idxs
         x = xs[j]
         if isconstant(x)
             offset += coeffs[j] * value(x)
         else
-            push!(rcoef, float(coeffs[j])); push!(rest, x)
+            push!(rcoef, coeffs[j]); push!(rest, x)
         end
     end
-    isempty(rest) && return TVar(offset)   # every entry constant
-    total = linearnode(rcoef, rest)
-    return iszero(offset) ? total : total + offset
+    isempty(rest) && return offset   # every entry constant
+    return linearnode(rcoef, rest) + offset
 end
 
 # Row-by-row matrix-vector product. Each row dispatches to the `dot` methods above, so a
-# constant row or a constant `x` records a `linearnode` and a mixed pair a `dotnode`.
+# constant row or a constant `x` records a `linearnode` and a mixed pair a `dotnode`. The
+# comprehension takes its element type from those nodes, which carry the tape's precision.
 function matvecnodes(W::AbstractMatrix, x::AbstractVector)
     axes(W, 2) == axes(x, 1) ||
         throw(DimensionMismatch("W has axes $(axes(W)), x has axes $(axes(x))"))
-    return TVar[dot(view(W, m, :), x) for m in axes(W, 1)]
+    return [dot(view(W, m, :), x) for m in axes(W, 1)]
 end
 
-*(W::AbstractMatrix{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
-*(W::AbstractMatrix{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
-*(W::AbstractMatrix{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:TVar}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:Real}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 
 # Resolve dispatch ties with LinearAlgebra's AbstractMatrix methods.
 *(
-    W::Union{Adjoint{TVar, <:AbstractVector}, Transpose{TVar, <:AbstractVector}},
-    x::AbstractVector{TVar}
+    W::Union{Adjoint{<:TVar, <:AbstractVector}, Transpose{<:TVar, <:AbstractVector}},
+    x::AbstractVector{<:TVar}
 ) = dot(parent(W), x)
 *(
-    W::Union{Adjoint{TVar, <:AbstractVector}, Transpose{TVar, <:AbstractVector}},
+    W::Union{Adjoint{<:TVar, <:AbstractVector}, Transpose{<:TVar, <:AbstractVector}},
     x::AbstractVector{<:Real}
 ) = dot(parent(W), x)
 *(
     W::Union{Adjoint{<:Real, <:AbstractVector}, Transpose{<:Real, <:AbstractVector}},
-    x::AbstractVector{TVar}
+    x::AbstractVector{<:TVar}
 ) = dot(parent(W), x)
 
 # A diagonal product is elementwise; the explicit axes check prevents broadcast expansion.
@@ -266,14 +275,14 @@ function diagvecnodes(W::Diagonal, x::AbstractVector)
     return diag(W) .* x
 end
 
-*(W::Diagonal{TVar}, x::AbstractVector{TVar}) = diagvecnodes(W, x)
-*(W::Diagonal{TVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
-*(W::Diagonal{<:Real}, x::AbstractVector{TVar}) = diagvecnodes(W, x)
+*(W::Diagonal{<:TVar}, x::AbstractVector{<:TVar}) = diagvecnodes(W, x)
+*(W::Diagonal{<:TVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
+*(W::Diagonal{<:Real}, x::AbstractVector{<:TVar}) = diagvecnodes(W, x)
 
 # Triangular wrappers need only dispatch disambiguation; getindex supplies their structural values.
-*(W::AbstractTriangular{TVar}, x::AbstractVector{TVar}) = matvecnodes(W, x)
-*(W::AbstractTriangular{TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
-*(W::AbstractTriangular{<:Real}, x::AbstractVector{TVar}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:TVar}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:Real}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
 
 # Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
 # per output row. `mul!` is the only route to it. A `*` method of its own would tie with
@@ -282,7 +291,7 @@ end
 function matmatnodes(W::AbstractMatrix, X::AbstractMatrix)
     axes(W, 2) == axes(X, 1) ||
         throw(DimensionMismatch("W has axes $(axes(W)), X has axes $(axes(X))"))
-    return TVar[dot(view(W, m, :), view(X, :, n)) for m in axes(W, 1), n in axes(X, 2)]
+    return [dot(view(W, m, :), view(X, :, n)) for m in axes(W, 1), n in axes(X, 2)]
 end
 
 # --- in-place products -------------------------------------------------------------------------
@@ -306,7 +315,7 @@ end
 # Write a recorded product into `y`. The destination's axes must be the product's: LinearAlgebra's
 # out-of-place `*` sizes its matrix destination one-based, so an offset operand reaching `mul!`
 # that way is a mismatch rather than a result silently relabelled.
-function storeproduct!(y::AbstractArray{TVar}, z::AbstractArray, alpha::Number, beta::Number)
+function storeproduct!(y::AbstractArray{<:TVar}, z::AbstractArray, alpha::Number, beta::Number)
     axes(y) == axes(z) ||
         throw(DimensionMismatch("mul! destination has axes $(axes(y)), product has axes $(axes(z))"))
     iszero(beta) || return y .= alpha .* z .+ beta .* y
@@ -322,39 +331,41 @@ recordmatmat!(Y, tA, tB, W, X, alpha, beta) =
 # Julia 1.11 replaced the trailing `MulAddMul` of both entry points with a scalar pair.
 @static if VERSION >= v"1.11"
     LinearAlgebra.generic_matvecmul!(
-        y::AbstractVector{TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        y::AbstractVector{<:TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
         alpha::Number, beta::Number
     ) = recordmatvec!(y, tA, W, x, alpha, beta)
 
     LinearAlgebra.generic_matmatmul!(
-        Y::AbstractMatrix{TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        Y::AbstractMatrix{<:TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         alpha::Number, beta::Number
     ) = recordmatmat!(Y, tA, tB, W, X, alpha, beta)
 else
     LinearAlgebra.generic_matvecmul!(
-        y::AbstractVector{TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        y::AbstractVector{<:TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
         add::LinearAlgebra.MulAddMul
     ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
 
     LinearAlgebra.generic_matmatmul!(
-        Y::AbstractMatrix{TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        Y::AbstractMatrix{<:TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         add::LinearAlgebra.MulAddMul
     ) = recordmatmat!(Y, tA, tB, W, X, add.alpha, add.beta)
 end
 
 # Record a sum as one linear node instead of n-1 addition nodes.
-function Base.sum(xs::AbstractArray{TVar})
+function Base.sum(xs::AbstractArray{<:TVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
     # `linearnode` pairs coefficients with terms by index, so the unit coefficients carry `v`'s
-    # axes.
+    # axes. It converts them into the tape's element type, and a unit is exact in every type, so
+    # the cheapest one that spells it will do.
     v = vec(xs)
-    any(isconstant, xs) || return linearnode(fill!(similar(v, Float64), 1), v)
+    any(isconstant, xs) || return linearnode(fill!(similar(v, Bool), true), v)
     # Constants in the sum are an additive offset, which the unary constant node carries; a sum of
     # constants alone has nothing to record and stays a constant.
     recording = [x for x in xs if !isconstant(x)]
-    offset = sum(value(x) for x in xs if isconstant(x))
-    isempty(recording) && return TVar(offset)
-    total = length(recording) == 1 ? only(recording) : linearnode(ones(length(recording)), recording)
-    return iszero(offset) ? total : total + offset
+    offset = sum(x for x in xs if isconstant(x))
+    isempty(recording) && return offset
+    total = length(recording) == 1 ? only(recording) :
+        linearnode(ones(Bool, length(recording)), recording)
+    return total + offset
 end
-Base.sum(f, xs::AbstractArray{TVar}) = sum(map(f, xs))
+Base.sum(f, xs::AbstractArray{<:TVar}) = sum(map(f, xs))

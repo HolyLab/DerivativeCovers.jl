@@ -43,11 +43,13 @@ function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v
         throw(DimensionMismatch("Jv and outidxs must share indices: $(axes(Jv)) vs $(axes(outidxs))"))
     Base.require_one_based_indexing(v)
 
-    dv = zeros(N)
+    # The product runs in the tape's element type promoted with the tangent's.
+    T = promote_type(eltype(t), eltype(Jv))
+    dv = zeros(T, N)
     copyto!(view(dv, 1:n), v)
     # Forward topological order finalizes parent tangents before use.
     for k in (n + 1):N
-        acc = 0.0
+        acc = zero(T)
         for (i, p) in enumerate(t.parents[k])
             acc += t.ds[k][i] * dv[p]
         end
@@ -105,7 +107,7 @@ function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, 
     axes(Jtu, 1) == Base.OneTo(n) ||
         throw(DimensionMismatch("Jtu has axes $(axes(Jtu)), expected $((Base.OneTo(n),)) (one per input)"))
 
-    vbar = zeros(N)
+    vbar = zeros(promote_type(eltype(t), eltype(Jtu)), N)
     for k in eachindex(u, outidxs)
         vbar[outidxs[k]] += u[k]
     end
@@ -204,9 +206,10 @@ function scaled_singular_value(
     all(>(0), a) && all(>(0), b) ||
         throw(ArgumentError("the matrix-free singular value requires strictly positive a and b"))
 
-    v = randn(rng, n)
+    T = promote_type(eltype(t), float(real(promote_type(eltype(a), eltype(b)))))
+    v = randn(rng, T, n)
     v ./= norm(v)
-    sigma = 0.0
+    sigma = zero(T)
     for _ in 1:maxiter
         u = jvp(t, outidxs, v ./ b) ./ a          # u = Jhat * v
         signew = norm(u)                          # <= opnorm(Jhat) for any unit v

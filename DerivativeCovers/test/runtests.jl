@@ -38,6 +38,7 @@ include("programs.jl")
 const GATE = 1 + 1.0e-10
 
 include("constants.jl")
+include("elementtype.jl")
 include("primitives.jl")
 include("composites.jl")
 include("arrayops.jl")

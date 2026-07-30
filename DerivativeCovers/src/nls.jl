@@ -14,9 +14,10 @@
 # cover of the full Hessian while keeping the Gauss–Newton contribution separate.
 
 """
-    NLSCover
+    NLSCover{T}
 
-Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`.
+Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`, in the element type `T` of
+the [`Tape`](@ref) it was computed from.
 
 - `grad`: gradient of the loss.
 - `h`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
@@ -28,11 +29,11 @@ Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`.
 Forming `Utilde` costs `O(m * L)`. When no signed paths cancel,
 `h_gn == sqrt.(diag(J'J))`.
 """
-struct NLSCover
-    grad::Vector{Float64}
-    h::Vector{Float64}
-    h_gn::Vector{Float64}
-    Utilde::Matrix{Float64}
+struct NLSCover{T}
+    grad::Vector{T}
+    h::Vector{T}
+    h_gn::Vector{T}
+    Utilde::Matrix{T}
     m::Int
 end
 
@@ -138,9 +139,9 @@ function cover_nls(
     m = length(residx)
 
     # One reverse channel per residual produces the m×n absolute-sensitivity surrogate.
-    Theta = zeros(m, N)
+    Theta = zeros(eltype(t), m, N)
     for k in 1:m
-        Theta[k, residx[k]] = 1.0
+        Theta[k, residx[k]] = 1
     end
     Abar = abs_reverse(t, Theta)
     Utilde = Abar[:, 1:n]
@@ -163,8 +164,8 @@ sensitivities of `nls`: `a = ones(m)` and `b[j] = maximum(Utilde[:, j])`, so
 against a general asymmetric Jacobian cover; the tight *symmetric* Gauss–Newton cover is `nls.h_gn`,
 not the corollary `‖a‖₂ b` of this pair.
 """
-function gn_ab(nls::NLSCover)
-    a = ones(nls.m)
+function gn_ab(nls::NLSCover{T}) where {T}
+    a = ones(T, nls.m)
     b = [maximum(view(nls.Utilde, :, j)) for j in 1:size(nls.Utilde, 2)]
     return a, b
 end

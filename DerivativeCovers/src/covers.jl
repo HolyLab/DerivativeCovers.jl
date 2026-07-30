@@ -13,22 +13,24 @@
 # second partials and contributes no atoms.
 
 """
-    HessianCover
+    HessianCover{T}
 
-The standard result returned by [`cover_hessian`](@ref).
+The standard result returned by [`cover_hessian`](@ref), in the element type `T` of the
+[`Tape`](@ref) it was computed from.
 
 - `grad`: gradient of the scalar function at the evaluation point.
 - `h_sum`: certified Hessian cover computed with the sum merge.
 """
-struct HessianCover
-    grad::Vector{Float64}
-    h_sum::Vector{Float64}
+struct HessianCover{T}
+    grad::Vector{T}
+    h_sum::Vector{T}
 end
 
 """
-    HessianDiagnostics
+    HessianDiagnostics{T}
 
-The extended result returned by `cover_hessian(WithDiagnostics(), ...)`.
+The extended result returned by `cover_hessian(WithDiagnostics(), ...)`, in the element type `T`
+of the [`Tape`](@ref) it was computed from.
 
 - `grad`: gradient of the scalar function.
 - `B`: explicit elementwise bound satisfying `B >= abs.(H)`.
@@ -38,12 +40,12 @@ The extended result returned by `cover_hessian(WithDiagnostics(), ...)`.
 
 Forming these diagnostics costs `O(n * L)` time and `O(n^2)` memory.
 """
-struct HessianDiagnostics
-    grad::Vector{Float64}
-    B::Matrix{Float64}
-    h_sum::Vector{Float64}
-    h_quad::Vector{Float64}
-    h_sum_rev::Vector{Float64}
+struct HessianDiagnostics{T}
+    grad::Vector{T}
+    B::Matrix{T}
+    h_sum::Vector{T}
+    h_quad::Vector{T}
+    h_sum_rev::Vector{T}
 end
 
 """
@@ -52,10 +54,10 @@ end
 Reverse-mode adjoints `vbar[k] = ∂v_outidx/∂v_k` for every node of `t`. The gradient of the
 program with respect to its inputs is `vbar[1:t.ninputs]`.
 """
-function adjoints(t::Tape, outidx::Integer)
+function adjoints(t::Tape{T}, outidx::Integer) where {T}
     N = nnodes(t)
-    vbar = zeros(N)
-    vbar[outidx] = 1.0
+    vbar = zeros(T, N)
+    vbar[outidx] = 1
     # Reverse topological order finalizes each adjoint before propagating it.
     for k in N:-1:1
         vk = vbar[k]
@@ -79,11 +81,11 @@ and an input-node entry a unit row. Costs `O(m*L)` time and memory: a diagnostic
 [`sensitivities`](@ref), for the exact signed Jacobian; the production cover merges seed
 [`abs_reverse`](@ref) at the outputs instead and stay `O(L)`/`O(G*L)`.
 """
-function adjoints(t::Tape, outidxs::AbstractVector{<:Integer})
+function adjoints(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
     m, N = length(outidxs), nnodes(t)
-    Vbar = zeros(m, N)
+    Vbar = zeros(T, m, N)
     for (k, o) in enumerate(outidxs)
-        Vbar[k, o] += 1.0
+        Vbar[k, o] += 1
     end
     # Reverse topological order finalizes each adjoint column before propagation.
     for j in N:-1:1
@@ -108,11 +110,11 @@ follows from the triangle inequality over paths, and is tight when no path cance
 Costs `O(n * L)` time and memory, so this is a diagnostic path: the sum merge is obtainable
 without it (see [`abs_reverse`](@ref)).
 """
-function sensitivities(t::Tape)
+function sensitivities(t::Tape{T}) where {T}
     n, N = t.ninputs, nnodes(t)
-    utilde = [zeros(n) for _ in 1:N]
+    utilde = [zeros(T, n) for _ in 1:N]
     for a in 1:n
-        utilde[a][a] = 1.0
+        utilde[a][a] = 1
     end
     for k in (n + 1):N
         uk = utilde[k]
@@ -141,14 +143,14 @@ supplies in the form its structure allows. A [`DeclaredCurvature`](@ref) node co
 declared bound `s[i]*s[j] >= abs(C[i, j])`, so `B >= abs.(H)` remains valid conditional on the
 declaration.
 """
-function hessian_bound(t::Tape, vbar::AbstractVector, utilde::AbstractVector)
+function hessian_bound(t::Tape{T}, vbar::AbstractVector, utilde::AbstractVector) where {T}
     n, N = t.ninputs, nnodes(t)
-    B = zeros(n, n)
+    B = zeros(T, n, n)
     for k in (n + 1):N
         av = abs(vbar[k])
         av == 0 && continue
         ps = t.parents[k]
-        dispatchcurvature(t.Cs[k]) do C
+        dispatchcurvature(t.Cs[k], T) do C
             bound_contribution!(B, C, av, ps, utilde)
         end
     end
@@ -323,11 +325,11 @@ certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 
 # Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
-struct AbsValues <: AbstractVector{Float64}
-    vals::Vector{Float64}
+struct AbsValues{T} <: AbstractVector{T}
+    vals::Vector{T}
 end
 Base.size(a::AbsValues) = size(a.vals)
-Base.IndexStyle(::Type{AbsValues}) = IndexLinear()
+Base.IndexStyle(::Type{<:AbsValues}) = IndexLinear()
 Base.getindex(a::AbsValues, i::Int) = abs(a.vals[i])
 
 """
@@ -339,11 +341,11 @@ weights for [`SensitivitySplit`](@ref). Obtained once per cover sweep and shared
 """
 split_scales(::ValueSplit, t::Tape) = AbsValues(t.vals)
 
-function split_scales(rule::SensitivitySplit, t::Tape)
-    theta = zeros(nnodes(t))
+function split_scales(rule::SensitivitySplit, t::Tape{T}) where {T}
+    theta = zeros(T, nnodes(t))
     w = rule.w
     if w === nothing
-        fill!(view(theta, 1:t.ninputs), 1.0)
+        fill!(view(theta, 1:t.ninputs), 1)
     else
         Base.require_one_based_indexing(w)
         length(w) == t.ninputs ||
@@ -371,13 +373,13 @@ nodes — validity is conditional on the declaration.
 `check` verifies the covering invariant at every recorded node.
 """
 function local_covers(
-        t::Tape, vbar::AbstractVector; check::Bool = true,
+        t::Tape{T}, vbar::AbstractVector; check::Bool = true,
         rule::SplitRule = ValueSplit()
-    )
+    ) where {T}
     N = nnodes(t)
     scales = split_scales(rule, t)
-    rhos = [Float64[] for _ in 1:N]
-    theta = zeros(N)
+    rhos = [T[] for _ in 1:N]
+    theta = zeros(T, N)
     for k in (t.ninputs + 1):N
         rho = local_cover_slots(rule, t, k, abs(vbar[k]), scales; check)
         rho === nothing && continue
@@ -390,7 +392,7 @@ function local_covers(
 end
 
 """
-    local_cover_slots(t::Tape, k::Integer, av; check::Bool=true) -> Union{Nothing,Vector{Float64}}
+    local_cover_slots(t::Tape{T}, k::Integer, av; check::Bool=true) -> Union{Nothing,Vector{T}}
     local_cover_slots(rule::SplitRule, t::Tape, k::Integer, av, scales; check::Bool=true)
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
@@ -441,15 +443,15 @@ function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
 end
 
 function local_cover_slots(
-        rule::SplitRule, t::Tape, k::Integer, av::Real,
+        rule::SplitRule, t::Tape{T}, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
-    )
+    ) where {T}
     # The assertion is the return type [`cover_slots`](@ref) promises. Without it inference gives
     # up at the open fallback inside `dispatchcurvature` and the sweeps, which call this once per
     # node, box every result.
-    return dispatchcurvature(t.Cs[k]) do C
+    return dispatchcurvature(t.Cs[k], T) do C
         cover_slots(C, rule, t, k, av, scales; check)
-    end::Union{Nothing, Vector{Float64}}
+    end::Union{Nothing, Vector{T}}
 end
 
 """
@@ -563,24 +565,24 @@ true
 ```
 """
 function cover_hessian(
-        ::WithDiagnostics, t::Tape, outidx::Integer; check::Bool = true,
+        ::WithDiagnostics, t::Tape{T}, outidx::Integer; check::Bool = true,
         rule::SplitRule = ValueSplit()
-    )
+    ) where {T}
     n, N = t.ninputs, nnodes(t)
     vbar = adjoints(t, outidx)
     utilde = sensitivities(t)
     B = hessian_bound(t, vbar, utilde)
     rhos, theta = local_covers(t, vbar; check, rule)
 
-    ssum = zeros(n)             # sum_k s_k
-    ssq = zeros(n)              # sum over atoms of s_atom.^2
-    sk = zeros(n)
+    ssum = zeros(T, n)          # sum_k s_k
+    ssq = zeros(T, n)           # sum over atoms of s_atom.^2
+    sk = zeros(T, n)
     for k in (n + 1):N
         rho = rhos[k]
         isempty(rho) && continue
         ps = t.parents[k]
         for atom in atom_slots(t.Cs[k], length(ps))
-            fill!(sk, 0.0)
+            fill!(sk, 0)
             for i in atom
                 up = utilde[ps[i]]
                 for q in 1:n
@@ -599,19 +601,19 @@ function cover_hessian(
 
     if check
         # These two computations share most operations, so their roundoff errors are correlated.
-        rtol = eps(float(real(eltype(t.vals))))^(3 // 4)
+        rtol = eps(float(real(T)))^(3 // 4)
         for q in 1:n
-            denom = max(abs(h_sum[q]), 1.0)
+            denom = max(abs(h_sum[q]), one(T))
             abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
                 error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         end
         # local_covers already checked the node invariants.
         pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
         for q in 1:n
-            gdenom = max(abs(vbar[q]), 1.0)
+            gdenom = max(abs(vbar[q]), one(T))
             abs(vbar[q] - pr.grad[q]) <= rtol * gdenom ||
                 error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-            hdenom = max(abs(h_sum[q]), 1.0)
+            hdenom = max(abs(h_sum[q]), one(T))
             abs(h_sum[q] - pr.h_sum[q]) <= rtol * hdenom ||
                 error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
         end
@@ -621,14 +623,14 @@ function cover_hessian(
 end
 
 function cover_hessian(
-        ::CoverOnly, t::Tape, outidx::Integer; check::Bool = true,
+        ::CoverOnly, t::Tape{T}, outidx::Integer; check::Bool = true,
         rule::SplitRule = ValueSplit()
-    )
+    ) where {T}
     n, N = t.ninputs, nnodes(t)
     scales = split_scales(rule, t)
-    vbar = zeros(N)
-    abar = zeros(N)
-    vbar[outidx] = 1.0
+    vbar = zeros(T, N)
+    abar = zeros(T, N)
+    vbar[outidx] = 1
     for k in N:-1:1
         vk, ak = vbar[k], abar[k]
         ps = t.parents[k]

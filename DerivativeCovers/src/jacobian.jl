@@ -15,20 +15,20 @@ output `k` and input `j`. Formed by one `m`-channel absolute-value reverse sweep
 output nodes (see [`abs_reverse`](@ref)), so it costs `O(m*L)` — a diagnostic, like the Hessian
 bound `B`. A repeated entry in `outidxs` yields an identical row.
 """
-function jacobian_surrogate(t::Tape, outidxs::AbstractVector{<:Integer})
+function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
     m, N = length(outidxs), nnodes(t)
-    Theta = zeros(m, N)
+    Theta = zeros(T, m, N)
     for (k, o) in enumerate(outidxs)
-        Theta[k, o] += 1.0
+        Theta[k, o] += 1
     end
     return abs_reverse(t, Theta)[:, 1:t.ninputs]
 end
 
 """
-    JacobianCover
+    JacobianCover{T}
 
-Result of [`cover_jacobian`](@ref). Each pair `(a, b)` satisfies
-`a[k] * b[j] >= abs(J[k,j])`.
+Result of [`cover_jacobian`](@ref), in the element type `T` of the [`Tape`](@ref) it was computed
+from. Each pair `(a, b)` satisfies `a[k] * b[j] >= abs(J[k,j])`.
 
 - `a`: output weights; `ones(m)` by default.
 - `b_sum`: sum merge, computed in one `O(L)` reverse sweep.
@@ -39,12 +39,12 @@ Result of [`cover_jacobian`](@ref). Each pair `(a, b)` satisfies
 
 The merges satisfy `b_max <= b_quad <= b_sum` coordinatewise.
 """
-struct JacobianCover
-    a::Vector{Float64}
-    b_sum::Vector{Float64}
-    b_quad::Vector{Float64}
-    b_max::Vector{Float64}
-    Utilde::Matrix{Float64}
+struct JacobianCover{T}
+    a::Vector{T}
+    b_sum::Vector{T}
+    b_quad::Vector{T}
+    b_max::Vector{T}
+    Utilde::Matrix{T}
     m::Int
     n::Int
 end
@@ -80,14 +80,18 @@ julia> all(jc.b_max .<= jc.b_quad .<= jc.b_sum)
 true
 ```
 """
-function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a = nothing, check::Bool = true)
+function cover_jacobian(
+        t::Tape{T}, outidxs::AbstractVector{<:Integer}; a = nothing, check::Bool = true
+    ) where {T}
     m, n = length(outidxs), t.ninputs
-    a === nothing && (a = ones(m))
+    a === nothing && (a = ones(T, m))
     # Result fields use output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
     all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
+    # The tape's element type is the cover's, so the weights join it.
+    a = collect(T, a)
 
     Utilde = jacobian_surrogate(t, outidxs)
     scaled = Utilde ./ a                      # scaled[k, j] = Ũ_kj / a_k
@@ -106,7 +110,7 @@ function cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a = nothing
         end
     end
 
-    return JacobianCover(collect(float.(a)), b_sum, b_quad, b_max, Utilde, m, n)
+    return JacobianCover(a, b_sum, b_quad, b_max, Utilde, m, n)
 end
 
 function cover_jacobian(r, x0::AbstractVector; a = nothing, check::Bool = true)
@@ -155,25 +159,26 @@ julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per
 ```
 """
 function cover_jacobian_hybrid(
-        t::Tape, outidxs::AbstractVector{<:Integer},
+        t::Tape{T}, outidxs::AbstractVector{<:Integer},
         groups::AbstractVector{<:Integer}; a = nothing, check::Bool = true
-    )
+    ) where {T}
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
     # groups and a use output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(groups)
     length(groups) == m ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $m (one per output)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
-    a === nothing && (a = ones(m))
+    a === nothing && (a = ones(T, m))
     Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
     all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
+    a = collect(T, a)
 
     G = maximum(groups)
-    Theta = zeros(G, N)
+    Theta = zeros(T, G, N)
     for (k, o) in enumerate(outidxs)
-        Theta[groups[k], o] += 1.0 / a[k]
+        Theta[groups[k], o] += 1 / a[k]
     end
     Abar = abs_reverse(t, Theta)              # G × N, group column-sums of Ũ/a at the inputs
     b = [maximum(view(Abar, :, j)) for j in 1:n]
@@ -247,25 +252,25 @@ forming `Ũ`. A zero `b_j` is accepted only for a dead input (one no output depe
 contributes nothing to any marginal. A zero `b_j` on a live input is an error — no output
 weighting can restore validity there.
 """
-function marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector)
+function marginal_weights(t::Tape{T}, outidxs::AbstractVector{<:Integer}, b::AbstractVector) where {T}
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
     N = nnodes(t)
-    theta = zeros(N)
+    theta = zeros(T, N)
     anydead = false
     for j in 1:t.ninputs
         if b[j] > 0
-            theta[j] = 1.0 / b[j]
+            theta[j] = 1 / b[j]
         else
             anydead = true
         end
     end
     if anydead
         # A zero input weight is valid only for an input that reaches no output.
-        ind = zeros(N)
+        ind = zeros(T, N)
         for j in 1:t.ninputs
-            b[j] == 0 && (ind[j] = 1.0)
+            b[j] == 0 && (ind[j] = 1)
         end
         reach = abs_forward(t, ind)
         for k in outidxs
@@ -288,7 +293,7 @@ function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
     length(b) == n ||
         throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
-    a = zeros(m)
+    a = zeros(_ratio_type(Utilde, b), m)
     for j in 1:n, k in 1:m
         Ukj = Utilde[k, j]
         Ukj == 0 && continue
@@ -405,33 +410,33 @@ A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero
 input) gets `b_j = 0`; both are exact and minimal.
 """
 function balance_cover(
-        t::Tape, outidxs::AbstractVector{<:Integer}; merge::MergeRule = SumMerge(),
+        t::Tape{T}, outidxs::AbstractVector{<:Integer}; merge::MergeRule = SumMerge(),
         arule::Symbol = :marginal, a0 = nothing, maxiter::Union{Nothing, Integer} = nothing,
-        rtol::Real = eps(float(real(eltype(t.vals))))^(2 // 3), check::Bool = true
-    )
+        rtol::Real = eps(float(real(T)))^(2 // 3), check::Bool = true
+    ) where {T}
     m, N = length(outidxs), nnodes(t)
     maxiter = _resolve_maxiter(maxiter, arule)
     if !(merge isa SumMerge) || arule !== :marginal
         # Other strategies need separate output channels; materialize the surrogate once.
         return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol, check)
     end
-    a = _balance_start(a0, m)
+    a = _balance_start(a0, m, T)
 
     bstep = a -> begin
-        theta = zeros(N)
+        theta = zeros(T, N)
         anydead = false
         for (k, o) in enumerate(outidxs)
             if a[k] > 0
-                theta[o] += 1.0 / a[k]
+                theta[o] += 1 / a[k]
             else
                 anydead = true
             end
         end
         if anydead
             # A zero output weight is valid only for an output with no live input path.
-            ind = zeros(N)
+            ind = zeros(T, N)
             for (k, o) in enumerate(outidxs)
-                a[k] == 0 && (ind[o] = 1.0)
+                a[k] == 0 && (ind[o] = 1)
             end
             reach = abs_reverse(t, ind)
             for j in 1:t.ninputs
@@ -469,7 +474,7 @@ function balance_cover(
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
     maxiter = _resolve_maxiter(maxiter, arule)
     m, n = size(Utilde)
-    a = _balance_start(a0, m)
+    a = _balance_start(a0, m, float(real(eltype(Utilde))))
     bstep = a -> _merge_bstep(Utilde, a, merge)
 
     if arule === :marginal
@@ -500,7 +505,7 @@ _merge_finalize!(::QuadMerge, b) = (b .= sqrt.(b); b)
 
 function _merge_bstep(U, a, merge::MergeRule)
     m, n = size(U)
-    b = zeros(n)
+    b = zeros(_ratio_type(U, a), n)
     for j in 1:n, k in 1:m
         Ukj = U[k, j]
         Ukj == 0 && continue
@@ -525,7 +530,7 @@ _marginal_hint(::MaxMerge) =
 function _geomean_fit(U, a, maxiter, rtol)
     m, n = size(U)
     gstep = (weights, dim) -> begin
-        out = zeros(size(U, dim))
+        out = zeros(_ratio_type(U, a), size(U, dim))
         cnt = zeros(Int, size(U, dim))
         for j in 1:n, k in 1:m
             U[k, j] == 0 && continue
@@ -534,7 +539,7 @@ function _geomean_fit(U, a, maxiter, rtol)
             out[i] += log(U[k, j]) - log(w)
             cnt[i] += 1
         end
-        [cnt[i] > 0 ? exp(out[i] / cnt[i]) : 0.0 for i in eachindex(out)]
+        [cnt[i] > 0 ? exp(out[i] / cnt[i]) : zero(eltype(out)) for i in eachindex(out)]
     end
     b = gstep(a, 2)
     _regauge!(a, b)
@@ -557,12 +562,12 @@ function _geomean_fit(U, a, maxiter, rtol)
     )
 end
 
-function _balance_start(a0, m)
-    a0 === nothing && return ones(m)
+function _balance_start(a0, m, ::Type{T}) where {T}
+    a0 === nothing && return ones(T, m)
     length(a0) == m ||
         throw(DimensionMismatch("a0 has length $(length(a0)), expected $m (one per output)"))
     all(>(0), a0) || throw(ArgumentError("starting weights a0 must be strictly positive"))
-    return collect(float.(a0))
+    return collect(T, a0)
 end
 
 # Shared balancing loop. Renormalizing by a power of two preserves every product exactly in
@@ -683,13 +688,14 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
     atol > 0 || throw(ArgumentError("atol must be positive, got $atol"))
     m, n = size(M)
-    ks, js, cs = Int[], Int[], Float64[]
+    T = float(real(eltype(M)))
+    ks, js, cs = Int[], Int[], T[]
     for j in 1:n, k in 1:m
         M[k, j] > 0 && (push!(ks, k); push!(js, j); push!(cs, log(M[k, j])))
     end
-    isempty(cs) && return (; a = zeros(m), b = zeros(n), excess = 1.0)
+    isempty(cs) && return (; a = zeros(T, m), b = zeros(T, n), excess = one(T))
 
-    lo, hi = 0.0, maximum(cs) - minimum(cs)
+    lo, hi = zero(T), maximum(cs) - minimum(cs)
     feasible, pot = _minimax_feasible(m, n, ks, js, cs, hi)
     feasible || error("Bellman–Ford infeasible at the row-span upper bound; this cannot happen")
     while hi - lo > atol
@@ -703,8 +709,8 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(
     for (k, j) in zip(ks, js)
         liverow[k] = livecol[j] = true
     end
-    a[.!liverow] .= 0.0
-    b[.!livecol] .= 0.0
+    a[.!liverow] .= 0
+    b[.!livecol] .= 0
     _regauge!(a, b)
     excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
     excess >= 1 - eps(float(real(eltype(M))))^(2 // 3) ||
@@ -715,7 +721,7 @@ end
 # The minimax constraints are feasible iff their difference-constraint graph has no negative
 # cycle. Multi-source Bellman–Ford both tests feasibility and returns valid potentials.
 function _minimax_feasible(m, n, ks, js, cs, E)
-    pot = zeros(m + n)
+    pot = zeros(eltype(cs), m + n)
     for _ in 1:(m + n)
         changed = false
         for (k, j, c) in zip(ks, js, cs)
@@ -752,10 +758,11 @@ function jacobian_representability(M::AbstractMatrix)
     Base.require_one_based_indexing(M)
     m, n = size(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
-    worst = 0.0
+    T = float(real(eltype(M)))
+    worst = zero(T)
     for k in 1:m, l in (k + 1):m
-        lo = Inf
-        hi = -Inf
+        lo = T(Inf)
+        hi = T(-Inf)
         for j in 1:n
             (M[k, j] > 0 && M[l, j] > 0) || continue
             d = log(M[k, j]) - log(M[l, j])
