@@ -346,6 +346,41 @@
         @test bald.iters <= 2
     end
 
+    @testset "balance_cover: drift is reported as drift" begin
+        # Without total support the weights separate without bound. Every iterate still covers,
+        # but its excess grows with the round count, so running longer returns a worse cover and
+        # eventually leaves the floating-point range. Given room to run, that is diagnosed as
+        # divergence rather than left to exhaust the budget.
+        Utri = [1.0 1.0; 0.0 1.0]
+        drift = try
+            balance_cover(Utri; maxiter = 10^6)
+            nothing
+        catch e
+            e
+        end
+        @test drift isa ErrorException
+        @test occursin("diverged", drift.msg)
+        @test occursin("worse cover", drift.msg)
+        @test occursin("geomean", drift.msg)
+        # Caught by the divergence check, not by the (large) budget.
+        rounds = parse(Int, match(r"diverged after (\d+) rounds", drift.msg)[1])
+        @test rounds < 10^4
+        # Below the detection point the plain non-convergence report still stands.
+        @test_throws "did not converge" balance_cover(Utri; maxiter = 20)
+        # The convergent alternative on the same pattern.
+        balg = balance_cover(Utri; arule = :geomean)
+        @test jacobian_ratio(Utri, balg.a, balg.b) <= GATE
+
+        # A pattern that merely converges slowly must not be mistaken for drift: this banded map
+        # needs thousands of rounds under the sum merge and still reaches its fixed point.
+        chain = xs -> [tanh(xs[i]) * xs[i + 1] for i in 1:(length(xs) - 1)]
+        tc, oc = tape_function(chain, 0.7 .* randn(MersenneTwister(3), 16))
+        Uc = jacobian_surrogate(tc, oc)
+        slow = balance_cover(Uc; maxiter = 10^5)
+        @test slow.iters > 2000
+        @test jacobian_ratio(Uc, slow.a, slow.b) <= GATE
+    end
+
     @testset "balance_cover: an output no input reaches" begin
         # A constant output has an identically zero surrogate row, so the alternation drives its
         # weight to exactly zero. The tape form admits that only after an indicator sweep confirms
