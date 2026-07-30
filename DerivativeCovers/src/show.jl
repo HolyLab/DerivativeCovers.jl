@@ -46,6 +46,15 @@ Base.show(io::IO, c::NLSCover) =
 Base.show(io::IO, ::MIME"text/plain", c::NLSCover) =
     print(io, "NLSCover: ", c.m, " residuals, ", length(c.grad), " inputs; grad, h, h_gn")
 
+Base.show(io::IO, c::NLSDiagnostics) =
+    print(io, "NLSDiagnostics(", c.m, " residuals, ", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::NLSDiagnostics) =
+    print(
+    io, "NLSDiagnostics: ", c.m, " residuals, ", length(c.grad),
+    " inputs; grad, h, h_gn, Utilde"
+)
+
 Base.show(io::IO, c::VarianceCover) = print(io, "VarianceCover(", length(c.grad), " inputs)")
 
 Base.show(io::IO, ::MIME"text/plain", c::VarianceCover) =

@@ -479,16 +479,20 @@ end
 """
     CoverOnly()
 
-Return only the gradient and sum-merge cover from [`cover_hessian`](@ref). This is the default
-mode and costs `O(L)`.
+Return only the covers a sweep-tier computation yields: the gradient and sum-merge cover from
+[`cover_hessian`](@ref) at `O(L)`, or the gradient and the two merges from [`cover_nls`](@ref) at
+`O(G * L)`. This is the default mode of both.
 """
 struct CoverOnly end
 
 """
     WithDiagnostics()
 
-Return a [`HessianDiagnostics`](@ref), including the elementwise bound, quadrature merge, and an
-independent consistency check. This mode costs `O(n * L)` time and `O(n^2)` memory.
+Return the extended result, adding the quantities that must be materialized per input or per
+output: a [`HessianDiagnostics`](@ref) from [`cover_hessian`](@ref), with the elementwise bound,
+quadrature merge, and an independent consistency check, at `O(n * L)` time and `O(n^2)` memory; an
+[`NLSDiagnostics`](@ref) from [`cover_nls`](@ref), with the residual-sensitivity surrogate, at
+`O(m * L)` time and `O(m * n)` memory.
 """
 struct WithDiagnostics end
 

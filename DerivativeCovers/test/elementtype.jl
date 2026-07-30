@@ -133,7 +133,11 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         nc = cover_nls(nls32, Float32[0.5, 2.0])
         @test nc isa NLSCover{Float32}
         @test fieldeltypes(nc) == [Float32]
-        a, b = gn_ab(nc)
+
+        nd = cover_nls(WithDiagnostics(), nls32, Float32[0.5, 2.0])
+        @test nd isa NLSDiagnostics{Float32}
+        @test fieldeltypes(nd) == [Float32]
+        a, b = gn_ab(nd)
         @test eltype(a) === Float32 && eltype(b) === Float32
 
         # A declared sub-map distills its declaration in the scratch tape's type, and the

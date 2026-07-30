@@ -96,7 +96,8 @@ include("genericaxes.jl")
                 :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
                 :cover_hybrid, :cover_jacobian_hybrid,
                 :CoverOnly, :WithDiagnostics,
-                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :VarianceCover,
+                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :NLSDiagnostics,
+                :VarianceCover,
                 :SplitRule, :ValueSplit, :SensitivitySplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
@@ -187,6 +188,7 @@ include("genericaxes.jl")
             cover_hessian(WithDiagnostics(), f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
+            cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_variance(f, x0),
         )
         for c in results
@@ -199,6 +201,7 @@ include("genericaxes.jl")
         end
         @test sprint(show, results[3]) == "JacobianCover(2x3)"
         @test sprint(show, results[4]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[5]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin
@@ -601,7 +604,7 @@ include("genericaxes.jl")
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
 
         # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
-        # The Gauss-Newton pair is seeded at the residual nodes instead, and the gradient is an
+        # The residual channels carry unit atoms, which admit no split, and the gradient is an
         # ordinary adjoint sweep, so neither moves.
         nv = cover_nls(Fsub, xp)
         ns = cover_nls(Fsub, xp; rule = SensitivitySplit())

@@ -4,14 +4,23 @@
 #
 #     H = JᵀJ + ∑ₖ rₖ ∇²rₖ,     J = ∂r/∂x,
 #
-# The first term is Gauss–Newton; the second is residual-weighted curvature. On the loss tape,
-# each residual square contributes a unit-weight atom seeded at the residual. Combining these
-# atoms in quadrature gives
+# The first term is Gauss–Newton; the second is residual-weighted curvature. On the loss tape the
+# square node rₖ² carries adjoint ½ and second partial 2, so its local cover is the unit atom
+# seeded at the residual node — the Gauss–Newton atom itself. Channel g of the grouped reverse
+# sweep therefore accumulates
 #
-#     h_gn[j] = √(∑ₖ ũ_{rₖ,j}²) ≥ √(diag(JᵀJ))[j],
+#     S_gj = ∑_{k in group g} ũ_{rₖ,j}
 #
-# a symmetric cover of JᵀJ. All residual-curvature nodes share one additional group, preserving a
-# cover of the full Hessian while keeping the Gauss–Newton contribution separate.
+# at input j, and combining the residual channels in quadrature gives
+#
+#     h_gn[j] = √(∑_g S_gj²) ≥ √(diag(JᵀJ))[j],
+#
+# a symmetric cover of JᵀJ: h_gn[i]*h_gn[j] ≥ ∑_g S_gi*S_gj ≥ ∑ₖ ũ_{rₖ,i}*ũ_{rₖ,j} ≥ abs(JᵀJ)[i,j]
+# by Cauchy–Schwarz. One residual per channel makes the first inequality an equality over the
+# residuals; coarser channels only inflate it.
+#
+# All residual-curvature nodes share one further channel, so the same sweep covers the full
+# Hessian: h² = h_gn² + (that channel)², which is also why h_gn ≤ h entry by entry.
 
 """
     NLSCover{T}
@@ -22,14 +31,33 @@ the [`Tape`](@ref) it was computed from.
 - `grad`: gradient of the loss.
 - `h`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
 - `h_gn`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
-- `Utilde`: `m × n` matrix of absolute residual sensitivities, satisfying
-  `Utilde[k,j] >= abs(J[k,j])`.
 - `m`: the number of residuals.
 
-Forming `Utilde` costs `O(m * L)`. When no signed paths cancel,
-`h_gn == sqrt.(diag(J'J))`.
+Both covers are read off one grouped reverse sweep with `G` residual channels and one
+residual-curvature channel, so together they cost `O(G * L)` time and memory. With `G = m` — one
+residual per channel, the default — `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which equals
+`sqrt.(diag(J'J))` when no signed paths cancel.
 """
 struct NLSCover{T}
+    grad::Vector{T}
+    h::Vector{T}
+    h_gn::Vector{T}
+    m::Int
+end
+
+"""
+    NLSDiagnostics{T}
+
+The extended result returned by `cover_nls(WithDiagnostics(), ...)`, in the element type `T` of
+the [`Tape`](@ref) it was computed from. It carries the fields of [`NLSCover`](@ref) together with
+
+- `Utilde`: `m × n` matrix of absolute residual sensitivities, satisfying
+  `Utilde[k,j] >= abs(J[k,j])`.
+
+Forming `Utilde` takes an `m`-channel reverse sweep of its own, `O(m * L)` time and `O(m * n)`
+memory, whatever number of residual channels the covers use.
+"""
+struct NLSDiagnostics{T}
     grad::Vector{T}
     h::Vector{T}
     h_gn::Vector{T}
@@ -79,6 +107,9 @@ its own (`ngroups === nothing`, one group per residual, giving the exact Gauss�
 quadrature) or spread cyclically across `ngroups` groups (a cheaper upper bound). Every other node
 — the residual-curvature subgraph — is placed in one further group, so its second-order
 contribution is summed there and combined in quadrature with the Gauss–Newton groups.
+
+That last group is always occupied, so `maximum(groups) - 1` recovers the number of residual
+groups even when `ngroups` exceeds the residual count.
 """
 function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups = nothing)
     m = length(sqidx)
@@ -94,20 +125,26 @@ function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups = n
 end
 
 """
-    cover_nls(r, x0; ngroups=nothing, check=true, rule=ValueSplit()) -> NLSCover
+    cover_nls([mode], r, x0; ngroups=nothing, check=true, rule=ValueSplit())
 
 Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
-`r` must map a vector of [`TVar`](@ref)s to a vector of residuals. The returned
-[`NLSCover`](@ref) contains a cover `h` of the full loss Hessian and a cover `h_gn` of the
-Gauss–Newton matrix `JᵀJ`.
+`r` must map a vector of [`TVar`](@ref)s to a vector of residuals. The default
+[`CoverOnly`](@ref) mode returns an [`NLSCover`](@ref) holding a cover `h` of the full loss
+Hessian and a cover `h_gn` of the Gauss–Newton matrix `JᵀJ`. [`WithDiagnostics`](@ref) returns an
+[`NLSDiagnostics`](@ref), which adds the absolute-sensitivity surrogate `Utilde` for a further
+`O(m * L)`.
 
-By default, each residual receives its own group, giving the tightest available Gauss–Newton
-cover at `O(m * L)` cost. Set `ngroups` to a smaller positive integer to use fewer channels at
-the cost of a potentially looser full-Hessian cover.
+`ngroups` sets the number of residual channels `G`, and with it the entire cost of the
+[`CoverOnly`](@ref) mode: `O(G * L)` time and `O(G * n)` memory. The default `nothing` gives every
+residual a channel of its own (`G = m`), the tightest pair of covers available. A smaller positive
+integer spreads the residuals cyclically over `G` channels and sums their sensitivities within a
+channel before the quadrature merge; both covers remain valid and can only loosen.
 
-`rule` controls the local covers used for `h`; it does not affect `h_gn` or `Utilde`.
-`check=true` verifies the local covering conditions.
+`rule` selects the [`SplitRule`](@ref) for the residual-curvature channel. The residual channels
+carry unit atoms, which admit no split, so neither `h_gn` nor `Utilde` depends on it. `check=true`
+verifies the local covering conditions, and under [`WithDiagnostics`](@ref) also verifies `h_gn`
+against `Utilde`.
 
 # Examples
 
@@ -131,32 +168,63 @@ true
 ```
 """
 function cover_nls(
-        r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
+        ::CoverOnly, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
         rule::SplitRule = ValueSplit()
     )
+    c = _nls_channels(r, x0, ngroups, check, rule)
+    return NLSCover(c.grad, c.h, c.h_gn, length(c.residx))
+end
+
+function cover_nls(
+        ::WithDiagnostics, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
+        rule::SplitRule = ValueSplit()
+    )
+    c = _nls_channels(r, x0, ngroups, check, rule)
+    Utilde = jacobian_surrogate(c.t, c.residx)
+    check && _check_gn_channels(c.h_gn, Utilde, c.rgroups, c.gres)
+    return NLSDiagnostics(c.grad, c.h, c.h_gn, Utilde, length(c.residx))
+end
+
+cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwargs...)
+
+# One grouped reverse sweep supplies both covers: the residual channels `1:gres` merge to `h_gn`,
+# and all the channels together merge to `h`.
+function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, rule::SplitRule)
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
-    n, N = t.ninputs, nnodes(t)
-    m = length(residx)
-
-    # One reverse channel per residual produces the m×n absolute-sensitivity surrogate.
-    Theta = zeros(eltype(t), m, N)
-    for k in 1:m
-        Theta[k, residx[k]] = 1
-    end
-    Abar = abs_reverse(t, Theta)
-    Utilde = Abar[:, 1:n]
-    h_gn = [sqrt(sum(abs2, view(Utilde, :, j))) for j in 1:n]
-
-    groups = nls_partition(N, sqidx; ngroups)
+    n = t.ninputs
+    groups = nls_partition(nnodes(t), sqidx; ngroups)
+    gres = maximum(groups) - 1
     vbar = adjoints(t, outidx)
-    h = _cover_hybrid(t, vbar, groups; check, rule)
-    grad = vbar[1:n]
+    rhos, _ = local_covers(t, vbar; check, rule)
+    Abar = abs_reverse(t, group_seeds(t, rhos, groups))
+    h = [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n]
+    h_gn = [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n]
+    return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn)
+end
 
-    return NLSCover(grad, h, h_gn, Utilde, m)
+# The residual channels are the square nodes' cover atoms, which are unit only because the loss
+# weights each square by ½ and `v^2` has second partial 2. Reforming them from the independently
+# swept surrogate audits that identity.
+function _check_gn_channels(h_gn, Utilde::AbstractMatrix{T}, rgroups, gres) where {T}
+    S = zeros(T, gres)
+    rtol = eps(float(real(T)))^(3 // 4)
+    for j in axes(Utilde, 2)
+        fill!(S, 0)
+        for (k, g) in enumerate(rgroups)
+            S[g] += Utilde[k, j]
+        end
+        ref = sqrt(sum(abs2, S))
+        abs(h_gn[j] - ref) <= rtol * max(ref, one(T)) ||
+            error(
+            "grouped Gauss–Newton channels disagree with the surrogate at input $j: " *
+                "sweep = $(h_gn[j]), surrogate = $ref"
+        )
+    end
+    return nothing
 end
 
 """
-    gn_ab(nls::NLSCover) -> (a, b)
+    gn_ab(nls::NLSDiagnostics) -> (a, b)
 
 A valid rank-1 Jacobian cover `(a, b)` — `a_k b_j ≥ |J_{kj}|` — read off the residual
 sensitivities of `nls`: `a = ones(m)` and `b[j] = maximum(Utilde[:, j])`, so
@@ -164,7 +232,7 @@ sensitivities of `nls`: `a = ones(m)` and `b[j] = maximum(Utilde[:, j])`, so
 against a general asymmetric Jacobian cover; the tight *symmetric* Gauss–Newton cover is `nls.h_gn`,
 not the corollary `‖a‖₂ b` of this pair.
 """
-function gn_ab(nls::NLSCover{T}) where {T}
+function gn_ab(nls::NLSDiagnostics{T}) where {T}
     a = ones(T, nls.m)
     b = [maximum(view(nls.Utilde, :, j)) for j in 1:size(nls.Utilde, 2)]
     return a, b
