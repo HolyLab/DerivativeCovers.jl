@@ -472,6 +472,34 @@ include("genericaxes.jl")
             @test rho1 ≈ 1.0
             @test rho2 ≈ 10.0
         end
+
+        # Selecting the degenerate fallback with `ifelse` rather than a branch gives bit-identical
+        # results, so a backend that cannot branch on values has an equivalent form. The grid
+        # includes zero in every argument, which covers the three families where the result is
+        # discontinuous.
+        function split_select(c11, c12, c22, z1, z2)
+            lo = sqrt(c11)
+            hi = c12 / sqrt(c22)
+            rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
+            g = sqrt(lo * hi)
+            fallback = clamp(ifelse(isfinite(g) & (g > 0), g, sqrt(c12)), lo, hi)
+            rho1 = ifelse(isfinite(rho1) & (rho1 > 0), rho1, fallback)
+            return rho1, c12 / rho1
+        end
+        same(x, y) = x === y || (isnan(x) && isnan(y))
+        vals = (0.0, 1.0e-8, 1.0e-3, 0.5, 1.0, 2.0, 7.3, 1.0e3, 1.0e8)
+        differing = Tuple{NTuple{5, Float64}, NTuple{2, Float64}, NTuple{2, Float64}}[]
+        ncases = 0
+        for c11 in vals, c22 in vals, c12 in vals, z1 in vals, z2 in vals
+            (c12 > 0 && c12^2 > c11 * c22) || continue
+            ncases += 1
+            branched = balanced_split(c11, c12, c22, z1, z2)
+            selected = split_select(c11, c12, c22, z1, z2)
+            all(same.(branched, selected)) ||
+                push!(differing, ((c11, c12, c22, z1, z2), branched, selected))
+        end
+        @test ncases > 30_000
+        @test isempty(differing)
     end
 
     @testset "non-finite second partials" begin

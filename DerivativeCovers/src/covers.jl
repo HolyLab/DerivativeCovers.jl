@@ -186,9 +186,11 @@ under a rescaling `v_i -> d_i*v_i` of the intermediate variables, `c_ij -> c_ij/
 positively homogeneous, so `rho_1 -> rho_1/d_1` and `rho_2 -> rho_2/d_2`.
 
 Clamping is also what keeps the result continuous as a parent value vanishes: the equalizing
-point runs off to an endpoint, and the endpoint absorbs it. The `z1 == 0` and `z2 == 0` arms
-therefore take the limits of that point — the upper endpoint and the lower endpoint
-respectively — rather than a separate fallback formula.
+point runs off to an endpoint, and the endpoint absorbs it. Nothing computes those limits
+separately, because floating-point arithmetic already carries them. `sqrt(c12*z2/z1)` is `Inf`
+at `z1 == 0` and `0` at `z2 == 0`, which `clamp` resolves to the upper and the lower endpoint;
+`c12/sqrt(c22)` is `Inf` at `c22 == 0`, placing the upper endpoint there. Only `z1 == z2 == 0`
+leaves a `NaN` that no clamp resolves, and that is what reaches the fallback.
 
 That reasoning needs the endpoint being approached to be a positive finite scale, and it is
 not when the corresponding diagonal entry vanishes: `c22 == 0` puts the upper endpoint at
@@ -216,19 +218,11 @@ is reached, so this function only ever receives positive references from that ru
 """
 function balanced_split(c11, c12, c22, z1, z2)
     lo = sqrt(c11)
-    hi = c22 > 0 ? c12 / sqrt(c22) : oftype(lo, Inf)
-    target = if z1 > 0 && z2 > 0
-        sqrt(c12 * z2 / z1)
-    elseif z2 > 0
-        hi
-    elseif z1 > 0
-        lo
-    else
-        oftype(lo, NaN)
-    end
-    # Clamping resolves zero or infinite limiting targets when the feasible interval has a finite
-    # endpoint. Only an unresolved NaN or unbounded target reaches the fallback.
-    rho1 = clamp(target, lo, hi)
+    hi = c12 / sqrt(c22)
+    # The equalizing point carries the vanishing-reference limits itself, and clamping resolves
+    # them when the feasible interval has a finite endpoint. Only an unresolved NaN or unbounded
+    # target reaches the fallback.
+    rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
     if !(isfinite(rho1) && rho1 > 0)
         g = sqrt(lo * hi)
         rho1 = clamp((isfinite(g) && g > 0) ? g : sqrt(c12), lo, hi)
