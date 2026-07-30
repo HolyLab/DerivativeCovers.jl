@@ -3,8 +3,8 @@
 Scripts that measure how loose the covers are. Tightness, not run time. Symmetric covers are scored
 against a reference matrix from ForwardDiff — the Hessian, or the Gram matrix `J'*J` — where
 `1/cover_ratio(A, h)` is the factor by which a cover exceeds the largest true entry; a rank-1
-Jacobian pair is scored against the surrogate it covers, as *excess* `max_kj (a_k*b_j)/Ũ_kj`. On
-both scales `1` is exact and larger is looser.
+Jacobian pair is scored against the matrix it covers — the surrogate `Ũ` or the exact `J` — as
+*excess* `max_kj (a_k*b_j)/A_kj`. On both scales `1` is exact and larger is looser.
 
 The environment is not registered. Point it at the working copies before the first run:
 
@@ -37,6 +37,32 @@ Two controls run alongside the sweep:
   merge collapses onto its own sum merge. That gap is the declaration penalty with the first-order
   channel held out;
 - softmax's first-order loss, which is `1` off the diagonal and `(1+p_i)/(1-p_i)` on it.
+
+## `factored_submap.jl`
+
+[`submapnode`](../DerivativeCovers/src/tape.jl) holds a dense `q x p` Jacobian and a dense `q x p`
+curvature bound, built by one adjoint sweep per output. A traced backend affords neither, so the
+production-shaped sub-map is a vjp closure plus a factored cover `(a, b, S)` — which the package
+already reaches through [`compose_jacobian_cover`](../DerivativeCovers/src/compose.jl) and
+`compose_hessian_cover`, with no joint tape and no dense `J`. The script scores three routes for
+one composite: the sub-map decomposed onto the outer tape, declared as `submap` nodes, and
+factored.
+
+Factoring is expensive, and the cost grows with the sub-map's width. On the Jacobian of `G(F(z))`
+the factored pair is 9.6x looser than the declared one at `n = 8` and 37x at `n = 32` for softmax,
+16x and 91x for layernorm. `jacobian_minimax`'s exact rank-1 optimum sits an order of magnitude
+below all three routes, so what the factored route gives up is the composition rule, not the rank-1
+form it produces.
+
+The penalty has a single source, and a linear head isolates it. A head linear in the sub-map's
+outputs has `∇²g = 0`, which deletes the `J'∇²g J` term from the chain rule and leaves only the
+declared curvature `S` — the bound both routes carry identically, and the two covers then agree to
+the last digit on every fixture. Everything else in the table is the price of bounding `J'∇²g J` by
+`(a⋅hg)²*b*b'` instead of using `J`: 1.3x–43x on the sum merge, 1.1x–632x on quadrature.
+
+Quadrature suffers more because the factored route folds the whole first-order term into a single
+atom, which is what a declaration does to curvature. The two scripts therefore measure independent
+steps toward a production representation, and both are paid mostly in the quadrature merge.
 
 ## `equilibration_rounds.jl`
 

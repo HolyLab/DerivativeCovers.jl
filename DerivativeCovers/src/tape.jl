@@ -315,6 +315,13 @@ transform as `y -> C*y`, `J -> C*J*inv(D)`, `S -> sqrt.(C)*S*inv(D)` under a res
 cover scales as the square root of its output's scale); [`declare_submap`](@ref) builds
 declarations with both properties. The covers are then invariant to the output gauge `C`, which
 cancels between each output's adjoint and its declared curvature.
+
+Both matrices are dense and are held per node, so a declared call costs `O(q*p)` memory and
+[`declare_submap`](@ref) one adjoint sweep per output to build: diagnostic tier. Where neither is
+affordable, [`compose_jacobian_cover`](@ref) and [`compose_hessian_cover`](@ref) combine covers of
+the two factors with no joint tape and no dense `J`. That route bounds the composition's
+first-order contribution by a rank-1 pair rather than using `J` itself, which loosens the
+`J'∇²g J` term of the chain rule and leaves the declared curvature term unchanged.
 """
 function submapnode(
         xs::AbstractVector{<:TVar}, y::AbstractVector{<:Real},
