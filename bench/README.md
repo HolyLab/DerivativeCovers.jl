@@ -29,6 +29,26 @@ exact partials pay.
 
 Two controls run alongside the sweep:
 
-- a scalar-output op, where `declare_submap` reproduces the decomposed sum merge exactly, so the
-  two forms must agree to roundoff;
+- a scalar-output op sitting directly on the inputs, where `declare_submap` builds its declaration
+  from the same curvature the decomposed tape sweeps, so the two forms agree exactly under the sum
+  merge. They do not agree under quadrature: a declared node is a single atom, so its quadrature
+  merge collapses onto its own sum merge. That gap is the declaration penalty with the first-order
+  channel held out;
 - softmax's first-order loss, which is `1` off the diagonal and `(1+p_i)/(1-p_i)` on it.
+
+## `scalarization_sensitivity.jl`
+
+Records the same function twice — once through array primitives, once as explicit scalar chains —
+and compares how much of the sum-to-quadrature gap
+[`cover_hybrid`](../DerivativeCovers/src/merges.jl) reaches on each.
+
+`cover_hybrid` sums contributions within a group, so what it recovers depends on which
+contributions the partition can separate, and its groups contain whole nodes. An array primitive
+carrying curvature holds several atoms in one node and no partition separates them; a primitive
+that is linear carries no curvature and costs nothing. Node, curvature-node, and atom counts are
+reported alongside the merges, since those counts are exact.
+
+The script also carries `hybrid_atomwise`, a partition applied to atoms rather than nodes. It is a
+prototype living here rather than in the package, and it establishes two things: that the merge
+becomes invariant to how the program was recorded, and that it reaches the atomwise quadrature
+merge once the group count matches the atom count.
