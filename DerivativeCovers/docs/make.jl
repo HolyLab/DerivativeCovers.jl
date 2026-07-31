@@ -1,3 +1,6 @@
+# `[sources]` resolves the two packages of this repository. MatrixCovers is unregistered and lives
+# outside it, so building here needs `Pkg.develop(PackageSpec(path=<path to MatrixCovers>))` first.
+
 using DerivativeCovers
 using DerivativeCoverProblems
 using Documenter

@@ -73,14 +73,14 @@ jobs:
         with:
           version: '1'
       - uses: julia-actions/cache@v3
-      # The site documents both packages in this repository, and neither they nor MatrixCovers are
-      # registered. The docs environment resolves all three, so they must enter its manifest in a
-      # single call.
-      - name: Develop unregistered dependencies
+      # The site documents both packages in this repository, which the docs environment's
+      # `[sources]` resolves. MatrixCovers is unregistered and lives elsewhere, so it is cloned
+      # into both manifests.
+      - name: Develop MatrixCovers
         working-directory: DerivativeCovers
         run: |
           julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
-          julia --project=docs -e 'using Pkg; Pkg.develop([PackageSpec(url="https://github.com/HolyLab/MatrixCovers.jl"), PackageSpec(path="."), PackageSpec(path="../DerivativeCoverProblems")])'
+          julia --project=docs -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
       - uses: julia-actions/julia-buildpkg@v1
         with:
           project: DerivativeCovers
