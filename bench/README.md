@@ -195,6 +195,39 @@ adjoint gain is 1.09x by geometric mean and 1.60x on its worst coordinate, and t
 nonetheless coincide because the entry that binds its cover is already exact. Channel gains are
 per-coordinate; looseness is the worst entry, and the two need not move together.
 
+## `split_rules.jl`
+
+What choosing a [`SplitRule`](../DerivativeCovers/src/covers.jl) is worth, scored in both tangent
+channels. Two of the three rules are exact optima of something — `SensitivitySplit` of the sum
+merge, `VectorNormSplit` of the quadrature merge — and `ValueSplit`, the default, of nothing: it is
+the default because parent values are the only scale reference an `O(L)` sweep already has, where a
+sensitivity costs an extra sweep and a tangent norm costs `O(n*L)`.
+
+**A per-node optimum is not a per-cover one, and the objective it optimizes is not the score.**
+`VectorNormSplit` minimizes `sum(h_quad.^2)`, and a one-coordinate weight sweep over eight decades
+never beat it on any fixture. But looseness is the *worst entry*, and those are different
+questions: the norm split wins the worst entry on `quadratic form` (1.80 against 2.78 for the
+value split and 2.62 for the sensitivity split) and on both array heads, and loses it on
+`quad entrywise` (3.91 against 2.54) and `quad matvec` while still winning the objective. A rule
+that provably minimizes a sum can be beaten on a maximum, and here it is.
+
+**The tangent channel moves more than the rule does, where it moves at all.** Keeping the tangent
+signs takes `deep w=4` from 16.3 to 2.3 and the two-layer MLP from 3.39 to 1.47, and no rule
+comes near that on those programs — all three agree there to the digit, the splits being pinned by
+the same block structure. On the fixtures with nothing to cancel along a path (`quad entrywise`,
+`quad matvec`, `quad factored`, both `dag` programs, `quadratic form`) the channel changes nothing
+at all and the rule is the only handle left. The two choices are close to orthogonal on this
+population.
+
+**The value reference has one seam and the table isolates it.** At `(x[1]-1)*(x[2]-1)` with both
+operands `1e-8` from zero, the split `ValueSplit` picks is set by the *ratio* of two numbers that
+are both a hair from zero: over ratios from 100 to 0.01 its cover swings from `(10, 0.1)` to
+`(0.1, 10)`, four orders of magnitude driven by the direction of an arbitrarily small perturbation,
+and at the singular point itself it falls back to `(1, 1)`. Both derivative-based references read
+`1` on each operand throughout and return `(1, 1)` at every ratio and at the point. That
+discontinuity is the whole of what the other two rules buy at a vanishing product, and it is worth
+`O(L)` extra for the sensitivity reference and `O(n*L)` for the norm.
+
 ## `support_granularity.jl`
 
 [`support_components`](../DerivativeCovers/src/support.jl) calls a tape edge live where its first
