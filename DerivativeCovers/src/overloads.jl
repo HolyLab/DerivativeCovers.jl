@@ -1,4 +1,6 @@
-# Operations supported by TVar recording.
+# The elemental rules: value, first partials and second partials of every operation a program may
+# use. They are written against [`CoverVar`](@ref) and reach a backend only through the recorders
+# `unarynode`, `binarynode`, `dotnode` and `linearnode`, so one table serves every backend.
 
 import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
     transpose
@@ -7,39 +9,40 @@ import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 # by qualification rather than by name.
 import LinearAlgebra
 
-# Treat TVar as a scalar during broadcasting.
-Base.broadcastable(x::TVar) = Ref(x)
+# Treat CoverVar as a scalar during broadcasting.
+Base.broadcastable(x::CoverVar) = Ref(x)
 
-# Defining scalar adjoint and transpose keeps row-vector wrappers typed as TVar.
-adjoint(x::TVar) = x
-transpose(x::TVar) = x
+# Defining scalar adjoint and transpose keeps row-vector wrappers typed as CoverVar.
+adjoint(x::CoverVar) = x
+transpose(x::CoverVar) = x
 
 # --- constant folding --------------------------------------------------------------------------
-# Constants have no tape node. `unfold` exposes their values before dispatch; `fold` wraps a
-# constant-only result back into TVar so heterogeneous numeric code remains type-stable.
-unfold(x::TVar) = isconstant(x) ? value(x) : x
-fold(x::TVar) = x
-fold(v::Real) = TVar(v)
-eitherconstant(x::TVar, y::TVar) = isconstant(x) | isconstant(y)
+# Constants have no node. `unfold` exposes their values before dispatch; `fold` wraps a
+# constant-only result back into the backend so heterogeneous numeric code remains type-stable.
+# The backend cannot be recovered from a bare `Real`, so it is passed alongside.
+unfold(x::CoverVar) = isconstant(x) ? value(x) : x
+fold(::Type{<:CoverVar}, x::CoverVar) = x
+fold(::Type{V}, v::Real) where {V <: CoverVar} = constantvar(V, v)
+eitherconstant(x::CoverVar, y::CoverVar) = isconstant(x) | isconstant(y)
 
-# --- binary, both TVar ---
-+(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) + unfold(y)) :
+# --- binary, both CoverVar ---
++(x::CoverVar, y::CoverVar) = eitherconstant(x, y) ? fold(typeof(x), unfold(x) + unfold(y)) :
     binarynode(x, y, value(x) + value(y), 1, 1, 0, 0, 0)
--(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) - unfold(y)) :
+-(x::CoverVar, y::CoverVar) = eitherconstant(x, y) ? fold(typeof(x), unfold(x) - unfold(y)) :
     binarynode(x, y, value(x) - value(y), 1, -1, 0, 0, 0)
-*(x::TVar, y::TVar) = eitherconstant(x, y) ? fold(unfold(x) * unfold(y)) :
+*(x::CoverVar, y::CoverVar) = eitherconstant(x, y) ? fold(typeof(x), unfold(x) * unfold(y)) :
     binarynode(x, y, value(x) * value(y), value(y), value(x), 0, 1, 0)
-function /(x::TVar, y::TVar)
-    eitherconstant(x, y) && return fold(unfold(x) / unfold(y))
+function /(x::CoverVar, y::CoverVar)
+    eitherconstant(x, y) && return fold(typeof(x), unfold(x) / unfold(y))
     u, w = value(x), value(y)
     return binarynode(x, y, u / w, 1 / w, -u / w^2, 0, -1 / w^2, 2u / w^3)
 end
 
 # --- unary sign ---
-+(x::TVar) = x
--(x::TVar) = isconstant(x) ? TVar(-value(x)) : unarynode(x, -value(x), -1, 0)
++(x::CoverVar) = x
+-(x::CoverVar) = isconstant(x) ? constantvar(typeof(x), -value(x)) : unarynode(x, -value(x), -1, 0)
 
-# --- TVar with a numeric constant, folded into a unary node ---
+# --- CoverVar with a numeric constant, folded into a unary node ---
 # An operation that leaves the operand alone returns it rather than recording a node. Generic
 # numerical code seeds accumulators with `zero(T)` and scales by unit factors, so these identities
 # are common enough to lengthen a tape appreciably, and the node they would record has unit first
@@ -49,67 +52,63 @@ end
 # where it would turn a negative zero positive. A scaling qualifies only for a unit factor: the
 # coefficient is the node's first partial, so a product that happens to leave the value alone --
 # any factor at all, when the value is zero -- still has a derivative to record.
-function +(x::TVar, c::Real)
-    isconstant(x) && return TVar(value(x) + c)
+function +(x::CoverVar, c::Real)
+    isconstant(x) && return constantvar(typeof(x), value(x) + c)
     v = value(x)
     return v + c === v ? x : unarynode(x, v + c, 1, 0)
 end
-+(c::Real, x::TVar) = x + c
-function -(x::TVar, c::Real)
-    isconstant(x) && return TVar(value(x) - c)
++(c::Real, x::CoverVar) = x + c
+function -(x::CoverVar, c::Real)
+    isconstant(x) && return constantvar(typeof(x), value(x) - c)
     v = value(x)
     return v - c === v ? x : unarynode(x, v - c, 1, 0)
 end
--(c::Real, x::TVar) = isconstant(x) ? TVar(c - value(x)) : unarynode(x, c - value(x), -1, 0)
-*(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) * c) :
+-(c::Real, x::CoverVar) = isconstant(x) ? constantvar(typeof(x), c - value(x)) : unarynode(x, c - value(x), -1, 0)
+*(x::CoverVar, c::Real) = isconstant(x) ? constantvar(typeof(x), value(x) * c) :
     isone(c) ? x : unarynode(x, value(x) * c, c, 0)
-*(c::Real, x::TVar) = x * c
-/(x::TVar, c::Real) = isconstant(x) ? TVar(value(x) / c) :
+*(c::Real, x::CoverVar) = x * c
+/(x::CoverVar, c::Real) = isconstant(x) ? constantvar(typeof(x), value(x) / c) :
     isone(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
-# TVar is not a Number, so define scalar-array multiplication explicitly.
-*(x::TVar, c::AbstractArray{<:Real}) = x .* c
-*(c::AbstractArray{<:Real}, x::TVar) = c .* x
-function /(c::Real, x::TVar)
-    isconstant(x) && return TVar(c / value(x))
+# CoverVar is not a Number, so define scalar-array multiplication explicitly.
+*(x::CoverVar, c::AbstractArray{<:Real}) = x .* c
+*(c::AbstractArray{<:Real}, x::CoverVar) = c .* x
+function /(c::Real, x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), c / value(x))
     w = value(x)
     return unarynode(x, c / w, -c / w^2, 2c / w^3)
 end
 
 # --- values of the element type obtained from numbers ---
-# Generic code obtains typed literals through zero, one, conversion, and constructors. These
-# return constant TVars because no tape is available at the type level. Written against
-# `TVar{T}` they keep the program's precision, since generic code reaches them through
-# `eltype(x)`; the unparameterized forms have no `T` to preserve and default to Float64.
-Base.zero(::Type{TVar{T}}) where {T} = TVar{T}(0)
-Base.one(::Type{TVar{T}}) where {T} = TVar{T}(1)
-Base.oneunit(::Type{TVar{T}}) where {T} = TVar{T}(1)
-Base.zero(::Type{TVar}) = TVar(0.0)
-Base.one(::Type{TVar}) = TVar(1.0)
-Base.oneunit(::Type{TVar}) = TVar(1.0)
-Base.zero(x::TVar) = zero(typeof(x))
-Base.one(x::TVar) = one(typeof(x))
-Base.oneunit(x::TVar) = oneunit(typeof(x))
-Base.convert(::Type{TVar}, c::Real) = TVar(c)
-Base.convert(::Type{TVar{T}}, c::Real) where {T} = TVar{T}(c)
+# Generic code obtains typed literals through zero, one, conversion, and constructors. These return
+# constants, because no node is available at the type level. Each routes to `constantvar`, so the
+# backend supplies the constant and the literal keeps the program's precision -- generic code
+# reaches these through `eltype(x)`, which carries every parameter the backend has.
+Base.zero(::Type{V}) where {V <: CoverVar} = constantvar(V, 0)
+Base.one(::Type{V}) where {V <: CoverVar} = constantvar(V, 1)
+Base.oneunit(::Type{V}) where {V <: CoverVar} = constantvar(V, 1)
+Base.zero(x::CoverVar) = zero(typeof(x))
+Base.one(x::CoverVar) = one(typeof(x))
+Base.oneunit(x::CoverVar) = oneunit(typeof(x))
+Base.convert(::Type{V}, c::Real) where {V <: CoverVar} = constantvar(V, c)
 
 # --- power with a constant exponent ---
 # Apply zero derivative factors before singular powers so x^0 and x^1 remain constant and linear
 # at x = 0. Genuine singularities remain singular.
-function ^(x::TVar, p::Real)
-    isconstant(x) && return TVar(value(x)^p)
+function ^(x::CoverVar, p::Real)
+    isconstant(x) && return constantvar(typeof(x), value(x)^p)
     v = value(x)
     d = iszero(p) ? zero(v) : p * v^(p - 1)
     C = iszero(p) || isone(p) ? zero(v) : p * (p - 1) * v^(p - 2)
     return unarynode(x, v^p, d, C)
 end
 # Disambiguate from Base's `x^n` integer-literal path.
-^(x::TVar, p::Integer) = invoke(^, Tuple{TVar, Real}, x, p)
+^(x::CoverVar, p::Integer) = invoke(^, Tuple{CoverVar, Real}, x, p)
 
 # --- power with a variable exponent ---
 # `u^w = exp(w*log(u))` is real-differentiable only for `u > 0`; a nonpositive base is a domain
 # error rather than a NaN propagated into the cover.
-function ^(x::TVar, y::TVar)
-    eitherconstant(x, y) && return fold(unfold(x)^unfold(y))
+function ^(x::CoverVar, y::CoverVar)
+    eitherconstant(x, y) && return fold(typeof(x), unfold(x)^unfold(y))
     u, w = value(x), value(y)
     u > 0 || throw(DomainError(u, "x^y with a variable exponent requires a positive base"))
     v, lu = u^w, log(u)
@@ -118,8 +117,8 @@ function ^(x::TVar, y::TVar)
         w * (w - 1) * u^(w - 2), u^(w - 1) * (1 + w * lu), v * lu^2
     )
 end
-function ^(c::Real, x::TVar)
-    isconstant(x) && return TVar(float(c)^value(x))
+function ^(c::Real, x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), float(c)^value(x))
     c > 0 || throw(DomainError(c, "c^x with a variable exponent requires a positive base"))
     v, lc = float(c)^value(x), log(c)
     return unarynode(x, v, v * lc, v * lc^2)
@@ -127,60 +126,60 @@ end
 
 # --- unary transcendental / algebraic ---
 # Each folds a constant argument to a constant result, as the arithmetic above does.
-function exp(x::TVar)
-    isconstant(x) && return TVar(exp(value(x)))
+function exp(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), exp(value(x)))
     e = exp(value(x))
     return unarynode(x, e, e, e)
 end
-function log(x::TVar)
-    isconstant(x) && return TVar(log(value(x)))
+function log(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), log(value(x)))
     v = value(x)
     return unarynode(x, log(v), 1 / v, -1 / v^2)
 end
-function sin(x::TVar)
-    isconstant(x) && return TVar(sin(value(x)))
+function sin(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), sin(value(x)))
     v = value(x)
     return unarynode(x, sin(v), cos(v), -sin(v))
 end
-function cos(x::TVar)
-    isconstant(x) && return TVar(cos(value(x)))
+function cos(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), cos(value(x)))
     v = value(x)
     return unarynode(x, cos(v), -sin(v), -cos(v))
 end
-function tan(x::TVar)
-    isconstant(x) && return TVar(tan(value(x)))
+function tan(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), tan(value(x)))
     t = tan(value(x))
     s2 = 1 + t^2                 # sec²
     return unarynode(x, t, s2, 2t * s2)
 end
-function atan(x::TVar)
-    isconstant(x) && return TVar(atan(value(x)))
+function atan(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), atan(value(x)))
     v = value(x)
     d = 1 / (1 + v^2)
     return unarynode(x, atan(v), d, -2v * d^2)
 end
-function tanh(x::TVar)
-    isconstant(x) && return TVar(tanh(value(x)))
+function tanh(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), tanh(value(x)))
     t = tanh(value(x))
     s2 = 1 - t^2                 # sech²
     return unarynode(x, t, s2, -2t * s2)
 end
-function inv(x::TVar)
-    isconstant(x) && return TVar(inv(value(x)))
+function inv(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), inv(value(x)))
     v = value(x)
     return unarynode(x, inv(v), -1 / v^2, 2 / v^3)
 end
-function sqrt(x::TVar)
-    isconstant(x) && return TVar(sqrt(value(x)))
+function sqrt(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), sqrt(value(x)))
     v = value(x)
     return unarynode(x, sqrt(v), 0.5 * v^(-0.5), -0.25 * v^(-1.5))
 end
-abs2(x::TVar) = isconstant(x) ? TVar(value(x)^2) : unarynode(x, value(x)^2, 2 * value(x), 2)
+abs2(x::CoverVar) = isconstant(x) ? constantvar(typeof(x), value(x)^2) : unarynode(x, value(x)^2, 2 * value(x), 2)
 
 # --- inner products and matrix-vector products ---
 # Variable-variable products use inner-product nodes; constant coefficients use linear nodes.
-# Mixed TVar vectors are partitioned by pair.
-function dot(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar})
+# Mixed CoverVar vectors are partitioned by pair.
+function dot(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:CoverVar})
     wconst, xconst = count(isconstant, ws), count(isconstant, xs)
     wconst == 0 && xconst == 0 && return dotnode(ws, xs)
     xconst == 0 && wconst == length(ws) && return linearnode(map(value, ws), xs)
@@ -191,8 +190,8 @@ end
 # Partition a mixed dot product into a bilinear node, a linear node, and a constant offset. This
 # preserves the scalarized atom set with at most three nodes. The staging vectors take their
 # element types from the operands, so the coefficients reach the recorders in the operands' own
-# precision; `offset` accumulates as a constant TVar, which folds rather than recording a node.
-function _partitioned_dot(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar})
+# precision; `offset` accumulates as a constant CoverVar, which folds rather than recording a node.
+function _partitioned_dot(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:CoverVar})
     idxs = eachindex(ws, xs)
     isempty(idxs) && throw(ArgumentError("cannot record an empty inner product"))
     wpair, xpair = similar(ws, 0), similar(xs, 0)     # both sides recording
@@ -220,11 +219,11 @@ function _partitioned_dot(ws::AbstractVector{<:TVar}, xs::AbstractVector{<:TVar}
     # A zero offset leaves the value alone, which `+` declines to record.
     return total + offset
 end
-dot(w::AbstractVector{<:Real}, xs::AbstractVector{<:TVar}) = _linear_dot(w, xs)
-dot(ws::AbstractVector{<:TVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
+dot(w::AbstractVector{<:Real}, xs::AbstractVector{<:CoverVar}) = _linear_dot(w, xs)
+dot(ws::AbstractVector{<:CoverVar}, x::AbstractVector{<:Real}) = _linear_dot(x, ws)
 
 # Fold constant entries into an offset; only recording entries become parents of the linear node.
-function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:TVar})
+function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:CoverVar})
     any(isconstant, xs) || return linearnode(coeffs, xs)
     idxs = eachindex(coeffs, xs)
     rcoef, rest = similar(coeffs, 0), similar(xs, 0)
@@ -250,22 +249,22 @@ function matvecnodes(W::AbstractMatrix, x::AbstractVector)
     return [dot(view(W, m, :), x) for m in axes(W, 1)]
 end
 
-*(W::AbstractMatrix{<:TVar}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
-*(W::AbstractMatrix{<:Real}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
-*(W::AbstractMatrix{<:TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:CoverVar}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:Real}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+*(W::AbstractMatrix{<:CoverVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 
 # Resolve dispatch ties with LinearAlgebra's AbstractMatrix methods.
 *(
-    W::Union{Adjoint{<:TVar, <:AbstractVector}, Transpose{<:TVar, <:AbstractVector}},
-    x::AbstractVector{<:TVar}
+    W::Union{Adjoint{<:CoverVar, <:AbstractVector}, Transpose{<:CoverVar, <:AbstractVector}},
+    x::AbstractVector{<:CoverVar}
 ) = dot(parent(W), x)
 *(
-    W::Union{Adjoint{<:TVar, <:AbstractVector}, Transpose{<:TVar, <:AbstractVector}},
+    W::Union{Adjoint{<:CoverVar, <:AbstractVector}, Transpose{<:CoverVar, <:AbstractVector}},
     x::AbstractVector{<:Real}
 ) = dot(parent(W), x)
 *(
     W::Union{Adjoint{<:Real, <:AbstractVector}, Transpose{<:Real, <:AbstractVector}},
-    x::AbstractVector{<:TVar}
+    x::AbstractVector{<:CoverVar}
 ) = dot(parent(W), x)
 
 # A diagonal product is elementwise; the explicit axes check prevents broadcast expansion.
@@ -275,14 +274,14 @@ function diagvecnodes(W::Diagonal, x::AbstractVector)
     return diag(W) .* x
 end
 
-*(W::Diagonal{<:TVar}, x::AbstractVector{<:TVar}) = diagvecnodes(W, x)
-*(W::Diagonal{<:TVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
-*(W::Diagonal{<:Real}, x::AbstractVector{<:TVar}) = diagvecnodes(W, x)
+*(W::Diagonal{<:CoverVar}, x::AbstractVector{<:CoverVar}) = diagvecnodes(W, x)
+*(W::Diagonal{<:CoverVar}, x::AbstractVector{<:Real}) = diagvecnodes(W, x)
+*(W::Diagonal{<:Real}, x::AbstractVector{<:CoverVar}) = diagvecnodes(W, x)
 
 # Triangular wrappers need only dispatch disambiguation; getindex supplies their structural values.
-*(W::AbstractTriangular{<:TVar}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
-*(W::AbstractTriangular{<:TVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
-*(W::AbstractTriangular{<:Real}, x::AbstractVector{<:TVar}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:CoverVar}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:CoverVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::AbstractTriangular{<:Real}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
 
 # Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
 # per output row. `mul!` is the only route to it. A `*` method of its own would tie with
@@ -315,7 +314,7 @@ end
 # Write a recorded product into `y`. The destination's axes must be the product's: LinearAlgebra's
 # out-of-place `*` sizes its matrix destination one-based, so an offset operand reaching `mul!`
 # that way is a mismatch rather than a result silently relabelled.
-function storeproduct!(y::AbstractArray{<:TVar}, z::AbstractArray, alpha::Number, beta::Number)
+function storeproduct!(y::AbstractArray{<:CoverVar}, z::AbstractArray, alpha::Number, beta::Number)
     axes(y) == axes(z) ||
         throw(DimensionMismatch("mul! destination has axes $(axes(y)), product has axes $(axes(z))"))
     iszero(beta) || return y .= alpha .* z .+ beta .* y
@@ -331,28 +330,28 @@ recordmatmat!(Y, tA, tB, W, X, alpha, beta) =
 # Julia 1.11 replaced the trailing `MulAddMul` of both entry points with a scalar pair.
 @static if VERSION >= v"1.11"
     LinearAlgebra.generic_matvecmul!(
-        y::AbstractVector{<:TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        y::AbstractVector{<:CoverVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
         alpha::Number, beta::Number
     ) = recordmatvec!(y, tA, W, x, alpha, beta)
 
     LinearAlgebra.generic_matmatmul!(
-        Y::AbstractMatrix{<:TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         alpha::Number, beta::Number
     ) = recordmatmat!(Y, tA, tB, W, X, alpha, beta)
 else
     LinearAlgebra.generic_matvecmul!(
-        y::AbstractVector{<:TVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
+        y::AbstractVector{<:CoverVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
         add::LinearAlgebra.MulAddMul
     ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
 
     LinearAlgebra.generic_matmatmul!(
-        Y::AbstractMatrix{<:TVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
+        Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         add::LinearAlgebra.MulAddMul
     ) = recordmatmat!(Y, tA, tB, W, X, add.alpha, add.beta)
 end
 
 # Record a sum as one linear node instead of n-1 addition nodes.
-function Base.sum(xs::AbstractArray{<:TVar})
+function Base.sum(xs::AbstractArray{<:CoverVar})
     isempty(xs) && throw(ArgumentError("cannot record an empty sum"))
     # `linearnode` pairs coefficients with terms by index, so the unit coefficients carry `v`'s
     # axes. It converts them into the tape's element type, and a unit is exact in every type, so
@@ -368,4 +367,4 @@ function Base.sum(xs::AbstractArray{<:TVar})
         linearnode(ones(Bool, length(recording)), recording)
     return total + offset
 end
-Base.sum(f, xs::AbstractArray{<:TVar}) = sum(map(f, xs))
+Base.sum(f, xs::AbstractArray{<:CoverVar}) = sum(map(f, xs))

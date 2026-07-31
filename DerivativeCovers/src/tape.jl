@@ -96,11 +96,42 @@ function natoms(t::Tape)
 end
 
 """
+    CoverVar{T}
+
+A scalar that carries a value of type `T` through a program so that a cover construction can
+observe the program's elementals as it runs. [`TVar`](@ref) records them onto a [`Tape`](@ref).
+
+The elementals of `overloads.jl` are written against this type rather than against any one
+backend. Each computes its value, first partials and second partials and hands them to one of four
+*recorders*, which is where the backends differ. A concrete subtype `V` defines:
+
+  - [`value`](@ref) and [`isconstant`](@ref);
+  - [`constantvar`](@ref)`(::Type{V}, c)`. Generic numerical code obtains typed literals through
+    `zero`, `one`, `oneunit` and `convert` of `V`, all of which route here, so a constant must
+    carry every type parameter `V` has;
+  - whichever of [`unarynode`](@ref), [`binarynode`](@ref), [`dotnode`](@ref) and
+    [`linearnode`](@ref) it supports. An unsupported recorder makes the elementals that reach it
+    unavailable; a subtype supporting none of them cannot run a program.
+
+A constant has no node behind it in any backend: an elemental folds a constant operand into the
+node that consumes it.
+"""
+abstract type CoverVar{T} end
+
+"""
+    constantvar(::Type{V}, c::Real) -> V
+
+The constant of backend `V` carrying value `c` and nothing else. See [`CoverVar`](@ref).
+"""
+function constantvar end
+
+"""
     TVar(t::Tape{T}, idx::Integer)
     TVar(c::Real)
     TVar{T}(c::Real)
 
-A scalar used while recording a function, carrying a value of type `T`.
+A scalar used while recording a function, carrying a value of type `T`. The [`CoverVar`](@ref)
+backend that records onto a [`Tape`](@ref).
 
 `TVar(t, idx)` refers to node `idx` on `t` and takes the tape's element type. `TVar(c)` creates a
 constant with a value but no tape; this supports typed literals such as `zero(eltype(x))` in
@@ -124,7 +155,7 @@ julia> DerivativeCovers.isconstant(c * TVar(4.0)), DerivativeCovers.value(c * TV
 (true, 12.0)
 ```
 """
-struct TVar{T}
+struct TVar{T} <: CoverVar{T}
     tape::Union{Tape{T}, Nothing}
     idx::Int
     val::T
@@ -135,21 +166,24 @@ TVar{T}(c::Real) where {T} = TVar{T}(nothing, 0, c)
 TVar(c::Real) = TVar{typeof(float(c))}(float(c))
 TVar(x::TVar) = x
 
-"""
-    isconstant(x::TVar) -> Bool
+constantvar(::Type{TVar{T}}, c::Real) where {T} = TVar{T}(c)
+constantvar(::Type{TVar}, c::Real) = TVar(c)
 
-Whether `x` is a constant: a value with no tape behind it, as returned by `TVar(::Real)` and by
-`zero`/`one`/`oneunit` of the element type. A constant contributes coefficients to the nodes it
-enters and has no node of its own.
+"""
+    isconstant(x) -> Bool
+
+Whether `x` is a constant: a value with no node behind it, as returned by
+[`constantvar`](@ref) and by `zero`/`one`/`oneunit` of the element type. A constant contributes
+coefficients to the nodes it enters and has no node of its own.
 """
 isconstant(x::TVar) = x.tape === nothing
 
 """
     value(x)
 
-The numeric value carried by `x`: the recorded value of a [`TVar`](@ref), constant or not, or `x`
-itself for a plain `Real`. The `Real` fallback lets generic code read the value of either a `TVar`
-or a plain number without a branch, detaching a quantity from the tape.
+The numeric value carried by `x`: the value of a [`CoverVar`](@ref), constant or not, or `x`
+itself for a plain `Real`. The `Real` fallback lets generic code read the value of either a
+program variable or a plain number without a branch, detaching a quantity from the backend.
 """
 value(x::TVar) = x.val
 value(x::Real) = x

@@ -10,7 +10,8 @@ include(
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
-using DerivativeCovers: submapnode, value, isconstant, nnodes, natoms, cover_ratio, bound_ratio,
+using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms, cover_ratio,
+    bound_ratio,
     rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
     jacobian_minimax, dependency_severity, scaled_spectral_radius,
     scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
@@ -83,11 +84,11 @@ include("genericaxes.jl")
     end
 
     @testset "public API boundary" begin
-        # TVar records operations rather than standing in for a number: it must not be a Real, so
-        # that generic `::Real` methods reject it instead of silently taping something the package
-        # has no rule for.
-        @test !(TVar <: Real)
-        @test supertype(TVar) === Any
+        # A backend variable observes operations rather than standing in for a number: it must not
+        # be a Real, so that generic `::Real` methods reject it instead of silently recording
+        # something the package has no rule for.
+        @test !(CoverVar <: Real)
+        @test TVar <: CoverVar
 
         # Pin the export set so internal names cannot drift into the top-level namespace.
         exported = filter(s -> Base.isexported(DerivativeCovers, s), names(DerivativeCovers))
@@ -109,6 +110,7 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
             :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
+            :CoverVar, :constantvar,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
