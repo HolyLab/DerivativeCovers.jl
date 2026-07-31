@@ -97,7 +97,8 @@ single `TVar` (declared as one output) or a vector of them; a linear output gets
 zero row of `S`.
 
 Costs `O(q*L_F)` time — one `q`-channel adjoint sweep over `F`'s tape plus one absolute sweep per
-output — once per declaration; the scratch tape is discarded afterwards. The declaration
+output — once per declaration, and `O(q*n)` memory for `J` and `S`, which places it at diagnostic
+tier alongside [`submapnode`](@ref); the scratch tape is discarded afterwards. The declaration
 transforms covariantly under rescalings of `F`'s
 arguments and outputs because each ingredient inherits the covariance of the underlying sweeps,
 including the zero-parent-value fallback exception of the local tie-break.
@@ -135,6 +136,10 @@ node per output of `F` — independent of how many operations `F` performs inter
 price that exact Hessian-vector products ([`hvp`](@ref)) become unavailable on that tape. A
 scalar-valued `F` yields a one-element vector. `rule` is passed to [`declare_submap`](@ref)
 and governs only the declaration's curvature covers.
+
+The declaration it embeds is dense in the sub-map's outputs and arguments, so this keeps the outer
+tape on one tape at diagnostic tier. [`compose_jacobian_cover`](@ref) and
+[`compose_hessian_cover`](@ref) cover the same composite from covers of the factors alone.
 """
 function submap(F, xs::AbstractVector{<:TVar}; rule::SplitRule = ValueSplit())
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))

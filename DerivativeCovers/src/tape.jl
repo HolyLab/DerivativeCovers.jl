@@ -77,6 +77,25 @@ Number of nodes recorded on `t`, inputs included. This is the tape length `L`.
 nnodes(t::Tape) = length(t.vals)
 
 """
+    natoms(t::Tape)
+
+Number of cover atoms recorded on `t`: the independent rank-1 second-order terms its nodes expose,
+summed over the tape (see [`atom_slots`](@ref)). A unary or binary elemental with nonzero second
+partials exposes one atom, an inner-product node one per parent pair, and a linear node none.
+
+This is the group count at which [`cover_hybrid`](@ref) reaches the quadrature merge. It counts
+what the tape records, so a node whose adjoint or curvature vanishes at the recorded point is
+counted even though it seeds no channel.
+"""
+function natoms(t::Tape)
+    total = 0
+    for k in 1:nnodes(t), _ in atom_slots(t.Cs[k], length(t.parents[k]))
+        total += 1
+    end
+    return total
+end
+
+"""
     TVar(t::Tape{T}, idx::Integer)
     TVar(c::Real)
     TVar{T}(c::Real)
@@ -202,13 +221,20 @@ end
 
 Record a node `φ(x, y)` with value `val`, first partials `(d1, d2)`, and second partials
 `[c11 c12; c12 c22]`.
+
+An all-zero block is stored as [`NoCurvature`](@ref), for the reason [`unarynode`](@ref) stores a
+zero `c` that way. Addition and subtraction of two tape variables are the common case.
 """
 function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     tx, ix = noderef(x)
     ty, iy = noderef(y)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
     T = eltype(tx)
-    C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
+    C = if iszero(c11) && iszero(c12) && iszero(c22)
+        NoCurvature()
+    else
+        BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
+    end
     return pushnode!(tx, val, [ix, iy], T[d1, d2], C)
 end
 
@@ -289,6 +315,13 @@ transform as `y -> C*y`, `J -> C*J*inv(D)`, `S -> sqrt.(C)*S*inv(D)` under a res
 cover scales as the square root of its output's scale); [`declare_submap`](@ref) builds
 declarations with both properties. The covers are then invariant to the output gauge `C`, which
 cancels between each output's adjoint and its declared curvature.
+
+Both matrices are dense and are held per node, so a declared call costs `O(q*p)` memory and
+[`declare_submap`](@ref) one adjoint sweep per output to build: diagnostic tier. Where neither is
+affordable, [`compose_jacobian_cover`](@ref) and [`compose_hessian_cover`](@ref) combine covers of
+the two factors with no joint tape and no dense `J`. That route bounds the composition's
+first-order contribution by a rank-1 pair rather than using `J` itself, which loosens the
+`J'∇²g J` term of the chain rule and leaves the declared curvature term unchanged.
 """
 function submapnode(
         xs::AbstractVector{<:TVar}, y::AbstractVector{<:Real},

@@ -101,9 +101,10 @@ function cover_jacobian(
 
     if check
         rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
-        for j in 1:n, k in 1:m
-            a[k] * b_max[j] >= Utilde[k, j] * (1 - rtol) ||
-                error(
+        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (a .* b_max'))
+        if s > 1
+            k, j = Tuple(idx)
+            error(
                 "b_max does not cover the surrogate at output $k, input $j: " *
                     "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])"
             )
@@ -186,9 +187,10 @@ function cover_jacobian_hybrid(
     if check
         Utilde = jacobian_surrogate(t, outidxs)
         rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
-        for j in 1:n, k in 1:m
-            a[k] * b[j] >= Utilde[k, j] * (1 - rtol) ||
-                error(
+        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (a .* b'))
+        if s > 1
+            k, j = Tuple(idx)
+            error(
                 "group-max cover does not cover the surrogate at output $k, input $j: " *
                     "a*b = $(a[k] * b[j]) < Ũ = $(Utilde[k, j])"
             )
@@ -376,12 +378,15 @@ alternation, `10000` for the slower `:geomean` fit; pass an explicit count to ov
   the a-step its rows), and it inherits Sinkhorn's convergence condition: the sparsity pattern of
   `Ũ` must have **total support** (every nonzero entry on some positive diagonal). Dense patterns
   qualify; a pattern with a nonzero entry on no positive diagonal (e.g. triangular) makes the
-  iteration drift without bound — every iterate still covers, but the excess grows by a constant
-  per round and the run ends in the non-convergence error. The [`MaxMerge`](@ref) b-step is
+  iteration **drift**: `a` and `b` separate without bound in opposite directions. Every iterate
+  still covers, and covers tightly, but its excess grows with the round count, so a longer run
+  returns a *worse* cover — and left to run the weights leave the floating-point range altogether.
+  Drift is detected from the growth of the log-spread within each side, sampled at doubling round
+  counts, and reported before either happens. The [`MaxMerge`](@ref) b-step is
   non-smooth and can instead settle into a **limit cycle**: the per-round product change plateaus
   at a positive constant that no larger `maxiter` reduces (independent of total support). This is
-  detected and reported as a stall, distinct from the drift error; `arule = :geomean` is the
-  convergent alternative in both cases.
+  reported as a stall, distinct from the drift error; `arule = :geomean` is the convergent
+  alternative in both cases.
 - `arule = :geomean` sets `a_k` to the geometric mean of `Ũ_kj/b_j` over the nonzero entries of
   row `k`, alternating with the same rule on the b-side. In log space this is coordinate descent
   on the additive two-way fit `log Ũ_kj ≈ log a_k + log b_j` (row and column effects), so it
@@ -582,6 +587,13 @@ function _balance(bstep, astep, a, maxiter, rtol, hint = "")
     # increasing maxiter cannot resolve it.
     stall_window, stall_flat = 128, 1.0e-6
     last_checked = Inf
+    # Divergence is measured on the log-spread within each side, which no gauge affects. Sampling
+    # it at doubling round counts turns the two families apart: a converging run's spread settles,
+    # so the growth between samples shrinks geometrically, while a diverging one grows by a
+    # constant (logarithmic drift) or a doubling (geometric drift) every time. Requiring the growth
+    # to fail to shrink twice running keeps a slowly-settling run from being mistaken for drift.
+    spread_next, spread_prev, growth_prev, strikes = 64, nothing, nothing, 0
+    spread_shrink, spread_floor, spread_strikes = 0.9, 1.0e-3, 2
     for iters in 1:maxiter
         aprev, bprev = a, b
         a = astep(b)
@@ -591,6 +603,26 @@ function _balance(bstep, astep, a, maxiter, rtol, hint = "")
         wlo, whi = _logchange_extrema(b, bprev)
         delta = max(uhi + whi, -(ulo + wlo))
         delta <= rtol && return a, b, iters, delta
+        if iters == spread_next
+            spread = _logspread(a) + _logspread(b)
+            if spread_prev !== nothing
+                growth = spread - spread_prev
+                if growth_prev !== nothing && growth > spread_floor && growth >= spread_shrink * growth_prev
+                    strikes += 1
+                    strikes >= spread_strikes && error(
+                        "balance_cover diverged after $iters rounds: the weights are separating " *
+                            "without bound (log-spread $spread, growing by $growth per doubling of the " *
+                            "round count) while the products keep moving. Every iterate covers, but the " *
+                            "excess grows with the round count, so a longer run returns a worse cover$hint"
+                    )
+                else
+                    strikes = 0
+                end
+                growth_prev = growth
+            end
+            spread_prev = spread
+            spread_next *= 2
+        end
         if iters % stall_window == 0
             if delta > rtol && abs(delta - last_checked) <= stall_flat * delta
                 error(
@@ -603,6 +635,19 @@ function _balance(bstep, astep, a, maxiter, rtol, hint = "")
         end
     end
     error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > rtol = $rtol$hint")
+end
+
+# Log-ratio of the largest to the smallest positive weight. Zero weights mark dead outputs or
+# inputs and are excluded: they are exact, and stay zero for the whole run.
+function _logspread(v)
+    lo, hi = Inf, -Inf
+    for x in v
+        x > 0 || continue
+        l = log(x)
+        lo = min(lo, l)
+        hi = max(hi, l)
+    end
+    return lo <= hi ? hi - lo : zero(hi - hi)
 end
 
 function _regauge!(a, b)

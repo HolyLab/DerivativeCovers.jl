@@ -186,9 +186,11 @@ under a rescaling `v_i -> d_i*v_i` of the intermediate variables, `c_ij -> c_ij/
 positively homogeneous, so `rho_1 -> rho_1/d_1` and `rho_2 -> rho_2/d_2`.
 
 Clamping is also what keeps the result continuous as a parent value vanishes: the equalizing
-point runs off to an endpoint, and the endpoint absorbs it. The `z1 == 0` and `z2 == 0` arms
-therefore take the limits of that point — the upper endpoint and the lower endpoint
-respectively — rather than a separate fallback formula.
+point runs off to an endpoint, and the endpoint absorbs it. Nothing computes those limits
+separately, because floating-point arithmetic already carries them. `sqrt(c12*z2/z1)` is `Inf`
+at `z1 == 0` and `0` at `z2 == 0`, which `clamp` resolves to the upper and the lower endpoint;
+`c12/sqrt(c22)` is `Inf` at `c22 == 0`, placing the upper endpoint there. Only `z1 == z2 == 0`
+leaves a `NaN` that no clamp resolves, and that is what reaches the fallback.
 
 That reasoning needs the endpoint being approached to be a positive finite scale, and it is
 not when the corresponding diagonal entry vanishes: `c22 == 0` puts the upper endpoint at
@@ -216,19 +218,11 @@ is reached, so this function only ever receives positive references from that ru
 """
 function balanced_split(c11, c12, c22, z1, z2)
     lo = sqrt(c11)
-    hi = c22 > 0 ? c12 / sqrt(c22) : oftype(lo, Inf)
-    target = if z1 > 0 && z2 > 0
-        sqrt(c12 * z2 / z1)
-    elseif z2 > 0
-        hi
-    elseif z1 > 0
-        lo
-    else
-        oftype(lo, NaN)
-    end
-    # Clamping resolves zero or infinite limiting targets when the feasible interval has a finite
-    # endpoint. Only an unresolved NaN or unbounded target reaches the fallback.
-    rho1 = clamp(target, lo, hi)
+    hi = c12 / sqrt(c22)
+    # The equalizing point carries the vanishing-reference limits itself, and clamping resolves
+    # them when the feasible interval has a finite endpoint. Only an unresolved NaN or unbounded
+    # target reaches the fallback.
+    rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
     if !(isfinite(rho1) && rho1 > 0)
         g = sqrt(lo * hi)
         rho1 = clamp((isfinite(g) && g > 0) ? g : sqrt(c12), lo, hi)
@@ -442,6 +436,24 @@ function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
     )
 end
 
+"""
+    worst_severity(severity::AbstractArray) -> (s, idx)
+
+Largest entry of `severity` and where it occurs, treating `NaN` as passing.
+
+Checks over a whole array score every entry and reduce, rather than testing entries in turn and
+raising at the first failure: the score is an array computation and only its reduction is
+inspected, so the decision to raise is taken once, by the caller, on a single scalar. Each caller
+normalizes its `severity` so that entries `<= 1` pass, which also makes the reported number the
+factor by which the worst entry misses. A `NaN` entry comes from a vacuous comparison — zero
+against zero — and scores as `0`.
+"""
+function worst_severity(severity::AbstractArray)
+    finite = map(s -> ifelse(isnan(s), zero(s), s), severity)
+    idx = argmax(finite)
+    return finite[idx], idx
+end
+
 function local_cover_slots(
         rule::SplitRule, t::Tape{T}, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
@@ -606,21 +618,19 @@ function cover_hessian(
     if check
         # These two computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(T)))^(3 // 4)
-        for q in 1:n
-            denom = max(abs(h_sum[q]), one(T))
-            abs(h_sum[q] - h_sum_rev[q]) <= rtol * denom ||
-                error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
-        end
+        # Relative disagreement in units of the tolerance, so `> 1` is a mismatch.
+        disagreement(x, y) = @. abs(x - y) / (rtol * max(abs(x), one(T)))
+        s, q = worst_severity(disagreement(h_sum, h_sum_rev))
+        s > 1 &&
+            error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         # local_covers already checked the node invariants.
         pr = cover_hessian(CoverOnly(), t, outidx; check = false, rule)
-        for q in 1:n
-            gdenom = max(abs(vbar[q]), one(T))
-            abs(vbar[q] - pr.grad[q]) <= rtol * gdenom ||
-                error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-            hdenom = max(abs(h_sum[q]), one(T))
-            abs(h_sum[q] - pr.h_sum[q]) <= rtol * hdenom ||
-                error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
-        end
+        s, q = worst_severity(disagreement(view(vbar, 1:n), pr.grad))
+        s > 1 &&
+            error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
+        s, q = worst_severity(disagreement(h_sum, pr.h_sum))
+        s > 1 &&
+            error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
     end
 
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
