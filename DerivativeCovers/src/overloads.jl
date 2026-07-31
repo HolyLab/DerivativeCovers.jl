@@ -16,6 +16,13 @@ Base.broadcastable(x::CoverVar) = Ref(x)
 adjoint(x::CoverVar) = x
 transpose(x::CoverVar) = x
 
+# `dot` of two real scalars is their product. LinearAlgebra states that only for `Number`s, which
+# a CoverVar deliberately is not, leaving the fallback that iterates its arguments. Containers
+# that reduce a vector `dot` to a scalar one -- static arrays among them -- land here.
+dot(x::CoverVar, y::CoverVar) = x * y
+dot(x::CoverVar, y::Real) = x * y
+dot(x::Real, y::CoverVar) = x * y
+
 # --- constant folding --------------------------------------------------------------------------
 # Constants have no node. `unfold` exposes their values before dispatch; `fold` wraps a
 # constant-only result back into the backend so heterogeneous numeric code remains type-stable.
@@ -282,6 +289,23 @@ end
 *(W::AbstractTriangular{<:CoverVar}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
 *(W::AbstractTriangular{<:CoverVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
 *(W::AbstractTriangular{<:Real}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+
+# Resolve dispatch ties with StaticArrays' products. Those methods are as specific about the
+# container as the ones above are about the element type, so neither side wins on a static
+# operand and each combination needs naming. What they record is what the dynamic containers
+# record: one node per output entry.
+*(W::StaticMatrix{<:Any, <:Any, <:CoverVar}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+*(W::StaticMatrix{<:Any, <:Any, <:Real}, x::AbstractVector{<:CoverVar}) = matvecnodes(W, x)
+*(W::StaticMatrix{<:Any, <:Any, <:CoverVar}, x::AbstractVector{<:Real}) = matvecnodes(W, x)
+*(W::StaticMatrix{<:Any, <:Any, <:CoverVar}, x::StaticVector{<:Any, <:CoverVar}) =
+    matvecnodes(W, x)
+*(W::StaticMatrix{<:Any, <:Any, <:Real}, x::StaticVector{<:Any, <:CoverVar}) = matvecnodes(W, x)
+*(W::StaticMatrix{<:Any, <:Any, <:CoverVar}, x::StaticVector{<:Any, <:Real}) = matvecnodes(W, x)
+
+*(W::Diagonal{<:CoverVar, <:StaticVector}, x::StaticVector{<:Any, <:CoverVar}) =
+    diagvecnodes(W, x)
+*(W::Diagonal{<:CoverVar, <:StaticVector}, x::StaticVector{<:Any, <:Real}) = diagvecnodes(W, x)
+*(W::Diagonal{<:Real, <:StaticVector}, x::StaticVector{<:Any, <:CoverVar}) = diagvecnodes(W, x)
 
 # Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
 # per output row. `mul!` is the only route to it. A `*` method of its own would tie with

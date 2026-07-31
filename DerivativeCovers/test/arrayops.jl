@@ -365,6 +365,63 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
+
+        # StaticArrays' products are as specific about the container as the methods above are
+        # about the element type, so a static operand ties with them on either side and each
+        # combination needs naming. The tape must come out the same as the dense twin's.
+        @testset "static $name" for (name, f, fd, z0) in
+            [
+                (
+                    "matrix constant", z -> sum(abs2, SMatrix{3, 3}(M) * z),
+                    z -> sum(abs2, M * z), x0,
+                ),
+                (
+                    "matrix constant, vector static",
+                    z -> sum(abs2, SMatrix{3, 3}(M) * SVector{3}(z)),
+                    z -> sum(abs2, M * z), x0,
+                ),
+                (
+                    "matrix variable, vector constant", v -> sum(abs2, SMatrix{3, 3}(v) * x0),
+                    v -> sum(abs2, reshape(v, 3, 3) * x0), v0,
+                ),
+                (
+                    "matrix variable", v -> sum(abs2, SMatrix{3, 3}(v) * v[1:3]),
+                    v -> sum(abs2, reshape(v, 3, 3) * v[1:3]), v0,
+                ),
+                (
+                    "matrix variable, vector constant and static",
+                    v -> sum(abs2, SMatrix{3, 3}(v) * SVector{3}(x0)),
+                    v -> sum(abs2, reshape(v, 3, 3) * x0), v0,
+                ),
+                (
+                    "Diagonal constant", z -> sum(abs2, Diagonal(SVector{3}(c)) * SVector{3}(z)),
+                    z -> sum(abs2, Diagonal(c) * z), x0,
+                ),
+                (
+                    "Diagonal variable",
+                    v -> sum(abs2, Diagonal(SVector{3}(v[1:3])) * SVector{3}(v[4:6])),
+                    v -> sum(abs2, Diagonal(v[1:3]) * v[4:6]), [c; x0],
+                ),
+                (
+                    "Diagonal variable, vector constant",
+                    v -> sum(abs2, Diagonal(SVector{3}(v[1:3])) * SVector{3}(x0)),
+                    v -> sum(abs2, Diagonal(v[1:3]) * x0), [c; x0],
+                ),
+            ]
+            res = cover_hessian(WithDiagnostics(), f, z0)
+            @test res.grad ≈ ForwardDiff.gradient(fd, z0)
+            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
+        end
+
+        # A container that reduces its vector `dot` to a scalar one reaches the scalar method.
+        @testset "scalar dot" begin
+            t = Tape(x0)
+            z = [TVar(t, i) for i in 1:3]
+            @test value(dot(z[1], z[2])) == x0[1] * x0[2]
+            @test value(dot(z[1], 2.0)) == 2x0[1]
+            @test value(dot(2.0, z[1])) == 2x0[1]
+        end
     end
 
     @testset "mul! records what * records" begin

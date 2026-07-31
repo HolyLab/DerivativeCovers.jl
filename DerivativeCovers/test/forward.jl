@@ -98,7 +98,9 @@ const FORWARD_RTOL = 1.0e-12
         @test_throws "covers a scalar-valued program" forward_cover(x -> [x[1], x[2]], [1.0, 2.0])
         @test_throws "no inputs" forward_cover(x -> x, Float64[])
         # A constant carries no channels, so asking one for its cover names the reason.
-        @test_throws "carries no tangent or cover channel" forward_cover(FVar{Float64, ValueSplit}(1.0))
+        @test_throws "carries no tangent or cover channel" forward_cover(
+            FVar{Float64, ValueSplit, Vector{Float64}}(1.0)
+        )
         # A declared sub-map belongs to recording; the propagation says so rather than
         # presenting a bare MethodError from an elemental it has no method for.
         @test_throws "available while recording" forward_cover(
@@ -133,5 +135,43 @@ const FORWARD_RTOL = 1.0e-12
     # declaration is pinned alongside every other entry point's, in `genericaxes.jl`.
     @testset "an integer starting point floats" begin
         @test forward_cover(x -> x[1] * x[2], [1, 2]) isa ForwardCover{Float64}
+    end
+
+    @testset "a static starting point propagates in static channels" begin
+        # The channel storage is whatever the point is made of. The two storages run the same
+        # recursions, so they agree to roundoff and differ only in what they allocate.
+        @testset "$name" for (name, f, x0) in FORWARD_FIXTURES
+            fs = forward_cover(f, SVector{length(x0)}(x0))
+            fd = forward_cover(f, x0)
+            @test fs.grad ≈ fd.grad rtol = FORWARD_RTOL
+            @test fs.h_quad ≈ fd.h_quad rtol = FORWARD_RTOL
+            @test fs.h_quad isa SVector{length(x0), Float64}
+        end
+
+        f = x -> exp(x[1]) + x[1] * x[2]^2
+        @test forward_cover(f, SVector(0.5, 2.0); rule = ValueSplit()).h_quad ≈
+            forward_cover(f, [0.5, 2.0]; rule = ValueSplit()).h_quad rtol = FORWARD_RTOL
+        @test forward_cover(f, SVector(0.5f0, 2.0f0)) isa ForwardCover{Float32}
+        @test forward_cover(x -> x[1] * x[2], SVector(1, 2)) isa ForwardCover{Float64}
+
+        # Constants carry no channels and so need none of the storage, whichever it is.
+        g = x -> (c = zero(eltype(x)); (x[1] + c) * one(eltype(x)) * (x[2] + 2))
+        @test forward_cover(g, SVector(0.7, -1.3)).h_quad ≈
+            forward_cover(g, [0.7, -1.3]).h_quad rtol = FORWARD_RTOL
+
+        # Static channels live in the variables themselves, so a propagation allocates a fixed
+        # amount however long the program is. Two chains differing only in length pin that.
+        function chain(L)
+            return function (x)
+                v = x[1]
+                for _ in 1:L
+                    v = tanh(v) + 0.5 * x[2]
+                end
+                return v
+            end
+        end
+        alloc(f, x0) = (forward_cover(f, x0); @allocated forward_cover(f, x0))
+        x0 = SVector(0.3, 0.2)
+        @test alloc(chain(100), x0) == alloc(chain(400), x0)
     end
 end

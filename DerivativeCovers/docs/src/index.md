@@ -150,6 +150,11 @@ sign is discarded, because a forward pass cannot know how the output depends on 
 variable. This corner is *incomparable* with the result from [`cover_hessian`](@ref), which keeps
 adjoint signs and discards tangent signs. Which result is tighter depends on the program.
 
+The channels are stored in whatever the starting point is made of. Pass a `StaticVector` and they
+become static too, so no operation allocates and the whole propagation costs a fixed amount of
+memory however long the program is; pass a `Vector` and each operation allocates its channels. The
+static form is for a handful of inputs, since it compiles for the exact input count.
+
 ```@docs
 FVar
 forward_cover
