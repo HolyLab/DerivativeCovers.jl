@@ -100,7 +100,7 @@ include("genericaxes.jl")
                 :CoverOnly, :WithDiagnostics,
                 :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
                 :NLSDiagnostics, :VarianceCover,
-                :SplitRule, :ValueSplit, :SensitivitySplit,
+                :SplitRule, :ValueSplit, :SensitivitySplit, :VectorNormSplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
         )
@@ -648,6 +648,62 @@ include("genericaxes.jl")
             @test cover_ratio(H, nv.h) <= GATE
             @test cover_ratio(H, ns.h) <= GATE
         end
+
+        # VectorNormSplit satisfies the same covering chain on the whole battery.
+        @testset "VectorNormSplit covering chain — $name" for (name, f, x0) in PROBLEMS
+            H = ForwardDiff.hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0; rule = VectorNormSplit())
+            for h in (res.h_sum, res.h_quad)
+                @test all(>=(0), h)
+                @test rank1_ratio(res.B, h) <= GATE
+                @test cover_ratio(H, h) <= GATE
+            end
+            @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
+            @test cover_hybrid(f, x0, 1; rule = VectorNormSplit()) ≈ res.h_sum rtol = 1.0e-12
+        end
+
+        # A tangent norm is a scale reference at the zero-zero product where a value is not: both
+        # tangents are unit basis vectors there and stay so under perturbation, where the value
+        # ratio swings by the 4:1 of `xp`.
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
+
+        # It minimizes the quadrature objective `sum(h_quad.^2)` over the split family. The two
+        # operands here have tangents of different shape -- `[1,1,1,1]` against `[3,0,0,0]` -- so
+        # the 1-norm and the 2-norm rank them differently and the rules separate. One product node
+        # carries the whole Hessian, so the per-node optimum is the cover's.
+        fshape = x -> (x[1] + x[2] + x[3] + x[4]) * (3 * x[1])
+        xshape = [0.3, -0.7, 1.1, 0.5]
+        objective(rule) = sum(abs2, cover_hessian(WithDiagnostics(), fshape, xshape; rule).h_quad)
+        # Sweeping SensitivitySplit's weights sweeps the scale ratio, hence the split family.
+        family = minimum(
+            objective(SensitivitySplit([a, b, b, b]))
+                for a in exp10.(-3:0.25:3), b in exp10.(-3:0.25:3)
+        )
+        @test objective(VectorNormSplit()) <= family
+        @test objective(VectorNormSplit()) < objective(ValueSplit())
+        @test objective(VectorNormSplit()) < objective(SensitivitySplit())
+
+        # A zero tangent norm certifies nothing: a tangent can cancel at a point while the
+        # gradient stays live, so unlike SensitivitySplit this rule marks no slot dead.
+        @test !DerivativeCovers.certifies_dead(VectorNormSplit())
+        resn = cover_hessian(WithDiagnostics(), fdead, xd; rule = VectorNormSplit())
+        @test cover_ratio(Hd, resn.h_sum) <= GATE
+
+        # Input covariance holds when the weights transport as the squares of the input scales,
+        # the norm being quadratic in the tangents where a sensitivity is linear.
+        resn2 = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = VectorNormSplit(w))
+        resn3 = cover_hessian(
+            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+            rule = VectorNormSplit(d .^ 2 .* w)
+        )
+        @test resn3.h_sum ≈ resn2.h_sum ./ d rtol = 1.0e-12
+        @test resn3.h_quad ≈ resn2.h_quad ./ d rtol = 1.0e-12
+
+        @test_throws "strictly positive" VectorNormSplit([1.0, 0.0])
+        @test_throws "strictly positive" VectorNormSplit([1.0, Inf])
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = VectorNormSplit([1.0]))
+        @test VectorNormSplit() === VectorNormSplit(nothing) === VectorNormSplit{Nothing}()
     end
 
     @testset "node levels and partitions" begin

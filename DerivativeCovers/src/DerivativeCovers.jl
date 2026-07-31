@@ -32,7 +32,7 @@ export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
 export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
 export NLSCover, NLSDiagnostics, VarianceCover
-export SplitRule, ValueSplit, SensitivitySplit
+export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,

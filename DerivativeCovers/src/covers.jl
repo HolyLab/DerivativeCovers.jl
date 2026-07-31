@@ -355,8 +355,9 @@ Policy for choosing among the valid rank-1 covers of a single tape node.
 
 Some 2×2 second-derivative blocks admit a one-parameter family of covers. A `SplitRule` supplies
 the scale used to choose one member of that family. The built-in rules are [`ValueSplit`](@ref),
-the default, and [`SensitivitySplit`](@ref). Pass a rule with the `rule` keyword to cover
-functions. The choice can affect tightness, but not validity.
+the default, [`SensitivitySplit`](@ref), which minimizes the sum merge, and
+[`VectorNormSplit`](@ref), which minimizes the quadrature merge. Pass a rule with the `rule`
+keyword to cover functions. The choice can affect tightness, but not validity.
 """
 abstract type SplitRule end
 
@@ -424,6 +425,59 @@ SensitivitySplit{W}() where {W} = SensitivitySplit{W}(nothing)
 SensitivitySplit() = SensitivitySplit(nothing)
 
 """
+    VectorNormSplit(w=nothing)
+
+The [`SplitRule`](@ref) whose scale references are tangent norms:
+`z_j = sqrt(sum_a w[a] * (∂v_j/∂x_a)^2)`, the `w`-weighted 2-norm of the signed tangent
+`∇v_j` (see [`tangents`](@ref)). `w = nothing` means unit weights; otherwise `w` must hold one
+strictly positive finite entry per input.
+
+The split equalizes `rho1*z_1 == rho2*z_2`, clamped to the feasible segment. This is the exact
+minimizer of the weighted quadrature objective `sum_a w[a]*t[a]^2` over an atom's cover vector
+`t = rho1*u_1 + rho2*u_2`: with `rho1*rho2` fixed by the block, the cross term is fixed too and
+`rho1^2*z_1^2 + rho2^2*z_2^2` is smallest where the two agree. So this rule is to the quadrature
+merge what [`SensitivitySplit`](@ref) is to the sum merge, and `w` states *which* cover it
+optimizes rather than tuning anything. The downstream weight a node's atoms receive is a common
+factor and cannot affect the choice.
+
+Two consequences distinguish it from the value-based default. A vanishing operand does not make
+the split singular: `rho1*z_1 = sqrt(c12*z_1*z_2)` vanishes continuously with either tangent,
+where [`ValueSplit`](@ref) has only the ratio of two zero values to go on. And a zero scale
+certifies nothing — a tangent can cancel to zero at a point without the gradient vanishing
+identically — so [`certifies_dead`](@ref) is `false` here, as it is for `ValueSplit`.
+
+Covariance: under a rescaling of the intermediate variables the norms transform exactly as the
+values do, so the covariance argument of [`balanced_split`](@ref) applies unchanged. A norm mixes
+differently scaled input slots, so under an input rescaling `x -> D*x` the covers remain exactly
+covariant when the weights are rescaled as `w -> D^2*w`; with `w` held fixed (the unit default
+included) the *choice* of split — never its validity — depends on the units the inputs are
+expressed in.
+
+Cost: the tangents themselves, `O(n*L)` time and memory for `n` inputs. That is the diagnostic
+tier, well above the `O(L)` of the other two rules, and it is the price of a scale reference that
+sees whole vectors rather than one number per node. A forward propagation carries the tangents
+already and pays nothing extra.
+"""
+struct VectorNormSplit{W} <: SplitRule
+    w::W
+
+    function VectorNormSplit{W}(w) where {W}
+        w === nothing || all(wi -> isfinite(wi) && wi > 0, w) ||
+            throw(
+            ArgumentError(
+                "VectorNormSplit weights must be strictly positive and finite: " *
+                    "a zero weight could blank a live slot's scale and send the " *
+                    "split to its fallback"
+            )
+        )
+        return new{W}(w)
+    end
+end
+VectorNormSplit(w) = VectorNormSplit{typeof(w)}(w)
+VectorNormSplit{W}() where {W} = VectorNormSplit{W}(nothing)
+VectorNormSplit() = VectorNormSplit(nothing)
+
+"""
     certifies_dead(rule::SplitRule) -> Bool
 
 Whether a zero scale reference from `rule` certifies that the slot's total gradient vanishes
@@ -435,6 +489,7 @@ With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must 
 """
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
+certifies_dead(::VectorNormSplit) = false
 
 # Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
 struct AbsValues{T} <: AbstractVector{T}
@@ -459,7 +514,8 @@ Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
 
 The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): a lazy view of
 `abs.(t.vals)` for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input
-weights for [`SensitivitySplit`](@ref). Obtained once per cover sweep and shared by every node.
+weights for [`SensitivitySplit`](@ref), the weighted norms of [`tangents`](@ref) for
+[`VectorNormSplit`](@ref). Obtained once per cover sweep and shared by every node.
 """
 split_scales(::ValueSplit, t::Tape) = AbsValues(t.vals)
 
@@ -475,6 +531,16 @@ function split_scales(rule::SensitivitySplit, t::Tape{T}) where {T}
         copyto!(view(theta, 1:t.ninputs), w)
     end
     return abs_forward(t, theta)
+end
+
+function split_scales(rule::VectorNormSplit, t::Tape{T}) where {T}
+    u = tangents(t)
+    w = rule.w
+    w === nothing && return T[norm(uk) for uk in u]
+    Base.require_one_based_indexing(w)
+    length(w) == t.ninputs ||
+        throw(DimensionMismatch("VectorNormSplit weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
+    return T[sqrt(sum(w[a] * uk[a]^2 for a in 1:t.ninputs)) for uk in u]
 end
 
 """
