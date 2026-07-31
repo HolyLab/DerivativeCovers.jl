@@ -28,9 +28,10 @@ import MatrixCovers: support_components, gramcover, gramcover!
 # Main entry points and result types.
 export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
-export cover_hybrid, cover_jacobian_hybrid
+export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
-export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, NLSDiagnostics, VarianceCover
+export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
+export NLSCover, NLSDiagnostics, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 

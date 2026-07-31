@@ -44,6 +44,7 @@ include("composites.jl")
 include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
+include("lattice.jl")
 include("nls.jl")
 include("vectoroutput.jl")
 include("support.jl")
@@ -94,10 +95,10 @@ include("genericaxes.jl")
             [
                 :Tape, :TVar, :tape_function,
                 :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
-                :cover_hybrid, :cover_jacobian_hybrid,
+                :cover_hybrid, :cover_jacobian_hybrid, :cover_lattice,
                 :CoverOnly, :WithDiagnostics,
-                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :NLSDiagnostics,
-                :VarianceCover,
+                :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
+                :NLSDiagnostics, :VarianceCover,
                 :SplitRule, :ValueSplit, :SensitivitySplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
@@ -127,8 +128,8 @@ include("genericaxes.jl")
         # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
         private = (
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
-            :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
-            :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+            :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
+            :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
@@ -186,6 +187,7 @@ include("genericaxes.jl")
         results = (
             cover_hessian(f, x0),
             cover_hessian(WithDiagnostics(), f, x0),
+            cover_lattice(f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
@@ -199,9 +201,9 @@ include("genericaxes.jl")
                 @test length(s) < 100
             end
         end
-        @test sprint(show, results[3]) == "JacobianCover(2x3)"
-        @test sprint(show, results[4]) == "NLSCover(2 residuals, 3 inputs)"
-        @test sprint(show, results[5]) == "NLSDiagnostics(2 residuals, 3 inputs)"
+        @test sprint(show, results[4]) == "JacobianCover(2x3)"
+        @test sprint(show, results[5]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[6]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin

@@ -49,6 +49,51 @@ struct HessianDiagnostics{T}
 end
 
 """
+    CoverLattice{T}
+
+Covers of one Hessian computed with every combination of the two sign choices available to a
+cover construction, returned by [`cover_lattice`](@ref).
+
+Two channels feed the identity `H = sum_k vbar_k * sum_{i,j in P_k} C^k[i,j] * ∇v_i (∇v_j)'`:
+the tangents `∇v_j`, which carry an input's influence forward to each node, and the adjoints
+`vbar_k`, which carry the output's sensitivity back. Either can be propagated with signs or in
+absolute-value arithmetic. The absolute form is what a construction unable to see those signs
+must accept, and it costs tightness wherever the terms it merges would have cancelled.
+
+| tangent \\ adjoint        | signed `abs.(vbar)`             | absolute `acheck`                 |
+|:--------------------------|:--------------------------------|:----------------------------------|
+| absolute `utilde`         | `h_sum`, `h_quad`               | `h_sum_absadj`, `h_quad_absadj`   |
+| signed `abs.(∇v)`         | `h_sum_signed`, `h_quad_signed` | `h_sum_forward`, `h_quad_forward` |
+
+All eight vectors satisfy `abs.(H) <= h * h'`. The absolute-tangent, signed-adjoint corner is
+what [`cover_hessian`](@ref) computes. The signed-tangent, absolute-adjoint corner keeps every
+sign a forward pass can see and discards exactly those only a reverse sweep supplies, so it is
+the cover a single tapeless forward propagation reaches.
+
+- `grad`: gradient, read off the signed forward sweep at the output node.
+- `B`, `B_signed`: elementwise bounds satisfying `>= abs.(H)`, built from `utilde` and from
+  `abs.(∇v)` respectively. `B >= B_signed`, and the gap is the path cancellation the absolute
+  tangent channel discards.
+- `h_sum`, `h_quad`: sum and quadrature merges over the four channel pairings, named per the
+  table above.
+
+Forming these costs `O(n * L)` time and `O(n^2)` memory.
+"""
+struct CoverLattice{T}
+    grad::Vector{T}
+    B::Matrix{T}
+    B_signed::Matrix{T}
+    h_sum::Vector{T}
+    h_quad::Vector{T}
+    h_sum_absadj::Vector{T}
+    h_quad_absadj::Vector{T}
+    h_sum_signed::Vector{T}
+    h_quad_signed::Vector{T}
+    h_sum_forward::Vector{T}
+    h_quad_forward::Vector{T}
+end
+
+"""
     adjoints(t::Tape, outidx::Integer) -> vbar
 
 Reverse-mode adjoints `vbar[k] = ∂v_outidx/∂v_k` for every node of `t`. The gradient of the
@@ -128,6 +173,79 @@ function sensitivities(t::Tape{T}) where {T}
         end
     end
     return utilde
+end
+
+"""
+    tangents(t::Tape) -> u
+
+Forward signed tangents: `u[k][a] = ∂v_k/∂x_a`, obtained by propagating
+`u[k] = sum_{i in P_k} (∂φ_k/∂v_i) * u[i]` from `u[x_a] = e_a`.
+
+The signed twin of [`sensitivities`](@ref), which runs the same recursion in absolute-value
+arithmetic and so returns a bound `utilde >= abs.(u)` rather than the derivatives themselves. The
+gap between the two is the cancellation that occurs along paths from an input to a node.
+
+Costs `O(n * L)` time and memory. Only first partials enter, so a declared sub-map node (see
+[`submapnode`](@ref)) propagates exactly like any other.
+"""
+function tangents(t::Tape{T}) where {T}
+    n, N = t.ninputs, nnodes(t)
+    u = [zeros(T, n) for _ in 1:N]
+    for a in 1:n
+        u[a][a] = 1
+    end
+    for k in (n + 1):N
+        uk = u[k]
+        for (i, p) in enumerate(t.parents[k])
+            d = t.ds[k][i]
+            d == 0 && continue
+            up = u[p]
+            for q in 1:n
+                uk[q] += d * up[q]
+            end
+        end
+    end
+    return u
+end
+
+"""
+    merge_atoms(t::Tape, rhos, u) -> (h_sum, h_quad)
+
+Both merges of the cover atoms, from per-node cover slots `rhos` and a tangent channel `u`. An
+atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and the merges are
+`h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
+
+`u[j]` must be nonnegative and dominate `abs.(∇v_j)` entrywise for the results to cover; both
+[`sensitivities`](@ref) and the magnitudes of [`tangents`](@ref) qualify. Which slots share an
+atom comes from [`atom_slots`](@ref), and the loop depends on its partitioning the slots: a slot
+in no atom would lose its contribution, one named twice would be counted twice.
+
+Costs `O(n * L)` time and `O(n)` memory beyond `u`.
+"""
+function merge_atoms(t::Tape{T}, rhos::AbstractVector, u::AbstractVector) where {T}
+    n, N = t.ninputs, nnodes(t)
+    ssum = zeros(T, n)          # sum_k s_k
+    ssq = zeros(T, n)           # sum over atoms of s_atom.^2
+    sk = zeros(T, n)
+    for k in (n + 1):N
+        rho = rhos[k]
+        isempty(rho) && continue
+        ps = t.parents[k]
+        for atom in atom_slots(t.Cs[k], length(ps))
+            fill!(sk, 0)
+            for i in atom
+                up = u[ps[i]]
+                for q in 1:n
+                    sk[q] += rho[i] * up[q]
+                end
+            end
+            for q in 1:n
+                ssum[q] += sk[q]
+                ssq[q] += sk[q]^2
+            end
+        end
+    end
+    return ssum, sqrt.(ssq)
 end
 
 """
@@ -584,35 +702,13 @@ function cover_hessian(
         ::WithDiagnostics, t::Tape{T}, outidx::Integer; check::Bool = true,
         rule::SplitRule = ValueSplit()
     ) where {T}
-    n, N = t.ninputs, nnodes(t)
+    n = t.ninputs
     vbar = adjoints(t, outidx)
     utilde = sensitivities(t)
     B = hessian_bound(t, vbar, utilde)
     rhos, theta = local_covers(t, vbar; check, rule)
 
-    ssum = zeros(T, n)          # sum_k s_k
-    ssq = zeros(T, n)           # sum over atoms of s_atom.^2
-    sk = zeros(T, n)
-    for k in (n + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
-        ps = t.parents[k]
-        for atom in atom_slots(t.Cs[k], length(ps))
-            fill!(sk, 0)
-            for i in atom
-                up = utilde[ps[i]]
-                for q in 1:n
-                    sk[q] += rho[i] * up[q]
-                end
-            end
-            for q in 1:n
-                ssum[q] += sk[q]
-                ssq[q] += sk[q]^2
-            end
-        end
-    end
-    h_sum = ssum
-    h_quad = sqrt.(ssq)
+    h_sum, h_quad = merge_atoms(t, rhos, utilde)
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
@@ -676,3 +772,115 @@ cover_hessian(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = Va
     cover_hessian(CoverOnly(), t, outidx; check, rule)
 cover_hessian(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit()) =
     cover_hessian(CoverOnly(), f, x0; check, rule)
+
+"""
+    cover_lattice(t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
+    cover_lattice(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
+
+Compute the same Hessian cover four ways, once for each combination of a signed or absolute
+tangent channel with a signed or absolute adjoint channel, and return them in a
+[`CoverLattice`](@ref).
+
+Each channel is a place where the construction may discard signs. The tangent channel is either
+the exact derivatives from [`tangents`](@ref) or their absolute-value bound from
+[`sensitivities`](@ref); the adjoint channel is either `abs.(vbar)` from [`adjoints`](@ref) or
+the unsigned `acheck = abs_reverse(t, e_outidx)`, whose entry `acheck[k]` sums `prod(abs(∂φ/∂v))`
+over every path from `k` to the output and therefore satisfies `acheck >= abs.(vbar)`.
+
+An absolute channel bounds the exact one wherever it cancels, so replacing a signed channel by
+its absolute twin can only inflate the cover. That orders the corners: `h_sum_signed` and
+`h_quad_signed` are the smallest, `h_sum_absadj` and `h_quad_absadj` the largest, and the two
+mixed corners fall between them but are incomparable with each other. The ordering in the adjoint
+channel relies on the split rule scaling with the local matrix, which [`ValueSplit`](@ref) and
+[`SensitivitySplit`](@ref) both do; a rule sensitive to the absolute scale of that matrix would
+still give covers, but not ordered ones.
+
+Cost is `O(n * L)` time and `O(n^2)` memory: two forward channels, two elementwise bounds, and
+four merges, each of that order. This is a diagnostic — it measures what each sign channel is
+worth on a given program, which the `O(L)` production sweeps cannot report.
+
+`rule` selects the [`SplitRule`](@ref); `check` verifies the local covering conditions and that
+the forward and reverse sweeps agree on the gradient and on the sum merge.
+
+# Examples
+
+```jldoctest
+julia> f(x) = (d = sin(x[1]) - x[1]; u = d * x[2]; exp(u) - u);
+
+julia> lat = cover_lattice(f, [0.7, 1.3]);
+
+julia> round.(lat.h_quad; digits=4)          # the corner `cover_hessian` computes
+2-element Vector{Float64}:
+ 3.1673
+ 0.0768
+
+julia> round.(lat.h_quad_signed; digits=4)   # keeping the tangent signs as well
+2-element Vector{Float64}:
+ 0.4854
+ 0.0768
+
+julia> all(lat.h_quad_signed .<= lat.h_quad)
+true
+```
+"""
+function cover_lattice(
+        t::Tape{T}, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit()
+    ) where {T}
+    n, N = t.ninputs, nnodes(t)
+
+    vbar = adjoints(t, outidx)
+    # Seeded at the output alone and carrying no rho weights, the absolute reverse sweep returns
+    # the path sum that abs.(vbar) would equal if no adjoint path cancelled.
+    seed = zeros(T, N)
+    seed[outidx] = 1
+    acheck = abs_reverse(t, seed)
+
+    utilde = sensitivities(t)
+    # The signed tangent channel: signed while the gradient is read off, magnitudes thereafter,
+    # since only magnitudes enter the elementwise bound and the atoms. Reducing in place holds
+    # this channel to a single `n * L` array.
+    w = tangents(t)
+    grad = copy(w[outidx])
+    for g in w
+        map!(abs, g, g)
+    end
+
+    B = hessian_bound(t, vbar, utilde)
+    B_signed = hessian_bound(t, vbar, w)
+
+    rhos_signed, theta = local_covers(t, vbar; check, rule)
+    rhos_abs, _ = local_covers(t, acheck; check, rule)
+
+    h_sum, h_quad = merge_atoms(t, rhos_signed, utilde)
+    h_sum_absadj, h_quad_absadj = merge_atoms(t, rhos_abs, utilde)
+    h_sum_signed, h_quad_signed = merge_atoms(t, rhos_signed, w)
+    h_sum_forward, h_quad_forward = merge_atoms(t, rhos_abs, w)
+
+    if check
+        rtol = eps(float(real(T)))^(3 // 4)
+        # The forward and reverse gradients accumulate the same path sums in opposite orders, so
+        # their roundoff scales with the size of the terms rather than of the result: a coordinate
+        # that cancels to zero still absorbs the error of the largest path reaching it. That
+        # scale is `utilde[outidx]`, floored at one to keep the comparison absolute near zero.
+        gscale = utilde[outidx]
+        grad_rev = view(vbar, 1:n)
+        s, q = worst_severity(@. abs(grad - grad_rev) / (rtol * max(gscale, one(T))))
+        s > 1 &&
+            error("forward-sweep gradient mismatch at input $q: forward=$(grad[q]) reverse=$(vbar[q])")
+        # These two share most operations, so their roundoff errors are correlated.
+        h_sum_rev = abs_reverse(t, theta)[1:n]
+        s, q = worst_severity(@. abs(h_sum - h_sum_rev) / (rtol * max(h_sum, one(T))))
+        s > 1 &&
+            error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
+    end
+
+    return CoverLattice(
+        grad, B, B_signed, h_sum, h_quad, h_sum_absadj, h_quad_absadj,
+        h_sum_signed, h_quad_signed, h_sum_forward, h_quad_forward
+    )
+end
+
+function cover_lattice(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit())
+    t, outidx = tape_function(f, x0)
+    return cover_lattice(t, outidx; check, rule)
+end

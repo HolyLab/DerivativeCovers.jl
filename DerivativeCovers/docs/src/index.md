@@ -93,6 +93,31 @@ julia> round(DerivativeCovers.cover_ratio(d.B, d.h_sum); digits=4)
 Diagnostics cost `O(n * L)` time and `O(n^2)` memory because they form an explicit matrix.
 They are therefore opt-in.
 
+A cover loses tightness wherever it propagates in absolute-value arithmetic a quantity that would
+have cancelled with signs. Two channels do so: the tangents carrying an input's influence forward,
+and the adjoints carrying the output's sensitivity back. [`cover_lattice`](@ref) computes the
+cover with all four combinations of signed and absolute channels, so each one's cost on a given
+program can be read off separately:
+
+```jldoctest
+julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
+
+julia> lat = cover_lattice(g, [0.4, 1.5]);
+
+julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)   # what the tangent signs buy
+2-element Vector{Float64}:
+ 0.222
+ 1.0
+
+julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)   # what the adjoint signs buy
+2-element Vector{Float64}:
+ 0.362
+ 0.364
+```
+
+Here `d` cancels along the two paths from `x[1]`, and `u` reaches the output through arms of
+opposite adjoint sign, so both channels have something to lose.
+
 The [Diagnostics](@ref) module can perturb a cover in controlled ways and measure the effect on
 downstream computations. The companion `DerivativeCoverProblems` package provides the
 [Problem families](@ref) used in these experiments.
@@ -123,6 +148,7 @@ cover_nls
 cover_variance
 cover_hybrid
 cover_jacobian_hybrid
+cover_lattice
 ```
 
 ## Selecting what `cover_hessian` and `cover_nls` return
@@ -137,6 +163,7 @@ WithDiagnostics
 ```@docs
 HessianCover
 HessianDiagnostics
+CoverLattice
 JacobianCover
 NLSCover
 NLSDiagnostics
