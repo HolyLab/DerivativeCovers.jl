@@ -5,9 +5,9 @@ _ratio_type(A, B) = typeof(float(one(eltype(A)) / one(eltype(B))))
 """
     cover_ratio(H, h) -> r
 
-Worst-case ratio `max_ij abs(H[i,j]) / (h[i]*h[j])` over the nonzero entries of `H`. `h` is a
-valid cover of `H` exactly when `r <= 1`. Zero entries of `H` constrain nothing and are skipped;
-a nonzero entry over a vanishing `h[i]*h[j]` gives `Inf`.
+The worst-case ratio `max_ij abs(H[i,j]) / (h[i]*h[j])` over the nonzero entries of `H`. The vector
+`h` covers `H` exactly when `r <= 1`. Zero entries of `H` impose no constraints and are skipped; a
+nonzero entry with a zero denominator gives `Inf`.
 """
 function cover_ratio(H::AbstractMatrix, h::AbstractVector)
     axes(H, 1) == axes(H, 2) == axes(h, 1) ||
@@ -25,8 +25,8 @@ end
 """
     bound_ratio(H, B) -> r
 
-Worst-case ratio `max_ij abs(H[i,j]) / B[i,j]` over the nonzero entries of `H`. The elementwise
-bound holds, `B >= abs.(H)`, exactly when `r <= 1`.
+The worst-case ratio `max_ij abs(H[i,j]) / B[i,j]` over the nonzero entries of `H`. The elementwise
+bound `B >= abs.(H)` holds exactly when `r <= 1`.
 """
 function bound_ratio(H::AbstractMatrix, B::AbstractMatrix)
     axes(H) == axes(B) ||
@@ -43,8 +43,8 @@ end
 """
     rank1_ratio(B, h) -> r
 
-Worst-case ratio `max_ij B[i,j] / (h[i]*h[j])` over the nonzero entries of `B`. The rank-1 cover
-dominates the elementwise bound, `h*h' >= B`, exactly when `r <= 1`.
+The worst-case ratio `max_ij B[i,j] / (h[i]*h[j])` over the nonzero entries of `B`. The rank-1
+cover `h*h'` dominates the elementwise bound `B` exactly when `r <= 1`.
 """
 function rank1_ratio(B::AbstractMatrix, h::AbstractVector)
     axes(B, 1) == axes(B, 2) == axes(h, 1) ||
@@ -63,9 +63,9 @@ end
 
 Compare a cover `h` against a reference cover `href`, coordinate by coordinate. `max` and
 `geomean` summarize the profile `h[i]/href[i]` over the coordinates where `href` is positive;
-`nextra` counts the coordinates the reference leaves at zero but `h` does not, which are pure
-looseness and have no finite ratio. Both summaries are `NaN` when the reference is everywhere
-zero.
+`nextra` counts coordinates where the reference is zero but `h` is not. These coordinates
+represent pure looseness and have no finite ratio. Both summaries are `NaN` when the reference is
+zero everywhere.
 
 The full per-coordinate profile `h ./ href` is the anisotropy view: a single scalar hides
 whether looseness is spread evenly or concentrated on a few coordinates.

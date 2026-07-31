@@ -21,6 +21,21 @@ function Base.show(io::IO, ::MIME"text/plain", x::TVar)
     end
 end
 
+Base.show(io::IO, x::FVar) = print(io, "FVar(", x.val, ")")
+
+function Base.show(io::IO, ::MIME"text/plain", x::FVar)
+    return if isconstant(x)
+        print(io, "FVar: ", x.val, " (constant)")
+    else
+        print(io, "FVar: ", x.val, " (", length(channels(x).g), " inputs)")
+    end
+end
+
+Base.show(io::IO, c::ForwardCover) = print(io, "ForwardCover(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::ForwardCover) =
+    print(io, "ForwardCover: ", length(c.grad), " inputs; grad, h_quad")
+
 Base.show(io::IO, c::HessianCover) = print(io, "HessianCover(", length(c.grad), " inputs)")
 
 Base.show(io::IO, ::MIME"text/plain", c::HessianCover) =
@@ -33,6 +48,14 @@ Base.show(io::IO, ::MIME"text/plain", c::HessianDiagnostics) =
     print(
     io, "HessianDiagnostics: ", length(c.grad),
     " inputs; grad, B, h_sum, h_quad, h_sum_rev"
+)
+
+Base.show(io::IO, c::CoverLattice) = print(io, "CoverLattice(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::CoverLattice) =
+    print(
+    io, "CoverLattice: ", length(c.grad),
+    " inputs; grad, B, B_signed, and h_sum/h_quad in four sign channels"
 )
 
 Base.show(io::IO, c::JacobianCover) = print(io, "JacobianCover(", c.m, "x", c.n, ")")

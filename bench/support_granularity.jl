@@ -110,7 +110,7 @@ end
 function fixture_table(fixtures)
     @printf(
         "%-24s %6s %6s %11s %9s %11s %11s %7s\n",
-        "fixture", "nodes", "live", "ncomp v/s", "dead v/s", "gram value", "gram struct", "ratio"
+        "case", "nodes", "live", "ncomp v/s", "dead v/s", "gram value", "gram struct", "ratio"
     )
     for (name, f, x0) in fixtures
         g = granularity(f, x0)

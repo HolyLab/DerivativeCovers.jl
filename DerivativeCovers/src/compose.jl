@@ -128,7 +128,7 @@ function declare_submap(F, x0::AbstractVector; rule::SplitRule = ValueSplit())
 end
 
 """
-    submap(F, xs::AbstractVector{<:TVar}; rule=ValueSplit()) -> Vector{TVar}
+    submap(F, xs::AbstractVector{<:CoverVar}; rule=ValueSplit()) -> Vector{<:CoverVar}
 
 Record `F` as a single declared call on the tape of `xs`: evaluate [`declare_submap`](@ref) at
 the parent values and embed the result via [`submapnode`](@ref). The recording tape gains one
@@ -141,7 +141,7 @@ The declaration it embeds is dense in the sub-map's outputs and arguments, so th
 tape on one tape at diagnostic tier. [`compose_jacobian_cover`](@ref) and
 [`compose_hessian_cover`](@ref) cover the same composite from covers of the factors alone.
 """
-function submap(F, xs::AbstractVector{<:TVar}; rule::SplitRule = ValueSplit())
+function submap(F, xs::AbstractVector{<:CoverVar}; rule::SplitRule = ValueSplit())
     isempty(xs) && throw(ArgumentError("cannot record a sub-map call with no arguments"))
     d = declare_submap(F, [value(x) for x in xs]; rule)
     return submapnode(xs, d.y, d.J, d.S)

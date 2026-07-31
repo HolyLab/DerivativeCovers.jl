@@ -1,25 +1,33 @@
 # Cover-tightness measurements
 
-Scripts that measure how loose the covers are. Tightness, not run time. Symmetric covers are scored
-against a reference matrix from ForwardDiff — the Hessian, or the Gram matrix `J'*J` — where
-`1/cover_ratio(A, h)` is the factor by which a cover exceeds the largest true entry; a rank-1
-Jacobian pair is scored against the matrix it covers — the surrogate `Ũ` or the exact `J` — as
-*excess* `max_kj (a_k*b_j)/A_kj`. On both scales `1` is exact and larger is looser.
+These scripts measure cover tightness, not runtime. Symmetric covers are scored against a
+reference matrix from ForwardDiff—either the Hessian or the Gram matrix `J'*J`. The quantity
+`1/cover_ratio(A, h)` is the factor by which a cover exceeds the largest true entry. A rank-1
+Jacobian pair is scored against the matrix it covers—either the surrogate `Ũ` or the exact `J`—by
+the *excess* `max_kj (a_k*b_j)/A_kj`. On both scales, `1` is exact and larger values are looser.
 
-The environment is not registered. Point it at the working copies before the first run:
+The environment is not registered. `[sources]` points it at the two packages in this repository;
+MatrixCovers lives outside the repository, so supply that working copy before the first run:
 
 ```julia
 using Pkg
 Pkg.activate("bench")
-Pkg.develop([PackageSpec(path="DerivativeCovers"), PackageSpec(path=<path to MatrixCovers>)])
+Pkg.develop(PackageSpec(path=<path to MatrixCovers>))
+Pkg.instantiate()
 ```
+
+MatrixCovers is deliberately left out of `[sources]`. A URL there would let `instantiate` succeed
+on its own, but could silently measure a copy other than the one under development—defeating the
+purpose of these scripts. An unregistered-package error is preferable. Note that
+`[sources]` needs Julia 1.11 or later; on 1.10 it is ignored, and all three packages need the
+`develop`.
 
 ## `declaration_penalty.jl`
 
 Compares recording an array op two ways: decomposed into scalar elementals, or as a single
 [`submap`](../DerivativeCovers/src/compose.jl) node carrying an exact Jacobian and a *declared*
 curvature bound. The declaration is the only route available to an op whose within-operand
-curvature is a dense block larger than 2x2, so the comparison measures what the certified cover
+curvature is a dense block larger than 2×2, so the comparison measures what the certified cover
 vocabulary costs when an op falls outside it.
 
 Two channels move in opposite directions and the script separates them. Recording the op as one
@@ -42,8 +50,9 @@ Two controls run alongside the sweep:
 
 [`submapnode`](../DerivativeCovers/src/tape.jl) holds a dense `q x p` Jacobian and a dense `q x p`
 curvature bound, built by one adjoint sweep per output. A traced backend affords neither, so the
-production-shaped sub-map is a vjp closure plus a factored cover `(a, b, S)` — which the package
-already reaches through [`compose_jacobian_cover`](../DerivativeCovers/src/compose.jl) and
+representation intended for traced backends is a vjp closure plus a factored cover `(a, b, S)`,
+which the package already reaches through
+[`compose_jacobian_cover`](../DerivativeCovers/src/compose.jl) and
 `compose_hessian_cover`, with no joint tape and no dense `J`. The script scores three routes for
 one composite: the sub-map decomposed onto the outer tape, declared as `submap` nodes, and
 factored.
@@ -54,42 +63,46 @@ the factored pair is 9.6x looser than the declared one at `n = 8` and 37x at `n 
 below all three routes, so what the factored route gives up is the composition rule, not the rank-1
 form it produces.
 
-The penalty has a single source, and a linear head isolates it. A head linear in the sub-map's
+The penalty has a single source, and a linear outer function isolates it. An outer function linear in the sub-map's
 outputs has `∇²g = 0`, which deletes the `J'∇²g J` term from the chain rule and leaves only the
 declared curvature `S` — the bound both routes carry identically, and the two covers then agree to
-the last digit on every fixture. Everything else in the table is the price of bounding `J'∇²g J` by
+the last digit on every test case. Every other difference in the table comes from bounding
+`J'∇²g J` by
 `(a⋅hg)²*b*b'` instead of using `J`: 1.3x–43x on the sum merge, 1.1x–632x on quadrature.
 
 Quadrature suffers more because the factored route folds the whole first-order term into a single
 atom, which is what a declaration does to curvature. The two scripts therefore measure independent
-steps toward a production representation, and both are paid mostly in the quadrature merge.
+steps toward a representation suitable for traced backends; most of the resulting loss appears in
+the quadrature merge.
 
 ## `equilibration_rounds.jl`
 
-What the alternation in [`balance_cover`](../DerivativeCovers/src/jacobian.jl) costs and what it
-buys. The iteration is unbounded and data-dependent — it runs until the per-round product change
-falls below `rtol` and errors when it does not — so its round count belongs with any quoted cost.
+The cost and tightness improvement of the alternation in
+[`balance_cover`](../DerivativeCovers/src/jacobian.jl). The iteration is unbounded and
+data-dependent: it runs until the per-round product change falls below `rtol` and errors when it
+does not. Its round count therefore belongs with any quoted cost.
 Excess puts three references on one scale: the unbalanced pair (`a = ones`, one merge b-step), the
 balanced pair, and the exact rank-1 optimum from `jacobian_minimax`, with
 `jacobian_representability`'s 2-cycle bound alongside.
 
-The script reports four things. A per-fixture table over all six `(merge, arule)` combinations; a
-sweep of `rtol`, the only public handle on where the iteration stops; a survey of convergence
+The script reports four things: a table of all six `(merge, arule)` combinations for each test
+case; a sweep of `rtol`, the only public handle on where the iteration stops; a survey of convergence
 outcome and tightness over random sparse patterns at default settings; and minimal patterns for two
 of the failure modes.
 
 Balancing is an answer to *output-scale anisotropy* and to nothing else. Spreading a program's
 output scales over four decades moves the unbalanced excess by three orders of magnitude and leaves
-the balanced excess where it was, agreeing with the unspread fixture to 11 or more significant
+the balanced excess where it was, agreeing with the unspread case to 11 or more significant
 digits and differing by at most one round — the covariance the docstring claims, measured. So the
-whole benefit is the scaling it undoes: on the well-scaled fixture balancing buys 1.16x while
-switching the sum merge for the max merge buys 4.1x, and on the spread fixture balancing buys
-1220x. Against the exact optimum a balanced pair stays loose either way, 1.0x–5.1x here.
+whole benefit is the scaling it undoes: on the well-scaled case balancing improves tightness by
+1.16x, while switching the sum merge for the max merge improves it by 4.1x; on the spread case,
+balancing improves it by 1220x. Against the exact optimum a balanced pair stays loose either way,
+1.0x–5.1x here.
 
-Round count and tightness gain are not aligned. The dense fixtures converge in 2–12 rounds; the
+Round count and tightness gain are not aligned. The dense cases converge in 2–12 rounds; the
 banded chain needs over 2400 for the sum merge, overrunning the `:marginal` default of 1000, so
 `balance_cover` at its defaults — including the `SumMerge`/`:marginal` combination documented as
-the production path — fails outright on a 15-output program. The `rtol` sweep shows that cost to be
+the matrix-free path — fails outright on a 15-output program. The `rtol` sweep shows that cost to be
 avoidable: excess saturates decades of tolerance before `delta` does, and the curve need not be
 monotone, since the alternation optimizes its fixed point rather than the excess.
 
@@ -108,12 +121,12 @@ regauging touches, and sampling its growth at doubling round counts separates th
 converging run's spread settles, a drifting one's grows by a constant per doubling (logarithmic
 drift) or doubles (geometric drift).
 
-That the reliable rule is `:geomean` is awkward, because it is the one that cannot be made cheap.
+The reliable rule, `:geomean`, is also the more expensive one.
 The tape form runs `O(L)` sweeps without forming `Ũ` only for `SumMerge`/`:marginal`; `:geomean`
 needs row sums of `log Ũ`, which no absolute-value sweep produces, so it must materialize the
 surrogate at `O(mL)` and then spend `O(mn)` per round. The gap widens with the output count —
 2.4x the allocations of the sweep path at `m = 10`, 93x at `m = 640` — which makes `:marginal` the
-only equilibration rule that can exist at production tier, and the fragile one.
+only equilibration rule compatible with the target `O(L)` cost, despite its convergence failures.
 
 ## `scalarization_sensitivity.jl`
 
@@ -133,6 +146,115 @@ since those counts are exact.
 A primitive that is linear carries no curvature and costs nothing either way, which is why the
 softmax and layernorm heads — whose reductions are linear — lose little under node granularity
 while `dot(z, A*z)/2` loses everything.
+
+## `sign_channels.jl`
+
+What each of a cover's two sign channels is worth. The tangents `∇v_j` carry an input's influence
+forward to each node, the adjoints `vbar_k` carry the output's sensitivity back, and either can be
+propagated with signs or in absolute-value arithmetic.
+[`cover_lattice`](../DerivativeCovers/src/covers.jl) computes all four combinations from one tape,
+so the looseness of the default cover splits into a tangent-side part, an adjoint-side part, and a
+residue neither channel reaches. The script scores the four corners on the
+`DerivativeCoverProblems` families and on array-op heads, decomposes the gap per coordinate, sweeps
+the reconvergence that creates it, and isolates the residue.
+
+**The two channels are not worth the same.** Keeping tangent signs shrinks the cover by a
+per-coordinate geometric mean of 2.47x on `deep w=4` and 1.70x on a two-layer MLP, while keeping
+adjoint signs improves it by 1.17x and 1.15x on the same programs. Discarding adjoint signs causes
+the smaller loss everywhere measured: the index `acheck_k/abs(vbar_k)` over curvature-carrying nodes has a
+geometric mean of 1.00–2.39 across the full set of test problems.
+
+That decides the question the lattice was built to answer. The signed-tangent, absolute-adjoint
+corner is exactly the cover a tapeless forward propagation reaches, and it is *not* dominated by
+the default cover: it is tighter on three of eleven test problems, by 2.0x on `deep w=4`, 1.6x on
+the layernorm head, and 1.2x on the MLP, and loses by 1.4x on the softmax head. Which side wins is
+a property of the program, as the incomparability of the two mixed corners predicts, and the
+tapeless corner wins where tangent cancellation is the larger of the two.
+
+**Reconvergence is the whole mechanism.** A program whose graph is a tree reaches each node from
+each input along one path, so no sign anywhere can cancel and all four corners coincide: at
+`sharing = 0` the median looseness is 1.001 in every column. Raising `random_dag`'s sharing over
+paired draws carries the adjoint gain from 1.000 to 1.224, rising at every step but one. The
+tangent gain shows no such trend, and the `atoms` column says why the endpoints are not
+size-matched — tree generation stops early, at a median 10 atoms against 45–49 above zero.
+
+Within the elementwise bound the same split appears on the `sqrt` scale a rank-1 cover lives on,
+and it tracks the merge closely: `within-path` reproduces the tangent gain to three digits on the
+test problems where curvature sits on one node per atom (2.465 on `deep w=4`, 1.700 on the MLP) and
+exceeds it where an array primitive holds several atoms in one node (1.420 against 1.386 on
+layernorm). Cross-elemental loss is the larger of the two everywhere but `deep w=4`, reaching 2.4x
+by geometric mean and 12.2x on a single coordinate.
+
+**No corner recovers cancellation between elementals.** The `cancellation` family builds programs
+whose two variants share every node value, every first partial, and every adjoint, and differ only
+in the sign of the constants multiplying two of each quartet's four squares. Both channels
+therefore have identical work to do in both variants, and the Hessian of the cancel variant
+collapses onto its rank-1 `delta` term. All four corners report the same looseness there, 91x at
+one quartet, 2212x at four, 37390x at sixteen. The triangle inequality across nodes discards those
+signs before any channel is chosen, so no amount of sign-keeping inside either channel touches
+them.
+
+Seven of eleven test problems show all four corners equal. Most have nothing to cancel—they are tree-shaped or
+carrying their whole Hessian on one quadratic node — but `dag shared` is not among those: its
+adjoint gain is 1.09x by geometric mean and 1.60x on its worst coordinate, and the corners
+nonetheless coincide because the entry that binds its cover is already exact. Channel gains are
+per-coordinate; looseness is the worst entry, and the two need not move together.
+
+## `split_rules.jl`
+
+What choosing a [`SplitRule`](../DerivativeCovers/src/covers.jl) is worth, scored in both tangent
+channels. Two of the three rules are exact optima of something — `SensitivitySplit` of the sum
+merge, `VectorNormSplit` of the quadrature merge — and `ValueSplit`, the default, of nothing: it is
+the default because parent values are the only scale reference an `O(L)` sweep already has, where a
+sensitivity costs an extra sweep and a tangent norm costs `O(n*L)`.
+
+**A per-node optimum is not a per-cover one, and the objective it optimizes is not the score.**
+`VectorNormSplit` minimizes `sum(h_quad.^2)` at each node separately. That is not the same as
+minimizing it over the cover — on `tointgss` a one-coordinate weight sweep finds a split whose
+objective is `0.136` of the norm split's, so the per-node optima of different nodes are not
+simultaneously achievable there. Nor is the objective the score: looseness is the *worst entry*,
+and the norm split wins that on `quadratic form` (1.80 against 2.78 for the value split and 2.62
+for the sensitivity split) and on both array heads, while losing it on `quad entrywise` (3.91
+against 2.54) and `quad matvec` — winning the objective in both. A rule that provably minimizes a
+sum at each node can be beaten on the sum and on the maximum, and here it is on each.
+
+**The tangent channel moves more than the rule does, where it moves at all.** Keeping the tangent
+signs takes `deep w=4` from 16.3 to 2.3 and the two-layer MLP from 3.39 to 1.47, and no rule
+comes near that on those programs: all three agree there to the displayed digit because the same
+block structure determines their splits. On the test problems with nothing to cancel along a path (`quad entrywise`,
+`quad matvec`, `quad factored`, both `dag` programs, `quadratic form`) the channel changes nothing
+at all and the rule is the only handle left. The two choices are close to orthogonal on this
+population.
+
+**The value reference has one seam and the table isolates it.** At `(x[1]-1)*(x[2]-1)` with both
+operands `1e-8` from zero, the split `ValueSplit` picks is set by the *ratio* of two numbers that
+are both a hair from zero: over ratios from 100 to 0.01 its cover swings from `(10, 0.1)` to
+`(0.1, 10)`, four orders of magnitude driven by the direction of an arbitrarily small perturbation,
+and at the singular point itself it falls back to `(1, 1)`. Both derivative-based references read
+`1` on each operand throughout and return `(1, 1)` at every ratio and at the point.
+
+**Four problems from `OptimizationProblems` price that seam on programs nobody wrote to exhibit
+it**, and they price it in the one place looseness cannot see. On `hs255`, `beale`, `brybnd` and
+`tointgss` the rules barely separate on tightness — the quadrature merges sit within 7% of each
+other and `tointgss` is exact under all three — and the tangent channel changes *nothing* at all,
+these programs having no path cancellation to keep signs for. What separates the rules is whether
+the split survives a perturbation of the evaluation point too small to change any value a user
+would print. Under a `1e-12` relative jitter the value split's cover moves by a factor of `1.6e6`
+on `beale` and `3.6e6` on `brybnd`; the sensitivity reference moves by `5e-12` and `7e-12`, which
+is the jitter itself.
+
+**But the norm reference is not stable either, and `tointgss` is where it shows.** There the
+value split moves by 41% and the *norm* split by 78%, while the sensitivity split moves by
+`1.6e-11`. That is not a small-denominator artifact: one coordinate of the cover falls from `6.50`
+to `1.41` under the jitter, so the split chosen at the base point is the loose one and any
+perturbation finds a better one. The base point is `x = 3*ones`, where every difference
+`x[i] - x[i+1]` in the objective vanishes at once — a degenerate configuration for a reference
+built from tangents, as a vanishing product is for one built from values. The mechanism beyond
+that is not established here.
+
+So the ranking on this population is: only the absolute-sensitivity reference was stable on all
+four, for the cost of one extra `O(L)` sweep. The tangent norm gives the quadrature optimum and
+costs `O(n*L)`, and it is degenerate on its own class of points rather than on none.
 
 ## `support_granularity.jl`
 

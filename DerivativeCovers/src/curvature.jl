@@ -14,7 +14,9 @@ a new form without touching them.
 
 A new subtype must define:
 
-  - [`cover_slots`](@ref): the node's rank-1 cover, slot-aligned with its parents.
+  - [`cover_slots`](@ref): the node's rank-1 cover, slot-aligned with its parents. It reads its
+    scale references and its error context through a [`CoverSite`](@ref) rather than off a tape,
+    so one definition serves every backend.
   - [`bound_contribution!`](@ref): the node's term of the elementwise bound `B`.
   - [`atom_slots`](@ref): the parent-slot groups the quadrature merge combines separately. The
     fallback treats every slot as one atom, which is correct for any curvature whose cover is a
@@ -30,6 +32,34 @@ A subtype whose entries are recorded exactly may also define:
 entries has none to report.
 """
 abstract type Curvature end
+
+"""
+    CoverSite
+
+Where a local cover is being built, carried by [`cover_slots`](@ref) for error reporting.
+
+The split needs the element type to work in and enough context to say which elemental it failed
+on, and nothing else about the backend. Naming that little through a site is what lets one split
+serve a tape sweep and a tapeless forward pass alike.
+
+A subtype defines `Base.eltype`, [`site_label`](@ref) and [`site_values`](@ref).
+"""
+abstract type CoverSite end
+
+"""
+    site_label(site::CoverSite) -> AbstractString
+
+How to name the elemental in an error message, such as `"node 7"`.
+"""
+function site_label end
+
+"""
+    site_values(site::CoverSite) -> AbstractString
+
+The values surrounding the elemental, for the error that reports where a program stopped being
+twice-differentiable: `"node value 1.5, parent values (0.3, 2.0)"` and the like.
+"""
+function site_values end
 
 """
     NoCurvature() <: Curvature
@@ -192,49 +222,51 @@ atom_slots(::NoCurvature, nslots) = ()
 atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
-    cover_slots(C::Curvature, rule, t, k, av, scales; check=true) -> Union{Nothing,Vector{T}}
+    cover_slots(C::Curvature, rule, site, av, sl; check=true) -> Union{Nothing,Vector{T}}
 
-The rank-1 cover of node `k` of `t`, slot-aligned with its parents: nonnegative `rho` with
-`rho[i]*rho[j] >= av*abs(C[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
-`nothing` when the node contributes no second-order term.
+The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `rho` with
+`rho[i]*rho[j] >= av*abs(C[i,j])`, where `av` is the weight the elemental's second-order term
+carries (the absolute adjoint `abs(vbar[k])` in a reverse sweep, `1` in a forward one). Returns
+`nothing` when the elemental contributes no second-order term.
 
-`rho` must be a `Vector{T}` for `T = eltype(t)`: [`local_cover_slots`](@ref) asserts that type so
-that the sweeps, which call it once per node, need not box the result.
+`rho` must be a `Vector{T}` for `T = eltype(site)`: [`local_cover_slots`](@ref) asserts that type
+so that the sweeps, which call it once per node, need not box the result.
 
-`rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks and `scales`
-its per-node scale references, as [`split_scales`](@ref) supplies them. `check` verifies the
-covering invariant against the recorded entries; a curvature that declares a bound rather than
-recording entries has nothing to check against.
+`rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks and `sl` its
+scale references, one per slot and in slot order — not indexed by node, so that a backend holding
+no nodes can supply them. `check` verifies the covering invariant against the recorded entries; a
+curvature that declares a bound rather than recording entries has nothing to check against.
 
-`t` and `k` locate the node for error reporting only. This is the per-node kernel shared by
-[`local_covers`](@ref) and the [`CoverOnly`](@ref) sweep; see [`local_cover_slots`](@ref).
+`site` is a [`CoverSite`](@ref), used for the element type and for error reporting. This is the
+per-elemental kernel shared by [`local_covers`](@ref), the [`CoverOnly`](@ref) sweep, and the
+forward propagation; see [`local_cover_slots`](@ref).
 """
-cover_slots(::NoCurvature, rule, t, k, av, scales; check::Bool = true) = nothing
+cover_slots(::NoCurvature, rule, site, av, sl; check::Bool = true) = nothing
 
-function cover_slots(C::DeclaredCurvature, rule, t, k, av, scales; check::Bool = true)
+function cover_slots(C::DeclaredCurvature, rule, site, av, sl; check::Bool = true)
     av == 0 && return nothing
-    return eltype(t)[sqrt(av) * s for s in C.s]
+    return eltype(site)[sqrt(av) * s for s in C.s]
 end
 
-function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = true)
+function cover_slots(C::PairedCurvature, rule, site, av, sl; check::Bool = true)
     c = av
     c == 0 && return nothing
     q = C.q
-    ps = t.parents[k]
-    rho = zeros(eltype(t), 2q)
+    rho = zeros(eltype(site), 2q)
     for j in 1:q
-        s1 = scales[ps[j]]
-        s2 = scales[ps[q + j]]
+        s1 = sl[j]
+        s2 = sl[q + j]
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
             continue   # dead pair: both slots stay zero; see `local_cover_slots`
         end
         a, b = balanced_split(zero(c), c, zero(c), s1, s2)
         if check
-            check_finite_partials(t, k, av, (c,))
-            # Allow for roundoff accumulated across the tape, not just this comparison.
-            rtol = sqrt(eps(float(real(eltype(t)))))
-            a * b >= c * (1 - rtol) ||
-                error("local cover invariant violated at node $k, pair $j: rho=($a,$b), c=$c")
+            check_finite_partials(site, av, (c,))
+            # Allow for roundoff accumulated across the program, not just this comparison.
+            rtol = sqrt(eps(float(real(eltype(site)))))
+            a * b >= c * (1 - rtol) || error(
+                "local cover invariant violated at $(site_label(site)), pair $j: rho=($a,$b), c=$c"
+            )
         end
         rho[j] = a
         rho[q + j] = b
@@ -242,21 +274,20 @@ function cover_slots(C::PairedCurvature, rule, t, k, av, scales; check::Bool = t
     return rho
 end
 
-function cover_slots(C::UnaryCurvature, rule, t, k, av, scales; check::Bool = true)
+function cover_slots(C::UnaryCurvature, rule, site, av, sl; check::Bool = true)
     c11 = av * abs(C.c)
     c11 == 0 && return nothing
-    check && check_finite_partials(t, k, av, (c11,))
-    return eltype(t)[sqrt(c11)]
+    check && check_finite_partials(site, av, (c11,))
+    return eltype(site)[sqrt(c11)]
 end
 
-function cover_slots(C::BinaryCurvature, rule, t, k, av, scales; check::Bool = true)
-    T = eltype(t)
+function cover_slots(C::BinaryCurvature, rule, site, av, sl; check::Bool = true)
+    T = eltype(site)
     c11 = av * abs(C.c11)
     c12 = av * abs(C.c12)
     c22 = av * abs(C.c22)
     (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
-    ps = t.parents[k]
-    s1, s2 = scales[ps[1]], scales[ps[2]]
+    s1, s2 = sl[1], sl[2]
     if certifies_dead(rule) && (s1 == 0 || s2 == 0)
         # A dead slot contributes no diagonal or cross term; only its live partner needs
         # cover weight.
@@ -268,23 +299,26 @@ function cover_slots(C::BinaryCurvature, rule, t, k, av, scales; check::Bool = t
         rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
     end
     if check
-        check_finite_partials(t, k, av, (c11, c12, c22))
+        check_finite_partials(site, av, (c11, c12, c22))
         rtol = sqrt(eps(float(real(T))))
         (
             rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
                 rho1 * rho2 >= c12 * (1 - rtol)
         ) ||
-            error("local cover invariant violated at node $k: rho=($rho1,$rho2), c=($c11,$c12,$c22)")
+            error(
+            "local cover invariant violated at $(site_label(site)): " *
+                "rho=($rho1,$rho2), c=($c11,$c12,$c22)"
+        )
     end
     return T[rho1, rho2]
 end
 
 # The general form carries no fixed arity, and the rank-1 cover of a block larger than 2x2 is not
 # a single split.
-cover_slots(C::DenseCurvature, rule, t, k, av, scales; check::Bool = true) =
+cover_slots(C::DenseCurvature, rule, site, av, sl; check::Bool = true) =
     error(
-    "node $k carries a $(join(size(C), "x")) dense curvature; the rank-1 cover is defined for " *
-        "the unary and binary forms, not for a general dense block"
+    "$(site_label(site)) carries a $(join(size(C), "x")) dense curvature; the rank-1 cover is " *
+        "defined for the unary and binary forms, not for a general dense block"
 )
 
 """

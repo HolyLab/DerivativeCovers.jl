@@ -87,6 +87,8 @@
         @test_throws "offset arrays are not supported" hvp(f, offsetcopy(x0), v)
         @test_throws "offset arrays are not supported" hvp(t, outidx, offsetcopy(v))
         @test_throws "offset arrays are not supported" cover_hessian(f, offsetcopy(x0))
+        @test_throws "offset arrays are not supported" cover_lattice(f, offsetcopy(x0))
+        @test_throws "offset arrays are not supported" forward_cover(f, offsetcopy(x0))
         @test_throws "offset arrays are not supported" scaled_spectral_radius(
             t, outidx,
             offsetcopy(h)

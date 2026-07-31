@@ -43,8 +43,8 @@ julia> [ratio(quadratic(6; rank=2, form=form)) for form in (:entrywise, :matvec,
 ```
 
 The entrywise form sends all `n^2` entries of `A` through separate nonlinear nodes that
-reconverge on the same inputs. The factored form instead uses one node for each of the `rank`
-layers, with no overlap. This reconvergence explains the difference in cover tightness.
+reconverge on the same inputs. The factored form instead uses one nonoverlapping node for each of
+the `rank` layers. This difference in reconvergence explains the difference in cover tightness.
 
 ```@index
 Pages = ["problems.md"]

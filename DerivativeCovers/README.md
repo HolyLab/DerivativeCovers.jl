@@ -6,7 +6,8 @@
 [![Coverage](https://codecov.io/gh/HolyLab/DerivativeCovers.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/HolyLab/DerivativeCovers.jl)
 [![Aqua QA](https://juliatesting.github.io/Aqua.jl/dev/assets/badge.svg)](https://github.com/JuliaTesting/Aqua.jl)
 
-Compute certified rank-1 bounds on a program's Hessian at about twice the cost of a gradient.
+Compute certified rank-1 bounds on a program's Hessian for about twice the cost of computing its
+gradient.
 
 A cover is a nonnegative vector `h` such that `abs(H[i,j]) <= h[i] * h[j]` for every entry of
 the Hessian `H`. DerivativeCovers computes `h` without forming `H`. The result is deterministic
@@ -35,8 +36,8 @@ c.h_sum   # 4-element Vector{Float64}: [2.833, 1.145, 3.633, 0.612]
 c.grad    # the gradient comes along for free
 ```
 
-The computation uses one forward pass and one paired reverse sweep, for `O(L)` work on a tape of
-length `L`. A cover bounds individual Hessian entries, the spectral radius, and
+The computation uses one forward pass and one paired reverse sweep: `O(L)` work for a tape of
+length `L`. A cover bounds individual Hessian entries, the spectral radius, and the magnitudes of
 Hessian-vector products:
 
 ```julia
@@ -49,6 +50,13 @@ Use `cover_jacobian` for vector-valued functions, `cover_nls` for nonlinear leas
 objectives, and `cover_variance` for a cheaper, uncertified estimate. `cover_hybrid` lets you
 trade computation for a tighter cover, while `SplitRule` controls how individual nodes select
 among equally valid local covers.
+
+Two options improve tightness at a cost of `O(n*L)`. `TangentChannel` selects the tangents over
+which merges operate. The default absolute-value bound makes the `O(L)` sweep possible;
+`SignedTangents` gives the tightest cover the package computes. Alternatively, `forward_cover`
+propagates a cover forward without a tape, using memory that does not grow with the length of the
+program. It occupies a different corner of the same tradeoff: it keeps every tangent sign and
+discards every adjoint sign.
 
 ## Documentation
 

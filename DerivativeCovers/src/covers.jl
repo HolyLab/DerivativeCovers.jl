@@ -36,7 +36,12 @@ of the [`Tape`](@ref) it was computed from.
 - `B`: explicit elementwise bound satisfying `B >= abs.(H)`.
 - `h_sum`: cover computed with the sum merge.
 - `h_quad`: tighter cover computed by combining cover atoms in quadrature.
-- `h_sum_rev`: independent reverse-sweep computation of `h_sum`, used as a consistency check.
+- `h_sum_rev`: the absolute-value reverse sweep's own route to the sum merge, a consistency check.
+
+`B`, `h_sum` and `h_quad` are formed over the [`TangentChannel`](@ref) the caller asked for, so
+under [`SignedTangents`](@ref) all three are the signed-tangent quantities. `h_sum_rev` is always
+the absolute-value route, which is what makes it independent; it equals `h_sum` in the default
+channel and dominates it in the signed one.
 
 Forming these diagnostics costs `O(n * L)` time and `O(n^2)` memory.
 """
@@ -46,6 +51,51 @@ struct HessianDiagnostics{T}
     h_sum::Vector{T}
     h_quad::Vector{T}
     h_sum_rev::Vector{T}
+end
+
+"""
+    CoverLattice{T}
+
+Covers of one Hessian computed with every combination of the two sign choices available to a
+cover construction, returned by [`cover_lattice`](@ref).
+
+Two channels feed the identity `H = sum_k vbar_k * sum_{i,j in P_k} C^k[i,j] * ∇v_i (∇v_j)'`:
+the tangents `∇v_j`, which carry an input's influence forward to each node, and the adjoints
+`vbar_k`, which carry the output's sensitivity back. Either can be propagated with signs or in
+absolute-value arithmetic. The absolute form is what a construction unable to see those signs
+must accept, and it costs tightness wherever the terms it merges would have cancelled.
+
+| tangent \\ adjoint        | signed `abs.(vbar)`             | absolute `acheck`                 |
+|:--------------------------|:--------------------------------|:----------------------------------|
+| absolute `utilde`         | `h_sum`, `h_quad`               | `h_sum_absadj`, `h_quad_absadj`   |
+| signed `abs.(∇v)`         | `h_sum_signed`, `h_quad_signed` | `h_sum_forward`, `h_quad_forward` |
+
+All eight vectors satisfy `abs.(H) <= h * h'`. The absolute-tangent, signed-adjoint corner is
+what [`cover_hessian`](@ref) computes. The signed-tangent, absolute-adjoint corner keeps every
+sign a forward pass can see and discards exactly those only a reverse sweep supplies, so it is
+the cover a single tapeless forward propagation reaches.
+
+- `grad`: gradient, read off the signed forward sweep at the output node.
+- `B`, `B_signed`: elementwise bounds satisfying `>= abs.(H)`, built from `utilde` and from
+  `abs.(∇v)` respectively. `B >= B_signed`, and the gap is the path cancellation the absolute
+  tangent channel discards.
+- `h_sum`, `h_quad`: sum and quadrature merges over the four channel pairings, named per the
+  table above.
+
+Forming these costs `O(n * L)` time and `O(n^2)` memory.
+"""
+struct CoverLattice{T}
+    grad::Vector{T}
+    B::Matrix{T}
+    B_signed::Matrix{T}
+    h_sum::Vector{T}
+    h_quad::Vector{T}
+    h_sum_absadj::Vector{T}
+    h_quad_absadj::Vector{T}
+    h_sum_signed::Vector{T}
+    h_quad_signed::Vector{T}
+    h_sum_forward::Vector{T}
+    h_quad_forward::Vector{T}
 end
 
 """
@@ -131,6 +181,141 @@ function sensitivities(t::Tape{T}) where {T}
 end
 
 """
+    tangents(t::Tape) -> u
+
+Forward signed tangents: `u[k][a] = ∂v_k/∂x_a`, obtained by propagating
+`u[k] = sum_{i in P_k} (∂φ_k/∂v_i) * u[i]` from `u[x_a] = e_a`.
+
+The signed counterpart of [`sensitivities`](@ref), which runs the same recursion in absolute-value
+arithmetic and so returns a bound `utilde >= abs.(u)` rather than the derivatives themselves. The
+gap between the two is the cancellation that occurs along paths from an input to a node.
+
+Costs `O(n * L)` time and memory. Only first partials enter, so a declared sub-map node (see
+[`submapnode`](@ref)) propagates exactly like any other.
+"""
+function tangents(t::Tape{T}) where {T}
+    n, N = t.ninputs, nnodes(t)
+    u = [zeros(T, n) for _ in 1:N]
+    for a in 1:n
+        u[a][a] = 1
+    end
+    for k in (n + 1):N
+        uk = u[k]
+        for (i, p) in enumerate(t.parents[k])
+            d = t.ds[k][i]
+            d == 0 && continue
+            up = u[p]
+            for q in 1:n
+                uk[q] += d * up[q]
+            end
+        end
+    end
+    return u
+end
+
+"""
+    TangentChannel
+
+Which tangents a cover construction merges over: the exact ones, or an absolute-value bound on
+them. The built-in channels are [`AbsoluteTangents`](@ref), the default, and
+[`SignedTangents`](@ref). Pass one with the `channel` keyword to [`cover_hessian`](@ref).
+
+A channel defines [`tangent_channel`](@ref). The choice affects tightness and cost, but not
+validity: every channel dominates `abs.(∇v)` entrywise, which is all the merges require.
+"""
+abstract type TangentChannel end
+
+"""
+    AbsoluteTangents()
+
+The [`TangentChannel`](@ref) that merges over [`sensitivities`](@ref), the absolute-value bound
+`utilde >= abs.(∇v)`. This is the default, and the only channel whose sum merge collapses into a
+single `O(L)` reverse sweep — the bound is linear in the seeds, so [`abs_reverse`](@ref) can carry
+the whole merge (see [`CoverOnly`](@ref)).
+
+What it gives up is cancellation along the paths from an input to a node, which
+[`SignedTangents`](@ref) keeps.
+"""
+struct AbsoluteTangents <: TangentChannel end
+
+"""
+    SignedTangents()
+
+The [`TangentChannel`](@ref) that merges over `abs.(∇v)` from [`tangents`](@ref), the exact
+gradient magnitudes.
+
+Paired with the signed adjoints every cover already uses, this is the tightest cover of the
+`O(n*L)` tier: `abs.(∇v) <= utilde` entrywise, so it dominates the default channel at every
+coordinate, and the only cancellation it still discards is the cancellation *between* elementals,
+which the triangle inequality over nodes throws away before any channel is chosen.
+
+It costs `O(n*L)` time and memory, and cannot be cheaper: the merge takes magnitudes of each
+tangent *inside* the sum, where nothing is linear in the seeds and no reverse sweep collapses it.
+So [`CoverOnly`](@ref) rejects this channel rather than quietly becoming `O(n*L)`.
+"""
+struct SignedTangents <: TangentChannel end
+
+"""
+    tangent_channel(ch::TangentChannel, t::Tape) -> u
+
+The per-node tangent channel `ch` supplies to [`merge_atoms`](@ref) and [`hessian_bound`](@ref):
+nonnegative vectors satisfying `u[k] >= abs.(∇v_k)` entrywise, which is what makes the merges
+cover. [`sensitivities`](@ref) for [`AbsoluteTangents`](@ref), the magnitudes of
+[`tangents`](@ref) for [`SignedTangents`](@ref).
+"""
+tangent_channel(::AbsoluteTangents, t::Tape) = sensitivities(t)
+tangent_channel(::SignedTangents, t::Tape) = signed_magnitudes(tangents(t))
+
+# Magnitudes in place. Only magnitudes enter the elementwise bound and the atoms, so reducing
+# rather than copying holds the signed channel to a single `n * L` array.
+function signed_magnitudes(u)
+    for g in u
+        map!(abs, g, g)
+    end
+    return u
+end
+
+"""
+    merge_atoms(t::Tape, rhos, u) -> (h_sum, h_quad)
+
+Both merges of the cover atoms, from per-node cover slots `rhos` and a tangent channel `u`. An
+atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and the merges are
+`h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
+
+`u[j]` must be nonnegative and dominate `abs.(∇v_j)` entrywise for the results to cover; both
+[`sensitivities`](@ref) and the magnitudes of [`tangents`](@ref) qualify. Which slots share an
+atom comes from [`atom_slots`](@ref), and the loop depends on its partitioning the slots: a slot
+in no atom would lose its contribution, one named twice would be counted twice.
+
+Costs `O(n * L)` time and `O(n)` memory beyond `u`.
+"""
+function merge_atoms(t::Tape{T}, rhos::AbstractVector, u::AbstractVector) where {T}
+    n, N = t.ninputs, nnodes(t)
+    ssum = zeros(T, n)          # sum_k s_k
+    ssq = zeros(T, n)           # sum over atoms of s_atom.^2
+    sk = zeros(T, n)
+    for k in (n + 1):N
+        rho = rhos[k]
+        isempty(rho) && continue
+        ps = t.parents[k]
+        for atom in atom_slots(t.Cs[k], length(ps))
+            fill!(sk, 0)
+            for i in atom
+                up = u[ps[i]]
+                for q in 1:n
+                    sk[q] += rho[i] * up[q]
+                end
+            end
+            for q in 1:n
+                ssum[q] += sk[q]
+                ssq[q] += sk[q]^2
+            end
+        end
+    end
+    return ssum, sqrt.(ssq)
+end
+
+"""
     hessian_bound(t::Tape, vbar, utilde) -> B
 
 The elementwise bound `B = sum_k abs(vbar[k]) * sum_{i,j} abs(C^k[i,j]) * utilde_i * utilde_j'`,
@@ -212,7 +397,7 @@ once. Among the elementals of `overloads.jl` it is the only source of the first 
 never presents a vanishing `z1`. The second is also reached by `x^y` at a zero exponent, where
 `c11 == 0` and `z2 == 0` while `c22 > 0`.
 
-These zero-reference arms concern the value channel: under [`SensitivitySplit`](@ref) a zero
+These zero-reference cases concern the value channel: under [`SensitivitySplit`](@ref) a zero
 scale certifies a dead slot and [`local_cover_slots`](@ref) resolves it before this function
 is reached, so this function only ever receives positive references from that rule.
 """
@@ -237,8 +422,9 @@ Policy for choosing among the valid rank-1 covers of a single tape node.
 
 Some 2×2 second-derivative blocks admit a one-parameter family of covers. A `SplitRule` supplies
 the scale used to choose one member of that family. The built-in rules are [`ValueSplit`](@ref),
-the default, and [`SensitivitySplit`](@ref). Pass a rule with the `rule` keyword to cover
-functions. The choice can affect tightness, but not validity.
+the default, [`SensitivitySplit`](@ref), which minimizes the sum merge, and
+[`VectorNormSplit`](@ref), which minimizes the quadrature merge. Pass a rule with the `rule`
+keyword to cover functions. The choice can affect tightness, but not validity.
 """
 abstract type SplitRule end
 
@@ -269,7 +455,7 @@ the exact minimizer of the weighted sum-merge objective `sum_a w[a]*h_sum[a]` ov
 per-node splits: the sum merge is linear in the per-node weights, so the objective decouples
 into one term `rho1*sigma_1 + rho2*sigma_2` per node, minimized on the feasible segment by
 exactly this clamped equalization. `w` is therefore the statement of *which* cover the rule
-optimizes — the weighted sum of the input bounds — not a tuning knob.
+optimizes—the weighted sum of the input bounds—rather than a user-selected tuning parameter.
 
 A zero scale is a certificate here, not a gap: `sigma_j == 0` implies every path from the
 inputs to `v_j` carries a zero derivative product, so the total gradient of `v_j` vanishes
@@ -306,6 +492,58 @@ SensitivitySplit{W}() where {W} = SensitivitySplit{W}(nothing)
 SensitivitySplit() = SensitivitySplit(nothing)
 
 """
+    VectorNormSplit(w=nothing)
+
+The [`SplitRule`](@ref) whose scale references are tangent norms:
+`z_j = sqrt(sum_a w[a] * (∂v_j/∂x_a)^2)`, the `w`-weighted 2-norm of the signed tangent
+`∇v_j` (see [`tangents`](@ref)). `w = nothing` means unit weights; otherwise `w` must hold one
+strictly positive finite entry per input.
+
+The split equalizes `rho1*z_1 == rho2*z_2`, clamped to the feasible segment. This is the exact
+minimizer of the weighted quadrature objective `sum_a w[a]*t[a]^2` over an atom's cover vector
+`t = rho1*u_1 + rho2*u_2`: with `rho1*rho2` fixed by the block, the cross term is fixed too and
+`rho1^2*z_1^2 + rho2^2*z_2^2` is smallest where the two agree. So this rule is to the quadrature
+merge what [`SensitivitySplit`](@ref) is to the sum merge, and `w` states *which* cover it
+optimizes rather than tuning anything. The downstream weight a node's atoms receive is a common
+factor and cannot affect the choice.
+
+Two consequences distinguish it from the value-based default. A vanishing operand does not make
+the split singular: `rho1*z_1 = sqrt(c12*z_1*z_2)` vanishes continuously with either tangent,
+where [`ValueSplit`](@ref) has only the ratio of two zero values to go on. And a zero scale
+certifies nothing — a tangent can cancel to zero at a point without the gradient vanishing
+identically — so [`certifies_dead`](@ref) is `false` here, as it is for `ValueSplit`.
+
+Covariance: under a rescaling of the intermediate variables the norms transform exactly as the
+values do, so the covariance argument of [`balanced_split`](@ref) applies unchanged. A norm mixes
+differently scaled input slots, so under an input rescaling `x -> D*x` the covers remain exactly
+covariant when the weights are rescaled as `w -> D^2*w`; with `w` held fixed (the unit default
+included) the *choice* of split — never its validity — depends on the units the inputs are
+expressed in.
+
+Cost: the tangents themselves, `O(n*L)` time and memory for `n` inputs. This exceeds the `O(L)`
+cost of the other two rules because the scale reference uses whole vectors rather than one number
+per node. A forward propagation already carries the tangents and incurs no additional cost.
+"""
+struct VectorNormSplit{W} <: SplitRule
+    w::W
+
+    function VectorNormSplit{W}(w) where {W}
+        w === nothing || all(wi -> isfinite(wi) && wi > 0, w) ||
+            throw(
+            ArgumentError(
+                "VectorNormSplit weights must be strictly positive and finite: " *
+                    "a zero weight could blank a live slot's scale and send the " *
+                    "split to its fallback"
+            )
+        )
+        return new{W}(w)
+    end
+end
+VectorNormSplit(w) = VectorNormSplit{typeof(w)}(w)
+VectorNormSplit{W}() where {W} = VectorNormSplit{W}(nothing)
+VectorNormSplit() = VectorNormSplit(nothing)
+
+"""
     certifies_dead(rule::SplitRule) -> Bool
 
 Whether a zero scale reference from `rule` certifies that the slot's total gradient vanishes
@@ -317,6 +555,7 @@ With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must 
 """
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
+certifies_dead(::VectorNormSplit) = false
 
 # Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
 struct AbsValues{T} <: AbstractVector{T}
@@ -326,12 +565,23 @@ Base.size(a::AbsValues) = size(a.vals)
 Base.IndexStyle(::Type{<:AbsValues}) = IndexLinear()
 Base.getindex(a::AbsValues, i::Int) = abs(a.vals[i])
 
+# Per-node scales, gathered into slot order for `cover_slots`. Lazy, so the tape sweeps hand over
+# a node's scale references without copying them once per node.
+struct SlotScales{T, S <: AbstractVector{T}, P <: AbstractVector{<:Integer}} <: AbstractVector{T}
+    scales::S
+    parents::P
+end
+Base.size(s::SlotScales) = size(s.parents)
+Base.IndexStyle(::Type{<:SlotScales}) = IndexLinear()
+Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
+
 """
     split_scales(rule::SplitRule, t::Tape) -> scales
 
 The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): a lazy view of
 `abs.(t.vals)` for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input
-weights for [`SensitivitySplit`](@ref). Obtained once per cover sweep and shared by every node.
+weights for [`SensitivitySplit`](@ref), the weighted norms of [`tangents`](@ref) for
+[`VectorNormSplit`](@ref). Obtained once per cover sweep and shared by every node.
 """
 split_scales(::ValueSplit, t::Tape) = AbsValues(t.vals)
 
@@ -347,6 +597,16 @@ function split_scales(rule::SensitivitySplit, t::Tape{T}) where {T}
         copyto!(view(theta, 1:t.ninputs), w)
     end
     return abs_forward(t, theta)
+end
+
+function split_scales(rule::VectorNormSplit, t::Tape{T}) where {T}
+    u = tangents(t)
+    w = rule.w
+    w === nothing && return T[norm(uk) for uk in u]
+    Base.require_one_based_indexing(w)
+    length(w) == t.ninputs ||
+        throw(DimensionMismatch("VectorNormSplit weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
+    return T[sqrt(sum(w[a] * uk[a]^2 for a in 1:t.ninputs)) for uk in u]
 end
 
 """
@@ -401,6 +661,9 @@ verifies the covering invariant on recorded nodes.
 The first form uses [`ValueSplit`](@ref). The second takes any [`SplitRule`](@ref) together
 with `scales = split_scales(rule, t)`, computed once by the caller and shared across nodes.
 
+This is the tape's adapter onto [`cover_slots`](@ref): it names the node with a
+[`TapeSite`](@ref) and gathers `scales[t.parents[k]]` into slot order, both lazily.
+
 Under a rule for which a zero scale certifies a dead slot ([`SensitivitySplit`](@ref)), a slot
 with `scales[p_i] == 0` gets `rho[i] = 0` and its partner covers only its own diagonal. The
 covering invariant deliberately does not hold slotwise there: every entry it would cover is
@@ -414,25 +677,24 @@ local_cover_slots(t::Tape, k::Integer, av::Real; check::Bool = true) =
     local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
 
 """
-    check_finite_partials(t::Tape, k::Integer, av, c::Tuple)
+    check_finite_partials(site::CoverSite, av, c::Tuple)
 
-Throw unless the absolute adjoint `av` of node `k` and its covering entries `c` are all finite,
-reporting the node's own value and its parents' values.
+Throw unless the adjoint weight `av` of the elemental at `site` and its covering entries `c` are
+all finite, reporting the values around it.
 
 The covering invariant is a set of comparisons against `c`, so it cannot fire meaningfully when
 `c` is not finite: every comparison against `NaN` is false and no finite `rho` covers an infinite
 entry, so the test would reject a split that is not at fault. A non-finite `c` says instead that
-the program is not twice-differentiable where it was recorded — a division by zero, or a power,
+the program is not twice-differentiable where it was evaluated — a division by zero, or a power,
 logarithm or root at its singularity. A non-finite `av` says the same of a node downstream, whose
 partials the adjoint has already passed through.
 """
-function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
+function check_finite_partials(site::CoverSite, av::Real, c::Tuple)
     (isfinite(av) && all(isfinite, c)) && return nothing
-    cause = isfinite(av) ? "node $k has non-finite second partials c=$c" :
-        "the absolute adjoint reaching node $k is $av, from a node downstream"
+    cause = isfinite(av) ? "$(site_label(site)) has non-finite second partials c=$c" :
+        "the absolute adjoint reaching $(site_label(site)) is $av, from a node downstream"
     error(
-        "$cause; the program is not twice-differentiable at this point (node value " *
-            "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))"
+        "$cause; the program is not twice-differentiable at this point ($(site_values(site)))"
     )
 end
 
@@ -458,11 +720,13 @@ function local_cover_slots(
         rule::SplitRule, t::Tape{T}, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
     ) where {T}
+    site = TapeSite(t, Int(k))
+    sl = SlotScales(scales, t.parents[k])
     # The assertion is the return type [`cover_slots`](@ref) promises. Without it inference gives
     # up at the open fallback inside `dispatchcurvature` and the sweeps, which call this once per
     # node, box every result.
     return dispatchcurvature(t.Cs[k], T) do C
-        cover_slots(C, rule, t, k, av, scales; check)
+        cover_slots(C, rule, site, av, sl; check)
     end::Union{Nothing, Vector{T}}
 end
 
@@ -511,8 +775,8 @@ struct WithDiagnostics end
 const CoverMode = Union{CoverOnly, WithDiagnostics}
 
 """
-    cover_hessian([mode], t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
-    cover_hessian([mode], f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
+    cover_hessian([mode], t::Tape, outidx::Integer; check=true, rule=ValueSplit(), channel=AbsoluteTangents())
+    cover_hessian([mode], f, x0::AbstractVector; check=true, rule=ValueSplit(), channel=AbsoluteTangents())
 
 Compute a certified rank-1 cover of a scalar function's Hessian.
 
@@ -523,6 +787,12 @@ and a tighter quadrature cover.
 
 The `rule` keyword chooses how local covers are scaled; see [`SplitRule`](@ref). Every rule
 produces a valid cover. `check=true` verifies the local covering conditions.
+
+The `channel` keyword chooses which tangents the merges run over; see [`TangentChannel`](@ref).
+The default [`AbsoluteTangents`](@ref) is what makes the `O(L)` sweep possible.
+[`SignedTangents`](@ref) keeps the tangent signs and gives the tightest cover available at
+`O(n*L)`, tighter at every coordinate than the default; it is available under
+[`WithDiagnostics`](@ref) only.
 
 Two merges are available:
 
@@ -555,7 +825,9 @@ roundoff.
 # `WithDiagnostics()`
 
 This mode returns a [`HessianDiagnostics`](@ref) and costs `O(n * L)` time and `O(n^2)` memory.
-With `check=true`, it also verifies that the diagnostic and fused computations agree.
+With `check=true`, it also verifies that the diagnostic and fused computations agree — as an
+equality under [`AbsoluteTangents`](@ref), where both routes compute the same merge, and as a
+domination under [`SignedTangents`](@ref), where the absolute route bounds the signed one.
 
 # Examples
 
@@ -582,45 +854,23 @@ true
 """
 function cover_hessian(
         ::WithDiagnostics, t::Tape{T}, outidx::Integer; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     ) where {T}
-    n, N = t.ninputs, nnodes(t)
+    n = t.ninputs
     vbar = adjoints(t, outidx)
-    utilde = sensitivities(t)
-    B = hessian_bound(t, vbar, utilde)
+    u = tangent_channel(channel, t)
+    B = hessian_bound(t, vbar, u)
     rhos, theta = local_covers(t, vbar; check, rule)
 
-    ssum = zeros(T, n)          # sum_k s_k
-    ssq = zeros(T, n)           # sum over atoms of s_atom.^2
-    sk = zeros(T, n)
-    for k in (n + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
-        ps = t.parents[k]
-        for atom in atom_slots(t.Cs[k], length(ps))
-            fill!(sk, 0)
-            for i in atom
-                up = utilde[ps[i]]
-                for q in 1:n
-                    sk[q] += rho[i] * up[q]
-                end
-            end
-            for q in 1:n
-                ssum[q] += sk[q]
-                ssq[q] += sk[q]^2
-            end
-        end
-    end
-    h_sum = ssum
-    h_quad = sqrt.(ssq)
+    h_sum, h_quad = merge_atoms(t, rhos, u)
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
-        # These two computations share most operations, so their roundoff errors are correlated.
+        # These computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(T)))^(3 // 4)
         # Relative disagreement in units of the tolerance, so `> 1` is a mismatch.
         disagreement(x, y) = @. abs(x - y) / (rtol * max(abs(x), one(T)))
-        s, q = worst_severity(disagreement(h_sum, h_sum_rev))
+        s, q = worst_severity(channel_severity(channel, h_sum, h_sum_rev, rtol, T))
         s > 1 &&
             error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         # local_covers already checked the node invariants.
@@ -628,7 +878,7 @@ function cover_hessian(
         s, q = worst_severity(disagreement(view(vbar, 1:n), pr.grad))
         s > 1 &&
             error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-        s, q = worst_severity(disagreement(h_sum, pr.h_sum))
+        s, q = worst_severity(channel_severity(channel, h_sum, pr.h_sum, rtol, T))
         s > 1 &&
             error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
     end
@@ -636,10 +886,26 @@ function cover_hessian(
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
+# How a merge over `channel` must compare against the absolute-value reverse route, in units of
+# `rtol` so that `> 1` fails. The routes compute the same number in the absolute channel; in the
+# signed channel `abs.(∇v) <= utilde` entrywise, so the reverse route dominates instead.
+channel_severity(::AbsoluteTangents, h, h_rev, rtol, ::Type{T}) where {T} =
+    @. abs(h - h_rev) / (rtol * max(abs(h), one(T)))
+channel_severity(::SignedTangents, h, h_rev, rtol, ::Type{T}) where {T} =
+    @. (h - h_rev) / (rtol * max(abs(h), one(T)))
+
 function cover_hessian(
         ::CoverOnly, t::Tape{T}, outidx::Integer; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     ) where {T}
+    channel isa AbsoluteTangents || throw(
+        ArgumentError(
+            "CoverOnly cannot merge over $(nameof(typeof(channel))): its single sweep exists " *
+                "because the absolute-tangent sum merge is linear in its seeds and collapses " *
+                "into one reverse sweep, and a signed channel takes magnitudes inside the merge, " *
+                "where nothing collapses. That channel costs O(n*L); ask for WithDiagnostics()"
+        )
+    )
     n, N = t.ninputs, nnodes(t)
     scales = split_scales(rule, t)
     vbar = zeros(T, N)
@@ -666,13 +932,123 @@ end
 
 function cover_hessian(
         mode::CoverMode, f, x0::AbstractVector; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     )
     t, outidx = tape_function(f, x0)
-    return cover_hessian(mode, t, outidx; check, rule)
+    return cover_hessian(mode, t, outidx; check, rule, channel)
 end
 
 cover_hessian(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit()) =
     cover_hessian(CoverOnly(), t, outidx; check, rule)
 cover_hessian(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit()) =
     cover_hessian(CoverOnly(), f, x0; check, rule)
+
+"""
+    cover_lattice(t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
+    cover_lattice(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
+
+Compute the same Hessian cover four ways, once for each combination of a signed or absolute
+tangent channel with a signed or absolute adjoint channel, and return them in a
+[`CoverLattice`](@ref).
+
+Each channel is a place where the construction may discard signs. The tangent channel is either
+the exact derivatives from [`tangents`](@ref) or their absolute-value bound from
+[`sensitivities`](@ref); the adjoint channel is either `abs.(vbar)` from [`adjoints`](@ref) or
+the unsigned `acheck = abs_reverse(t, e_outidx)`, whose entry `acheck[k]` sums `prod(abs(∂φ/∂v))`
+over every path from `k` to the output and therefore satisfies `acheck >= abs.(vbar)`.
+
+An absolute channel bounds the exact one wherever it cancels, so replacing a signed channel by
+its absolute counterpart can only inflate the cover. That orders the corners: `h_sum_signed` and
+`h_quad_signed` are the smallest, `h_sum_absadj` and `h_quad_absadj` the largest, and the two
+mixed corners fall between them but are incomparable with each other. The ordering in the adjoint
+channel relies on the split rule scaling with the local matrix, which [`ValueSplit`](@ref) and
+[`SensitivitySplit`](@ref) both do; a rule sensitive to the absolute scale of that matrix would
+still give covers, but not ordered ones.
+
+Cost is `O(n * L)` time and `O(n^2)` memory: two forward channels, two elementwise bounds, and
+four merges, each of that order. This is a diagnostic — it measures what each sign channel is
+worth on a given program, which the `O(L)` production sweeps cannot report.
+
+`rule` selects the [`SplitRule`](@ref); `check` verifies the local covering conditions and that
+the forward and reverse sweeps agree on the gradient and on the sum merge.
+
+# Examples
+
+```jldoctest
+julia> f(x) = (d = sin(x[1]) - x[1]; u = d * x[2]; exp(u) - u);
+
+julia> lat = cover_lattice(f, [0.7, 1.3]);
+
+julia> round.(lat.h_quad; digits=4)          # the corner `cover_hessian` computes
+2-element Vector{Float64}:
+ 3.1673
+ 0.0768
+
+julia> round.(lat.h_quad_signed; digits=4)   # keeping the tangent signs as well
+2-element Vector{Float64}:
+ 0.4854
+ 0.0768
+
+julia> all(lat.h_quad_signed .<= lat.h_quad)
+true
+```
+"""
+function cover_lattice(
+        t::Tape{T}, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit()
+    ) where {T}
+    n, N = t.ninputs, nnodes(t)
+
+    vbar = adjoints(t, outidx)
+    # Seeded at the output alone and carrying no rho weights, the absolute reverse sweep returns
+    # the path sum that abs.(vbar) would equal if no adjoint path cancelled.
+    seed = zeros(T, N)
+    seed[outidx] = 1
+    acheck = abs_reverse(t, seed)
+
+    utilde = tangent_channel(AbsoluteTangents(), t)
+    # The gradient is read off while the tangents are still signed; `signed_magnitudes` then
+    # applies the same reduction `tangent_channel(SignedTangents(), t)` does, so the corners below
+    # agree with `cover_hessian` under that channel to the last bit.
+    w = tangents(t)
+    grad = copy(w[outidx])
+    signed_magnitudes(w)
+
+    B = hessian_bound(t, vbar, utilde)
+    B_signed = hessian_bound(t, vbar, w)
+
+    rhos_signed, theta = local_covers(t, vbar; check, rule)
+    rhos_abs, _ = local_covers(t, acheck; check, rule)
+
+    h_sum, h_quad = merge_atoms(t, rhos_signed, utilde)
+    h_sum_absadj, h_quad_absadj = merge_atoms(t, rhos_abs, utilde)
+    h_sum_signed, h_quad_signed = merge_atoms(t, rhos_signed, w)
+    h_sum_forward, h_quad_forward = merge_atoms(t, rhos_abs, w)
+
+    if check
+        rtol = eps(float(real(T)))^(3 // 4)
+        # The forward and reverse gradients accumulate the same path sums in opposite orders, so
+        # their roundoff scales with the size of the terms rather than of the result: a coordinate
+        # that cancels to zero still absorbs the error of the largest path reaching it. That
+        # scale is `utilde[outidx]`, floored at one to keep the comparison absolute near zero.
+        gscale = utilde[outidx]
+        grad_rev = view(vbar, 1:n)
+        s, q = worst_severity(@. abs(grad - grad_rev) / (rtol * max(gscale, one(T))))
+        s > 1 &&
+            error("forward-sweep gradient mismatch at input $q: forward=$(grad[q]) reverse=$(vbar[q])")
+        # These two share most operations, so their roundoff errors are correlated.
+        h_sum_rev = abs_reverse(t, theta)[1:n]
+        s, q = worst_severity(@. abs(h_sum - h_sum_rev) / (rtol * max(h_sum, one(T))))
+        s > 1 &&
+            error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
+    end
+
+    return CoverLattice(
+        grad, B, B_signed, h_sum, h_quad, h_sum_absadj, h_quad_absadj,
+        h_sum_signed, h_quad_signed, h_sum_forward, h_quad_forward
+    )
+end
+
+function cover_lattice(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit())
+    t, outidx = tape_function(f, x0)
+    return cover_lattice(t, outidx; check, rule)
+end

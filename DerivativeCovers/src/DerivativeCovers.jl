@@ -27,11 +27,14 @@ import MatrixCovers: support_components, gramcover, gramcover!
 
 # Main entry points and result types.
 export Tape, TVar, tape_function
+export FVar, forward_cover, ForwardCover
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
-export cover_hybrid, cover_jacobian_hybrid
+export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
-export HessianCover, HessianDiagnostics, JacobianCover, NLSCover, NLSDiagnostics, VarianceCover
-export SplitRule, ValueSplit, SensitivitySplit
+export TangentChannel, AbsoluteTangents, SignedTangents
+export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
+export NLSCover, NLSDiagnostics, VarianceCover
+export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
@@ -42,7 +45,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         Expr(
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
-            :split_scales, :value, :isconstant, :nnodes, :natoms
+            :split_scales, :value, :isconstant, :nnodes, :natoms, :CoverVar, :constantvar,
+            :tangent_channel, :forward_scale
         )
     )
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.
@@ -50,7 +54,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         Expr(
             :public, :Curvature, :NoCurvature, :UnaryCurvature, :BinaryCurvature,
             :DenseCurvature, :PairedCurvature, :DeclaredCurvature, :cover_slots,
-            :bound_contribution!, :curvature_apply!, :has_exact_partials
+            :bound_contribution!, :curvature_apply!, :has_exact_partials,
+            :CoverSite, :TapeSite, :site_label, :site_values
         )
     )
     # Ratios, bounds, and rescalings defined on a cover from any source.
@@ -75,6 +80,7 @@ include("curvature.jl")
 include("tape.jl")
 include("overloads.jl")
 include("covers.jl")
+include("forward.jl")
 include("merges.jl")
 include("variance.jl")
 include("spectral.jl")

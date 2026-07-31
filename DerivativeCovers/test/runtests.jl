@@ -10,7 +10,8 @@ include(
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
-using DerivativeCovers: submapnode, value, isconstant, nnodes, natoms, cover_ratio, bound_ratio,
+using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms, cover_ratio,
+    bound_ratio,
     rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
     jacobian_minimax, dependency_severity, scaled_spectral_radius,
     scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
@@ -44,6 +45,8 @@ include("composites.jl")
 include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
+include("lattice.jl")
+include("forward.jl")
 include("nls.jl")
 include("vectoroutput.jl")
 include("support.jl")
@@ -82,23 +85,25 @@ include("genericaxes.jl")
     end
 
     @testset "public API boundary" begin
-        # TVar records operations rather than standing in for a number: it must not be a Real, so
-        # that generic `::Real` methods reject it instead of silently taping something the package
-        # has no rule for.
-        @test !(TVar <: Real)
-        @test supertype(TVar) === Any
+        # A backend variable observes operations rather than standing in for a number: it must not
+        # be a Real, so that generic `::Real` methods reject it instead of silently recording
+        # something the package has no rule for.
+        @test !(CoverVar <: Real)
+        @test TVar <: CoverVar
 
         # Pin the export set so internal names cannot drift into the top-level namespace.
         exported = filter(s -> Base.isexported(DerivativeCovers, s), names(DerivativeCovers))
         @test Set(setdiff(exported, [:DerivativeCovers])) == Set(
             [
                 :Tape, :TVar, :tape_function,
+                :FVar, :forward_cover, :ForwardCover,
                 :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
-                :cover_hybrid, :cover_jacobian_hybrid,
+                :cover_hybrid, :cover_jacobian_hybrid, :cover_lattice,
                 :CoverOnly, :WithDiagnostics,
-                :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover, :NLSDiagnostics,
-                :VarianceCover,
-                :SplitRule, :ValueSplit, :SensitivitySplit,
+                :TangentChannel, :AbsoluteTangents, :SignedTangents,
+                :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
+                :NLSDiagnostics, :VarianceCover,
+                :SplitRule, :ValueSplit, :SensitivitySplit, :VectorNormSplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
         )
@@ -108,8 +113,10 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
             :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
+            :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
+            :CoverSite, :TapeSite, :site_label, :site_values,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
             :jacobian_representability, :jacobian_minimax, :dependency_severity,
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
@@ -127,8 +134,8 @@ include("genericaxes.jl")
         # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
         private = (
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
-            :group_seeds, :adjoints, :sensitivities, :abs_reverse, :abs_forward,
-            :hessian_bound, :local_covers, :local_cover_slots, :balanced_split,
+            :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
+            :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
@@ -174,10 +181,27 @@ include("genericaxes.jl")
         @test occursin("constant", sprint(show, MIME"text/plain"(), TVar(2.5)))
         @test sprint(show, TVar(2.5)) == "TVar(2.5)"
 
+        # An FVar carries its channels rather than a tape, but they are as long as the input
+        # vector, so its displays report the input count instead of the channels themselves.
+        function intermediate_fvar(n)
+            captured = Ref{Any}(nothing)
+            forward_cover(collect(1.0:n)) do zs
+                y = zs[1] * zs[2]
+                captured[] = y
+                return y + sum(zs)
+            end
+            return captured[]
+        end
+        fv = intermediate_fvar(60)
+        @test sprint(show, fv) == "FVar(2.0)"
+        @test occursin("60 inputs", sprint(show, MIME"text/plain"(), fv))
+        @test occursin("constant", sprint(show, MIME"text/plain"(), FVar{Float64, ValueSplit}(nothing, 2.5)))
+        @test sprint(show, FVar{Float64, ValueSplit}(nothing, 2.5)) == "FVar(2.5)"
+
         # A TVar carries a reference to the whole tape, so the default display would grow with
         # the program. Both displays must stay bounded as the tape gets ten times longer.
         tbig, _ = tape_function(f, collect(1.0:600.0))
-        for v in (tbig, TVar(tbig, 5))
+        for v in (tbig, TVar(tbig, 5), intermediate_fvar(600))
             @test length(sprint(show, v)) < 50
             @test length(sprint(show, MIME"text/plain"(), v)) < 50
         end
@@ -186,6 +210,8 @@ include("genericaxes.jl")
         results = (
             cover_hessian(f, x0),
             cover_hessian(WithDiagnostics(), f, x0),
+            cover_lattice(f, x0),
+            forward_cover(f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
@@ -199,9 +225,9 @@ include("genericaxes.jl")
                 @test length(s) < 100
             end
         end
-        @test sprint(show, results[3]) == "JacobianCover(2x3)"
-        @test sprint(show, results[4]) == "NLSCover(2 residuals, 3 inputs)"
-        @test sprint(show, results[5]) == "NLSDiagnostics(2 residuals, 3 inputs)"
+        @test sprint(show, results[5]) == "JacobianCover(2x3)"
+        @test sprint(show, results[6]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[7]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin
@@ -643,6 +669,62 @@ include("genericaxes.jl")
             @test cover_ratio(H, nv.h) <= GATE
             @test cover_ratio(H, ns.h) <= GATE
         end
+
+        # VectorNormSplit satisfies the same covering chain on the whole battery.
+        @testset "VectorNormSplit covering chain — $name" for (name, f, x0) in PROBLEMS
+            H = ForwardDiff.hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0; rule = VectorNormSplit())
+            for h in (res.h_sum, res.h_quad)
+                @test all(>=(0), h)
+                @test rank1_ratio(res.B, h) <= GATE
+                @test cover_ratio(H, h) <= GATE
+            end
+            @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
+            @test cover_hybrid(f, x0, 1; rule = VectorNormSplit()) ≈ res.h_sum rtol = 1.0e-12
+        end
+
+        # A tangent norm is a scale reference at the zero-zero product where a value is not: both
+        # tangents are unit basis vectors there and stay so under perturbation, where the value
+        # ratio swings by the 4:1 of `xp`.
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
+
+        # It minimizes the quadrature objective `sum(h_quad.^2)` over the split family. The two
+        # operands here have tangents of different shape -- `[1,1,1,1]` against `[3,0,0,0]` -- so
+        # the 1-norm and the 2-norm rank them differently and the rules separate. One product node
+        # carries the whole Hessian, so the per-node optimum is the cover's.
+        fshape = x -> (x[1] + x[2] + x[3] + x[4]) * (3 * x[1])
+        xshape = [0.3, -0.7, 1.1, 0.5]
+        objective(rule) = sum(abs2, cover_hessian(WithDiagnostics(), fshape, xshape; rule).h_quad)
+        # Sweeping SensitivitySplit's weights sweeps the scale ratio, hence the split family.
+        family = minimum(
+            objective(SensitivitySplit([a, b, b, b]))
+                for a in exp10.(-3:0.25:3), b in exp10.(-3:0.25:3)
+        )
+        @test objective(VectorNormSplit()) <= family
+        @test objective(VectorNormSplit()) < objective(ValueSplit())
+        @test objective(VectorNormSplit()) < objective(SensitivitySplit())
+
+        # A zero tangent norm certifies nothing: a tangent can cancel at a point while the
+        # gradient stays live, so unlike SensitivitySplit this rule marks no slot dead.
+        @test !DerivativeCovers.certifies_dead(VectorNormSplit())
+        resn = cover_hessian(WithDiagnostics(), fdead, xd; rule = VectorNormSplit())
+        @test cover_ratio(Hd, resn.h_sum) <= GATE
+
+        # Input covariance holds when the weights transport as the squares of the input scales,
+        # the norm being quadratic in the tangents where a sensitivity is linear.
+        resn2 = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = VectorNormSplit(w))
+        resn3 = cover_hessian(
+            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+            rule = VectorNormSplit(d .^ 2 .* w)
+        )
+        @test resn3.h_sum ≈ resn2.h_sum ./ d rtol = 1.0e-12
+        @test resn3.h_quad ≈ resn2.h_quad ./ d rtol = 1.0e-12
+
+        @test_throws "strictly positive" VectorNormSplit([1.0, 0.0])
+        @test_throws "strictly positive" VectorNormSplit([1.0, Inf])
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = VectorNormSplit([1.0]))
+        @test VectorNormSplit() === VectorNormSplit(nothing) === VectorNormSplit{Nothing}()
     end
 
     @testset "node levels and partitions" begin

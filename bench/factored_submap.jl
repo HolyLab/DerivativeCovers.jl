@@ -2,14 +2,14 @@
 #
 # `submapnode` carries an exact `q x p` Jacobian and a `q x p` curvature bound, built by one
 # adjoint sweep per output. A traced backend has neither the storage nor the per-output sweeps: the
-# production-shaped sub-map is a vjp closure plus a factored cover `(a, b, S)`, which the package
+# representation intended for traced backends is a vjp closure plus a factored cover `(a, b, S)`, which the package
 # already reaches through `compose_jacobian_cover` and `compose_hessian_cover` — no joint tape and
 # no dense `J`. What that replacement costs is a tightness question, and this script measures it.
 #
 # Three routes carry the same composite. Decomposed records the sub-map's internals on the outer
 # tape; declared records it as one `submap` node per output; factored covers the two factors
 # separately and combines the covers. Only the last is available without values at every node, so
-# the declared-to-factored ratio is the price of the port, and the decomposed column says where
+# the declared-to-factored ratio measures the loss from this change, and the decomposed column shows where
 # both sit relative to keeping everything on one tape.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Printf
@@ -156,7 +156,7 @@ end
 Where the factoring penalty lives. A head linear in the sub-map's outputs has `∇²g = 0`, which
 deletes the `J'∇²g J` term from the chain rule and leaves only the declared curvature `S` — the
 same bound both routes carry. The two covers then agree to the last digit, so the entire penalty
-in the table above is the price of bounding `J'∇²g J` with `(a⋅hg)²*b*b'` instead of the exact `J`.
+in the table above comes from bounding `J'∇²g J` with `(a⋅hg)²*b*b'` instead of the exact `J`.
 """
 function control()
     println("=== Control: a linear head leaves nothing to factor ===")
