@@ -30,6 +30,7 @@ export Tape, TVar, tape_function
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
+export TangentChannel, AbsoluteTangents, SignedTangents
 export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
 export NLSCover, NLSDiagnostics, VarianceCover
 export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit
@@ -43,7 +44,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         Expr(
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
-            :split_scales, :value, :isconstant, :nnodes, :natoms, :CoverVar, :constantvar
+            :split_scales, :value, :isconstant, :nnodes, :natoms, :CoverVar, :constantvar,
+            :tangent_channel
         )
     )
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.

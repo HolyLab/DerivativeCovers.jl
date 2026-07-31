@@ -65,6 +65,59 @@ const LATTICE_X = [0.7, 1.3]
         @test lat.grad ≈ res.grad rtol = 1.0e-12
     end
 
+    # The signed channel must be the *same* computation the lattice performs, not merely a close
+    # one: any drift between them means the two have stopped sharing an implementation.
+    @testset "the signed channel is a lattice corner — $name" for (name, f, x0) in PROBLEMS
+        lat = cover_lattice(f, x0)
+        sgn = cover_hessian(WithDiagnostics(), f, x0; channel = SignedTangents())
+        @test sgn.B == lat.B_signed
+        @test sgn.h_sum == lat.h_sum_signed
+        @test sgn.h_quad == lat.h_quad_signed
+        # The channel is the tangent channel; the gradient still comes off the adjoint sweep.
+        @test sgn.grad == cover_hessian(WithDiagnostics(), f, x0).grad
+    end
+
+    @testset "the signed channel covers and tightens — $name" for (name, f, x0) in PROBLEMS
+        H = ForwardDiff.hessian(f, x0)
+        abs_ch = cover_hessian(WithDiagnostics(), f, x0)
+        sgn = cover_hessian(WithDiagnostics(), f, x0; channel = SignedTangents())
+        for h in (sgn.h_sum, sgn.h_quad)
+            @test all(>=(0), h)
+            @test rank1_ratio(sgn.B, h) <= GATE
+            @test cover_ratio(H, h) <= GATE
+        end
+        # Tighter at every coordinate than the default channel, the two adjoint channels agreeing.
+        @test all(sgn.h_sum .<= abs_ch.h_sum .* GATE)
+        @test all(sgn.h_quad .<= abs_ch.h_quad .* GATE)
+        # `h_sum_rev` stays the absolute route, so here it dominates rather than agrees.
+        @test all(sgn.h_sum .<= sgn.h_sum_rev .* GATE)
+        @test sgn.h_sum_rev == abs_ch.h_sum_rev
+    end
+
+    @testset "the signed channel is not free" begin
+        # The O(L) sweep collapses the sum merge into one reverse pass, which a signed channel
+        # cannot do; refusing is what keeps the mode's cost promise honest.
+        @test_throws "CoverOnly cannot merge over SignedTangents" cover_hessian(
+            CoverOnly(), lattice_program, LATTICE_X; channel = SignedTangents()
+        )
+        @test_throws "O(n*L)" cover_hessian(
+            CoverOnly(), lattice_program, LATTICE_X; channel = SignedTangents()
+        )
+        # The default channel is the default, bitwise.
+        @test cover_hessian(CoverOnly(), lattice_program, LATTICE_X; channel = AbsoluteTangents()).h_sum ==
+            cover_hessian(CoverOnly(), lattice_program, LATTICE_X).h_sum
+    end
+
+    @testset "the signed channel threads the split rule" begin
+        for rule in (ValueSplit(), SensitivitySplit(), VectorNormSplit())
+            lat = cover_lattice(lattice_program, LATTICE_X; rule)
+            sgn = cover_hessian(
+                WithDiagnostics(), lattice_program, LATTICE_X; rule, channel = SignedTangents()
+            )
+            @test sgn.h_quad == lat.h_quad_signed
+        end
+    end
+
     @testset "each channel is separately visible" begin
         lat = cover_lattice(lattice_program, LATTICE_X)
 

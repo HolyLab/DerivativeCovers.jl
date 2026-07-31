@@ -36,7 +36,12 @@ of the [`Tape`](@ref) it was computed from.
 - `B`: explicit elementwise bound satisfying `B >= abs.(H)`.
 - `h_sum`: cover computed with the sum merge.
 - `h_quad`: tighter cover computed by combining cover atoms in quadrature.
-- `h_sum_rev`: independent reverse-sweep computation of `h_sum`, used as a consistency check.
+- `h_sum_rev`: the absolute-value reverse sweep's own route to the sum merge, a consistency check.
+
+`B`, `h_sum` and `h_quad` are formed over the [`TangentChannel`](@ref) the caller asked for, so
+under [`SignedTangents`](@ref) all three are the signed-tangent quantities. `h_sum_rev` is always
+the absolute-value route, which is what makes it independent; it equals `h_sum` in the default
+channel and dominates it in the signed one.
 
 Forming these diagnostics costs `O(n * L)` time and `O(n^2)` memory.
 """
@@ -204,6 +209,68 @@ function tangents(t::Tape{T}) where {T}
                 uk[q] += d * up[q]
             end
         end
+    end
+    return u
+end
+
+"""
+    TangentChannel
+
+Which tangents a cover construction merges over: the exact ones, or an absolute-value bound on
+them. The built-in channels are [`AbsoluteTangents`](@ref), the default, and
+[`SignedTangents`](@ref). Pass one with the `channel` keyword to [`cover_hessian`](@ref).
+
+A channel defines [`tangent_channel`](@ref). The choice affects tightness and cost, but not
+validity: every channel dominates `abs.(∇v)` entrywise, which is all the merges require.
+"""
+abstract type TangentChannel end
+
+"""
+    AbsoluteTangents()
+
+The [`TangentChannel`](@ref) that merges over [`sensitivities`](@ref), the absolute-value bound
+`utilde >= abs.(∇v)`. This is the default, and the only channel whose sum merge collapses into a
+single `O(L)` reverse sweep — the bound is linear in the seeds, so [`abs_reverse`](@ref) can carry
+the whole merge (see [`CoverOnly`](@ref)).
+
+What it gives up is cancellation along the paths from an input to a node, which
+[`SignedTangents`](@ref) keeps.
+"""
+struct AbsoluteTangents <: TangentChannel end
+
+"""
+    SignedTangents()
+
+The [`TangentChannel`](@ref) that merges over `abs.(∇v)` from [`tangents`](@ref), the exact
+gradient magnitudes.
+
+Paired with the signed adjoints every cover already uses, this is the tightest cover of the
+`O(n*L)` tier: `abs.(∇v) <= utilde` entrywise, so it dominates the default channel at every
+coordinate, and the only cancellation it still discards is the cancellation *between* elementals,
+which the triangle inequality over nodes throws away before any channel is chosen.
+
+It costs `O(n*L)` time and memory, and cannot be cheaper: the merge takes magnitudes of each
+tangent *inside* the sum, where nothing is linear in the seeds and no reverse sweep collapses it.
+So [`CoverOnly`](@ref) rejects this channel rather than quietly becoming `O(n*L)`.
+"""
+struct SignedTangents <: TangentChannel end
+
+"""
+    tangent_channel(ch::TangentChannel, t::Tape) -> u
+
+The per-node tangent channel `ch` supplies to [`merge_atoms`](@ref) and [`hessian_bound`](@ref):
+nonnegative vectors satisfying `u[k] >= abs.(∇v_k)` entrywise, which is what makes the merges
+cover. [`sensitivities`](@ref) for [`AbsoluteTangents`](@ref), the magnitudes of
+[`tangents`](@ref) for [`SignedTangents`](@ref).
+"""
+tangent_channel(::AbsoluteTangents, t::Tape) = sensitivities(t)
+tangent_channel(::SignedTangents, t::Tape) = signed_magnitudes(tangents(t))
+
+# Magnitudes in place. Only magnitudes enter the elementwise bound and the atoms, so reducing
+# rather than copying holds the signed channel to a single `n * L` array.
+function signed_magnitudes(u)
+    for g in u
+        map!(abs, g, g)
     end
     return u
 end
@@ -709,8 +776,8 @@ struct WithDiagnostics end
 const CoverMode = Union{CoverOnly, WithDiagnostics}
 
 """
-    cover_hessian([mode], t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit())
-    cover_hessian([mode], f, x0::AbstractVector; check::Bool=true, rule=ValueSplit())
+    cover_hessian([mode], t::Tape, outidx::Integer; check=true, rule=ValueSplit(), channel=AbsoluteTangents())
+    cover_hessian([mode], f, x0::AbstractVector; check=true, rule=ValueSplit(), channel=AbsoluteTangents())
 
 Compute a certified rank-1 cover of a scalar function's Hessian.
 
@@ -721,6 +788,12 @@ and a tighter quadrature cover.
 
 The `rule` keyword chooses how local covers are scaled; see [`SplitRule`](@ref). Every rule
 produces a valid cover. `check=true` verifies the local covering conditions.
+
+The `channel` keyword chooses which tangents the merges run over; see [`TangentChannel`](@ref).
+The default [`AbsoluteTangents`](@ref) is what makes the `O(L)` sweep possible.
+[`SignedTangents`](@ref) keeps the tangent signs and gives the tightest cover available at
+`O(n*L)`, tighter at every coordinate than the default; it is available under
+[`WithDiagnostics`](@ref) only.
 
 Two merges are available:
 
@@ -753,7 +826,9 @@ roundoff.
 # `WithDiagnostics()`
 
 This mode returns a [`HessianDiagnostics`](@ref) and costs `O(n * L)` time and `O(n^2)` memory.
-With `check=true`, it also verifies that the diagnostic and fused computations agree.
+With `check=true`, it also verifies that the diagnostic and fused computations agree — as an
+equality under [`AbsoluteTangents`](@ref), where both routes compute the same merge, and as a
+domination under [`SignedTangents`](@ref), where the absolute route bounds the signed one.
 
 # Examples
 
@@ -780,23 +855,23 @@ true
 """
 function cover_hessian(
         ::WithDiagnostics, t::Tape{T}, outidx::Integer; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     ) where {T}
     n = t.ninputs
     vbar = adjoints(t, outidx)
-    utilde = sensitivities(t)
-    B = hessian_bound(t, vbar, utilde)
+    u = tangent_channel(channel, t)
+    B = hessian_bound(t, vbar, u)
     rhos, theta = local_covers(t, vbar; check, rule)
 
-    h_sum, h_quad = merge_atoms(t, rhos, utilde)
+    h_sum, h_quad = merge_atoms(t, rhos, u)
     h_sum_rev = abs_reverse(t, theta)[1:n]
 
     if check
-        # These two computations share most operations, so their roundoff errors are correlated.
+        # These computations share most operations, so their roundoff errors are correlated.
         rtol = eps(float(real(T)))^(3 // 4)
         # Relative disagreement in units of the tolerance, so `> 1` is a mismatch.
         disagreement(x, y) = @. abs(x - y) / (rtol * max(abs(x), one(T)))
-        s, q = worst_severity(disagreement(h_sum, h_sum_rev))
+        s, q = worst_severity(channel_severity(channel, h_sum, h_sum_rev, rtol, T))
         s > 1 &&
             error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         # local_covers already checked the node invariants.
@@ -804,7 +879,7 @@ function cover_hessian(
         s, q = worst_severity(disagreement(view(vbar, 1:n), pr.grad))
         s > 1 &&
             error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-        s, q = worst_severity(disagreement(h_sum, pr.h_sum))
+        s, q = worst_severity(channel_severity(channel, h_sum, pr.h_sum, rtol, T))
         s > 1 &&
             error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
     end
@@ -812,10 +887,26 @@ function cover_hessian(
     return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
 end
 
+# How a merge over `channel` must compare against the absolute-value reverse route, in units of
+# `rtol` so that `> 1` fails. The routes compute the same number in the absolute channel; in the
+# signed channel `abs.(∇v) <= utilde` entrywise, so the reverse route dominates instead.
+channel_severity(::AbsoluteTangents, h, h_rev, rtol, ::Type{T}) where {T} =
+    @. abs(h - h_rev) / (rtol * max(abs(h), one(T)))
+channel_severity(::SignedTangents, h, h_rev, rtol, ::Type{T}) where {T} =
+    @. (h - h_rev) / (rtol * max(abs(h), one(T)))
+
 function cover_hessian(
         ::CoverOnly, t::Tape{T}, outidx::Integer; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     ) where {T}
+    channel isa AbsoluteTangents || throw(
+        ArgumentError(
+            "CoverOnly cannot merge over $(nameof(typeof(channel))): its single sweep exists " *
+                "because the absolute-tangent sum merge is linear in its seeds and collapses " *
+                "into one reverse sweep, and a signed channel takes magnitudes inside the merge, " *
+                "where nothing collapses. That channel costs O(n*L); ask for WithDiagnostics()"
+        )
+    )
     n, N = t.ninputs, nnodes(t)
     scales = split_scales(rule, t)
     vbar = zeros(T, N)
@@ -842,10 +933,10 @@ end
 
 function cover_hessian(
         mode::CoverMode, f, x0::AbstractVector; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        rule::SplitRule = ValueSplit(), channel::TangentChannel = AbsoluteTangents()
     )
     t, outidx = tape_function(f, x0)
-    return cover_hessian(mode, t, outidx; check, rule)
+    return cover_hessian(mode, t, outidx; check, rule, channel)
 end
 
 cover_hessian(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit()) =
@@ -915,15 +1006,13 @@ function cover_lattice(
     seed[outidx] = 1
     acheck = abs_reverse(t, seed)
 
-    utilde = sensitivities(t)
-    # The signed tangent channel: signed while the gradient is read off, magnitudes thereafter,
-    # since only magnitudes enter the elementwise bound and the atoms. Reducing in place holds
-    # this channel to a single `n * L` array.
+    utilde = tangent_channel(AbsoluteTangents(), t)
+    # The gradient is read off while the tangents are still signed; `signed_magnitudes` then
+    # applies the same reduction `tangent_channel(SignedTangents(), t)` does, so the corners below
+    # agree with `cover_hessian` under that channel to the last bit.
     w = tangents(t)
     grad = copy(w[outidx])
-    for g in w
-        map!(abs, g, g)
-    end
+    signed_magnitudes(w)
 
     B = hessian_bound(t, vbar, utilde)
     B_signed = hessian_bound(t, vbar, w)
