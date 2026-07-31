@@ -27,6 +27,7 @@ import MatrixCovers: support_components, gramcover, gramcover!
 
 # Main entry points and result types.
 export Tape, TVar, tape_function
+export FVar, forward_cover, ForwardCover
 export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
@@ -45,7 +46,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
             :split_scales, :value, :isconstant, :nnodes, :natoms, :CoverVar, :constantvar,
-            :tangent_channel
+            :tangent_channel, :forward_scale
         )
     )
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.
@@ -79,6 +80,7 @@ include("curvature.jl")
 include("tape.jl")
 include("overloads.jl")
 include("covers.jl")
+include("forward.jl")
 include("merges.jl")
 include("variance.jl")
 include("spectral.jl")

@@ -1,0 +1,132 @@
+# A forward propagation reaches one specific corner of the lattice — signed tangents, absolute
+# adjoints — and these tests hold it there. Equality against `h_quad_forward` is the acceptance
+# criterion: it pins the construction, not merely the validity of what comes out.
+
+# Array heads exercise the recorders `PROBLEMS` reaches only in part: `dotnode` for a bilinear
+# pair, `linearnode` for a constant-coefficient combination, and both through `sum` and `*`.
+const FORWARD_ARRAY = [
+    ("softmax head", x -> sum(softmax(x) .* [1.0, -2.0, 0.5, 1.5]), [0.4, -1.1, 0.7, 0.2]),
+    ("layernorm head", x -> sum(abs2, layernorm(x)) + layernorm(x)[1], [0.4, -1.1, 0.7, 0.2]),
+    ("dot x,Ax", x -> dot(x, AQ * x) / 2, XQ),
+    ("dot x,x", x -> dot(x, x) * dot(x, [1.0, 2.0, 3.0, 4.0, 5.0]), XQ),
+    ("matvec chain", x -> sum(abs2, AQ * x) + dot(x, x), XQ),
+]
+
+const FORWARD_FIXTURES = vcat(PROBLEMS, FORWARD_ARRAY)
+
+# A rule with no `forward_scale` method, standing for one whose scale references a forward
+# propagation cannot produce.
+struct TapeOnlySplit <: DerivativeCovers.SplitRule end
+
+# Two routes to the same number differ in the order they accumulate it, and the split weights
+# differ by a factor `sqrt(acheck)` between them, so equality is to roundoff rather than to the
+# bit. Measured worst case over these fixtures is 4e-16.
+const FORWARD_RTOL = 1.0e-12
+
+@testset "forward.jl" begin
+
+    @testset "the cover is the lattice's forward corner — $name ($(nameof(typeof(rule))))" for
+        (name, f, x0) in FORWARD_FIXTURES, rule in (ValueSplit(), VectorNormSplit())
+        fc = forward_cover(f, x0; rule)
+        lat = cover_lattice(f, x0; rule)
+        @test fc.h_quad ≈ lat.h_quad_forward rtol = FORWARD_RTOL
+        @test fc.grad ≈ ForwardDiff.gradient(f, x0) rtol = FORWARD_RTOL
+    end
+
+    @testset "the cover covers — $name" for (name, f, x0) in FORWARD_FIXTURES
+        H = ForwardDiff.hessian(f, x0)
+        for rule in (ValueSplit(), VectorNormSplit())
+            fc = forward_cover(f, x0; rule)
+            @test all(>=(0), fc.h_quad)
+            @test cover_ratio(H, fc.h_quad) <= GATE
+        end
+    end
+
+    @testset "every intermediate carries a cover" begin
+        # `G` maintains its invariant at every variable, not only at the output, so the cover of a
+        # sub-expression is available where the sub-expression is.
+        inner(z) = tanh(z[1] * z[2]) + z[1]^2
+        x0 = [0.6, -0.9]
+        captured = Ref{Any}(nothing)
+        outer(z) = (y = inner(z); captured[] = y; y * z[1])
+        forward_cover(outer, x0)
+        mid = forward_cover(captured[])
+        @test mid.grad ≈ ForwardDiff.gradient(inner, x0) rtol = FORWARD_RTOL
+        @test cover_ratio(ForwardDiff.hessian(inner, x0), mid.h_quad) <= GATE
+    end
+
+    @testset "a rule needs a channel the propagation carries" begin
+        f = x -> x[1] * x[2]
+        @test_throws "SensitivitySplit references the absolute sensitivities" forward_cover(
+            f, [1.0, 2.0]; rule = SensitivitySplit()
+        )
+        # A rule that supplies its scales only through `split_scales` names what it would take to
+        # make it usable here, rather than failing as a missing method.
+        @test_throws "A rule usable here defines" forward_cover(f, [1.0, 2.0]; rule = TapeOnlySplit())
+        # The weighted form is checked against the input count, as its tape twin is.
+        @test_throws DimensionMismatch forward_cover(f, [1.0, 2.0]; rule = VectorNormSplit([1.0]))
+        @test forward_cover(f, [1.0, 2.0]; rule = VectorNormSplit([1.0, 4.0])) isa ForwardCover
+    end
+
+    @testset "the element type is preserved" begin
+        f = x -> exp(x[1]) + x[1] * x[2]^2
+        fc = forward_cover(f, Float32[0.5, 2.0])
+        @test fc isa ForwardCover{Float32}
+        @test eltype(fc.grad) === Float32
+        @test eltype(fc.h_quad) === Float32
+    end
+
+    @testset "a deep chain needs no tape" begin
+        # Working memory is per live variable, so a chain far longer than any of the fixtures
+        # still runs; the dead intermediates are collectable as the propagation goes.
+        function deep(x)
+            v = x[1]
+            for _ in 1:20_000
+                v = tanh(v) + 0.5 * x[2]
+            end
+            return v
+        end
+        x0 = [0.3, 0.2]
+        fc = forward_cover(deep, x0)
+        @test all(isfinite, fc.h_quad)
+        @test fc.grad ≈ ForwardDiff.gradient(deep, x0) rtol = FORWARD_RTOL
+        @test cover_ratio(ForwardDiff.hessian(deep, x0), fc.h_quad) <= GATE
+    end
+
+    @testset "malformed programs are rejected" begin
+        @test_throws "does not depend on the inputs" forward_cover(x -> zero(eltype(x)), [1.0])
+        @test_throws "covers a scalar-valued program" forward_cover(x -> [x[1], x[2]], [1.0, 2.0])
+        @test_throws "no inputs" forward_cover(x -> x, Float64[])
+        # A constant carries no channels, so asking one for its cover names the reason.
+        @test_throws "carries no tangent or cover channel" forward_cover(FVar{Float64, ValueSplit}(nothing, 1.0))
+    end
+
+    @testset "a point that is not twice-differentiable is named by its values" begin
+        # Without a tape there is no node number to report, so the elemental is identified by its
+        # own value and those of its operands.
+        divdiff = x -> (exp(x[1]) - exp(x[2])) / (x[1] - x[2])
+        @test_throws "not twice-differentiable" forward_cover(divdiff, [0.5, 0.5])
+        @test_throws "this elemental" forward_cover(divdiff, [0.5, 0.5])
+        @test_throws "operand values" forward_cover(divdiff, [0.5, 0.5])
+
+        # `check=false` propagates IEEE values instead, leaving the caller to test the cover.
+        @test !all(isfinite, forward_cover(divdiff, [0.5, 0.5]; check = false).h_quad)
+        @test all(isfinite, forward_cover(divdiff, [0.5, 1.5]).h_quad)
+    end
+
+    @testset "constants fold as they do on a tape" begin
+        # The elemental table is shared, so the identities it declines to record — a zero shift, a
+        # unit scaling — are declined here too, and a constant-only subexpression stays constant.
+        f = x -> (c = zero(eltype(x)); (x[1] + c) * one(eltype(x)) * (x[2] + 2 * one(eltype(x))))
+        g = x -> x[1] * (x[2] + 2)
+        x0 = [0.7, -1.3]
+        @test forward_cover(f, x0).h_quad == forward_cover(g, x0).h_quad
+        @test forward_cover(f, x0).grad == forward_cover(g, x0).grad
+    end
+
+    # An integer starting point propagates in Float64, as recording one does. The one-based
+    # declaration is pinned alongside every other entry point's, in `genericaxes.jl`.
+    @testset "an integer starting point floats" begin
+        @test forward_cover(x -> x[1] * x[2], [1, 2]) isa ForwardCover{Float64}
+    end
+end

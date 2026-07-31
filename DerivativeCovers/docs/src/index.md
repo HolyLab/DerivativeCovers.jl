@@ -139,7 +139,31 @@ TVar
 tape_function
 ```
 
+## Propagating a cover forward
+
+A cover can also be propagated forward, with no tape at all. Each variable carries its value, its
+signed tangent, and a squared cover of its own Hessian; the cover of the output falls out of the
+last of these. Working memory is `O(n)` per *live* variable rather than per recorded operation, so
+the cost does not grow with the length of the program.
+
+This reaches a specific corner of the sign lattice — every tangent sign kept, every adjoint sign
+discarded, since a forward pass cannot know how the output depends on the variable it is at. That
+corner is *incomparable* with what [`cover_hessian`](@ref) computes, which keeps the adjoint signs
+and discards the tangent ones. Which is tighter is a property of the program.
+
+```@docs
+FVar
+forward_cover
+```
+
 ## Cover entry points
+
+At equal `O(n*L)` cost the tangent channel is what separates the covers below. The default
+`cover_hessian` merges over an absolute-value bound on the tangents, which is what lets its sum
+merge collapse into a single `O(L)` reverse sweep. Asking instead for [`SignedTangents`](@ref)
+gives the tightest cover the package computes — tighter at every coordinate than the default, with
+only cancellation *between* elementals still discarded — at `O(n*L)`, since taking magnitudes
+inside the merge leaves nothing for a reverse sweep to collapse.
 
 ```@docs
 cover_hessian
@@ -163,6 +187,7 @@ WithDiagnostics
 ```@docs
 HessianCover
 HessianDiagnostics
+ForwardCover
 CoverLattice
 JacobianCover
 NLSCover
@@ -172,10 +197,24 @@ VarianceCover
 
 ## Split rules
 
+Some second-derivative blocks admit a family of covers, and a rule picks one member of it. Each of
+the three is the exact optimum of a different thing: `SensitivitySplit` of the sum merge,
+`VectorNormSplit` of the quadrature merge, and `ValueSplit` of nothing in particular — it is the
+default because it is the only one whose scale reference a cover already has on hand.
+
 ```@docs
 SplitRule
 ValueSplit
 SensitivitySplit
+VectorNormSplit
+```
+
+## Tangent channels
+
+```@docs
+TangentChannel
+AbsoluteTangents
+SignedTangents
 ```
 
 ## Matrix-free products

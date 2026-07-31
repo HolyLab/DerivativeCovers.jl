@@ -21,6 +21,21 @@ function Base.show(io::IO, ::MIME"text/plain", x::TVar)
     end
 end
 
+Base.show(io::IO, x::FVar) = print(io, "FVar(", x.val, ")")
+
+function Base.show(io::IO, ::MIME"text/plain", x::FVar)
+    return if isconstant(x)
+        print(io, "FVar: ", x.val, " (constant)")
+    else
+        print(io, "FVar: ", x.val, " (", length(channels(x).g), " inputs)")
+    end
+end
+
+Base.show(io::IO, c::ForwardCover) = print(io, "ForwardCover(", length(c.grad), " inputs)")
+
+Base.show(io::IO, ::MIME"text/plain", c::ForwardCover) =
+    print(io, "ForwardCover: ", length(c.grad), " inputs; grad, h_quad")
+
 Base.show(io::IO, c::HessianCover) = print(io, "HessianCover(", length(c.grad), " inputs)")
 
 Base.show(io::IO, ::MIME"text/plain", c::HessianCover) =

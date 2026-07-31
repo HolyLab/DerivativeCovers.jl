@@ -46,6 +46,7 @@ include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
 include("lattice.jl")
+include("forward.jl")
 include("nls.jl")
 include("vectoroutput.jl")
 include("support.jl")
@@ -95,6 +96,7 @@ include("genericaxes.jl")
         @test Set(setdiff(exported, [:DerivativeCovers])) == Set(
             [
                 :Tape, :TVar, :tape_function,
+                :FVar, :forward_cover, :ForwardCover,
                 :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
                 :cover_hybrid, :cover_jacobian_hybrid, :cover_lattice,
                 :CoverOnly, :WithDiagnostics,
@@ -111,7 +113,7 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
             :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
-            :CoverVar, :constantvar, :tangent_channel,
+            :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
@@ -179,10 +181,27 @@ include("genericaxes.jl")
         @test occursin("constant", sprint(show, MIME"text/plain"(), TVar(2.5)))
         @test sprint(show, TVar(2.5)) == "TVar(2.5)"
 
+        # An FVar carries its channels rather than a tape, but they are as long as the input
+        # vector, so its displays report the input count instead of the channels themselves.
+        function intermediate_fvar(n)
+            captured = Ref{Any}(nothing)
+            forward_cover(collect(1.0:n)) do zs
+                y = zs[1] * zs[2]
+                captured[] = y
+                return y + sum(zs)
+            end
+            return captured[]
+        end
+        fv = intermediate_fvar(60)
+        @test sprint(show, fv) == "FVar(2.0)"
+        @test occursin("60 inputs", sprint(show, MIME"text/plain"(), fv))
+        @test occursin("constant", sprint(show, MIME"text/plain"(), FVar{Float64, ValueSplit}(nothing, 2.5)))
+        @test sprint(show, FVar{Float64, ValueSplit}(nothing, 2.5)) == "FVar(2.5)"
+
         # A TVar carries a reference to the whole tape, so the default display would grow with
         # the program. Both displays must stay bounded as the tape gets ten times longer.
         tbig, _ = tape_function(f, collect(1.0:600.0))
-        for v in (tbig, TVar(tbig, 5))
+        for v in (tbig, TVar(tbig, 5), intermediate_fvar(600))
             @test length(sprint(show, v)) < 50
             @test length(sprint(show, MIME"text/plain"(), v)) < 50
         end
@@ -192,6 +211,7 @@ include("genericaxes.jl")
             cover_hessian(f, x0),
             cover_hessian(WithDiagnostics(), f, x0),
             cover_lattice(f, x0),
+            forward_cover(f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
@@ -205,9 +225,9 @@ include("genericaxes.jl")
                 @test length(s) < 100
             end
         end
-        @test sprint(show, results[4]) == "JacobianCover(2x3)"
-        @test sprint(show, results[5]) == "NLSCover(2 residuals, 3 inputs)"
-        @test sprint(show, results[6]) == "NLSDiagnostics(2 residuals, 3 inputs)"
+        @test sprint(show, results[5]) == "JacobianCover(2x3)"
+        @test sprint(show, results[6]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[7]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin
