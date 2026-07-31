@@ -204,12 +204,14 @@ the default because parent values are the only scale reference an `O(L)` sweep a
 sensitivity costs an extra sweep and a tangent norm costs `O(n*L)`.
 
 **A per-node optimum is not a per-cover one, and the objective it optimizes is not the score.**
-`VectorNormSplit` minimizes `sum(h_quad.^2)`, and a one-coordinate weight sweep over eight decades
-never beat it on any fixture. But looseness is the *worst entry*, and those are different
-questions: the norm split wins the worst entry on `quadratic form` (1.80 against 2.78 for the
-value split and 2.62 for the sensitivity split) and on both array heads, and loses it on
-`quad entrywise` (3.91 against 2.54) and `quad matvec` while still winning the objective. A rule
-that provably minimizes a sum can be beaten on a maximum, and here it is.
+`VectorNormSplit` minimizes `sum(h_quad.^2)` at each node separately. That is not the same as
+minimizing it over the cover — on `tointgss` a one-coordinate weight sweep finds a split whose
+objective is `0.136` of the norm split's, so the per-node optima of different nodes are not
+simultaneously achievable there. Nor is the objective the score: looseness is the *worst entry*,
+and the norm split wins that on `quadratic form` (1.80 against 2.78 for the value split and 2.62
+for the sensitivity split) and on both array heads, while losing it on `quad entrywise` (3.91
+against 2.54) and `quad matvec` — winning the objective in both. A rule that provably minimizes a
+sum at each node can be beaten on the sum and on the maximum, and here it is on each.
 
 **The tangent channel moves more than the rule does, where it moves at all.** Keeping the tangent
 signs takes `deep w=4` from 16.3 to 2.3 and the two-layer MLP from 3.39 to 1.47, and no rule
@@ -224,9 +226,30 @@ operands `1e-8` from zero, the split `ValueSplit` picks is set by the *ratio* of
 are both a hair from zero: over ratios from 100 to 0.01 its cover swings from `(10, 0.1)` to
 `(0.1, 10)`, four orders of magnitude driven by the direction of an arbitrarily small perturbation,
 and at the singular point itself it falls back to `(1, 1)`. Both derivative-based references read
-`1` on each operand throughout and return `(1, 1)` at every ratio and at the point. That
-discontinuity is the whole of what the other two rules buy at a vanishing product, and it is worth
-`O(L)` extra for the sensitivity reference and `O(n*L)` for the norm.
+`1` on each operand throughout and return `(1, 1)` at every ratio and at the point.
+
+**Four problems from `OptimizationProblems` price that seam on programs nobody wrote to exhibit
+it**, and they price it in the one place looseness cannot see. On `hs255`, `beale`, `brybnd` and
+`tointgss` the rules barely separate on tightness — the quadrature merges sit within 7% of each
+other and `tointgss` is exact under all three — and the tangent channel changes *nothing* at all,
+these programs having no path cancellation to keep signs for. What separates the rules is whether
+the split survives a perturbation of the evaluation point too small to change any value a user
+would print. Under a `1e-12` relative jitter the value split's cover moves by a factor of `1.6e6`
+on `beale` and `3.6e6` on `brybnd`; the sensitivity reference moves by `5e-12` and `7e-12`, which
+is the jitter itself.
+
+**But the norm reference is not stable either, and `tointgss` is where it shows.** There the
+value split moves by 41% and the *norm* split by 78%, while the sensitivity split moves by
+`1.6e-11`. That is not a small-denominator artifact: one coordinate of the cover falls from `6.50`
+to `1.41` under the jitter, so the split chosen at the base point is the loose one and any
+perturbation finds a better one. The base point is `x = 3*ones`, where every difference
+`x[i] - x[i+1]` in the objective vanishes at once — a degenerate configuration for a reference
+built from tangents, as a vanishing product is for one built from values. The mechanism beyond
+that is not established here.
+
+So the ranking on this population is: only the absolute-sensitivity reference was stable on all
+four, at the price of one extra `O(L)` sweep. The tangent norm buys the quadrature optimum and
+costs `O(n*L)`, and it is degenerate on its own class of points rather than on none.
 
 ## `support_granularity.jl`
 

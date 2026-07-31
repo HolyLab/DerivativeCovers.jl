@@ -12,11 +12,13 @@
 #
 # Two things the table cannot show on its own are reported beside it. A per-node optimum is not a
 # global one -- the rules are compared against the best split found by sweeping the family, so a
-# rule can be beaten -- and the value channel goes singular exactly where two operands of a product
-# both vanish, which is where the other two rules earn their cost.
+# rule can be beaten -- and a scale reference can be degenerate at the point of evaluation, which
+# looseness at that point does not reveal and a jitter of the point does. The four
+# `OptimizationProblems` fixtures are here for the second of those: their covers are tight under
+# every rule and it is the stability of the split that separates them.
 
-using DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra, Random, Printf,
-    Statistics
+using ADNLPModels, DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra,
+    OptimizationProblems, Random, Printf, Statistics
 using DerivativeCovers: cover_ratio, value
 
 const RULES = (
@@ -138,6 +140,67 @@ function singularity_table(ratios)
     return println()
 end
 
+"""
+    cutest_fixtures(; n=10)
+
+Four problems from `OptimizationProblems.ADNLPProblems`, chosen because their splits are unstable
+rather than because their covers are loose. `ADNLPModel` keeps the objective it was given, so the
+generic `f` is taken straight off the model rather than transcribed.
+"""
+function cutest_fixtures(; n = 10)
+    AP = OptimizationProblems.ADNLPProblems
+    models = [
+        ("hs255", AP.hs255()),
+        ("beale", AP.beale()),
+        ("brybnd", AP.brybnd(; n)),
+        ("tointgss", AP.tointgss(; n)),
+    ]
+    return [(name, m.f, m.meta.x0) for (name, m) in models]
+end
+
+"""
+    split_jitter(f, x0, rule; ndraws=24, releps=1.0e-12, seed=7) -> departure
+
+Worst relative departure of `h_quad` from its unperturbed value, over `ndraws` perturbations of
+relative size `releps` and over all coordinates.
+
+A scale reference is a function of the evaluation point, so the split it picks is too, and nothing
+requires that function to be continuous. This measures it: a rule whose reference varies smoothly
+returns a departure of order `releps`, and one whose reference is degenerate at `x0` returns
+whatever the discontinuity is worth. Validity is not at stake — every draw is a valid cover — only
+reproducibility of the number a caller gets.
+"""
+function split_jitter(f, x0, rule; ndraws = 24, releps = 1.0e-12, seed = 7)
+    rng = MersenneTwister(seed)
+    base = cover_hessian(WithDiagnostics(), f, x0; rule).h_quad
+    worst = 0.0
+    for _ in 1:ndraws
+        xp = x0 .* (1 .+ releps .* randn(rng, length(x0))) .+ releps .* randn(rng, length(x0))
+        h = cover_hessian(WithDiagnostics(), f, xp; rule).h_quad
+        for i in eachindex(base, h)
+            base[i] == 0 && continue
+            worst = max(worst, abs(h[i] - base[i]) / base[i])
+        end
+    end
+    return worst
+end
+
+function stability_table(fixtures)
+    @printf("%-22s", "fixture")
+    for (label, _) in RULES
+        @printf(" %12s", label)
+    end
+    println()
+    for (name, f, x0) in fixtures
+        @printf("%-22s", name)
+        for (_, rule) in RULES
+            @printf(" %12.3e", split_jitter(f, x0, rule))
+        end
+        println()
+    end
+    return println()
+end
+
 "Fixtures drawn from the `DerivativeCoverProblems` families, at a common input count."
 function family_fixtures(n; seed = 3)
     return map(families(; seed)) do (name, generate)
@@ -177,6 +240,7 @@ end
 function main()
     n = 12
     fixtures = vcat(family_fixtures(n), array_fixtures(MersenneTwister(20240607), n))
+    cutest = cutest_fixtures()
 
     println("Looseness is 1/cover_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
     println("`found/norm` compares the smallest quadrature objective a one-coordinate weight sweep")
@@ -185,6 +249,15 @@ function main()
 
     println("--- what a rule is worth, in each tangent channel ---")
     rule_table(fixtures)
+
+    println("--- and on four problems from OptimizationProblems ---")
+    rule_table(cutest)
+
+    println("--- how far a split moves under a 1e-12 perturbation of the point ---")
+    println("Order `releps` is a reference that varies smoothly; anything larger is a split that")
+    println("does not survive a rounding difference in where the program was evaluated.")
+    println()
+    stability_table(cutest)
 
     println("--- the seam a value reference cannot resolve ---")
     println("Both operands of the product sit 1e-8 from zero; only their ratio varies down the")
