@@ -113,6 +113,7 @@ include("genericaxes.jl")
             :CoverVar, :constantvar,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
+            :CoverSite, :TapeSite, :site_label, :site_values,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
             :jacobian_representability, :jacobian_minimax, :dependency_severity,
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,

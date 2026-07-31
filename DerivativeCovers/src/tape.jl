@@ -96,6 +96,22 @@ function natoms(t::Tape)
 end
 
 """
+    TapeSite(t::Tape, k::Integer)
+
+The [`CoverSite`](@ref) naming node `k` of `t`, so that a cover built there reports which node it
+failed on and what the values around it were.
+"""
+struct TapeSite{T} <: CoverSite
+    t::Tape{T}
+    k::Int
+end
+
+Base.eltype(::Type{TapeSite{T}}) where {T} = T
+site_label(s::TapeSite) = "node $(s.k)"
+site_values(s::TapeSite) =
+    "node value $(s.t.vals[s.k]), parent values $(Tuple(s.t.vals[p] for p in s.t.parents[s.k]))"
+
+"""
     CoverVar{T}
 
 A scalar that carries a value of type `T` through a program so that a cover construction can

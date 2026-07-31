@@ -444,6 +444,16 @@ Base.size(a::AbsValues) = size(a.vals)
 Base.IndexStyle(::Type{<:AbsValues}) = IndexLinear()
 Base.getindex(a::AbsValues, i::Int) = abs(a.vals[i])
 
+# Per-node scales, gathered into slot order for `cover_slots`. Lazy, so the tape sweeps hand over
+# a node's scale references without copying them once per node.
+struct SlotScales{T, S <: AbstractVector{T}, P <: AbstractVector{<:Integer}} <: AbstractVector{T}
+    scales::S
+    parents::P
+end
+Base.size(s::SlotScales) = size(s.parents)
+Base.IndexStyle(::Type{<:SlotScales}) = IndexLinear()
+Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
+
 """
     split_scales(rule::SplitRule, t::Tape) -> scales
 
@@ -519,6 +529,9 @@ verifies the covering invariant on recorded nodes.
 The first form uses [`ValueSplit`](@ref). The second takes any [`SplitRule`](@ref) together
 with `scales = split_scales(rule, t)`, computed once by the caller and shared across nodes.
 
+This is the tape's adapter onto [`cover_slots`](@ref): it names the node with a
+[`TapeSite`](@ref) and gathers `scales[t.parents[k]]` into slot order, both lazily.
+
 Under a rule for which a zero scale certifies a dead slot ([`SensitivitySplit`](@ref)), a slot
 with `scales[p_i] == 0` gets `rho[i] = 0` and its partner covers only its own diagonal. The
 covering invariant deliberately does not hold slotwise there: every entry it would cover is
@@ -532,25 +545,24 @@ local_cover_slots(t::Tape, k::Integer, av::Real; check::Bool = true) =
     local_cover_slots(ValueSplit(), t, k, av, split_scales(ValueSplit(), t); check)
 
 """
-    check_finite_partials(t::Tape, k::Integer, av, c::Tuple)
+    check_finite_partials(site::CoverSite, av, c::Tuple)
 
-Throw unless the absolute adjoint `av` of node `k` and its covering entries `c` are all finite,
-reporting the node's own value and its parents' values.
+Throw unless the adjoint weight `av` of the elemental at `site` and its covering entries `c` are
+all finite, reporting the values around it.
 
 The covering invariant is a set of comparisons against `c`, so it cannot fire meaningfully when
 `c` is not finite: every comparison against `NaN` is false and no finite `rho` covers an infinite
 entry, so the test would reject a split that is not at fault. A non-finite `c` says instead that
-the program is not twice-differentiable where it was recorded — a division by zero, or a power,
+the program is not twice-differentiable where it was evaluated — a division by zero, or a power,
 logarithm or root at its singularity. A non-finite `av` says the same of a node downstream, whose
 partials the adjoint has already passed through.
 """
-function check_finite_partials(t::Tape, k::Integer, av::Real, c::Tuple)
+function check_finite_partials(site::CoverSite, av::Real, c::Tuple)
     (isfinite(av) && all(isfinite, c)) && return nothing
-    cause = isfinite(av) ? "node $k has non-finite second partials c=$c" :
-        "the absolute adjoint reaching node $k is $av, from a node downstream"
+    cause = isfinite(av) ? "$(site_label(site)) has non-finite second partials c=$c" :
+        "the absolute adjoint reaching $(site_label(site)) is $av, from a node downstream"
     error(
-        "$cause; the program is not twice-differentiable at this point (node value " *
-            "$(t.vals[k]), parent values $(Tuple(t.vals[p] for p in t.parents[k])))"
+        "$cause; the program is not twice-differentiable at this point ($(site_values(site)))"
     )
 end
 
@@ -576,11 +588,13 @@ function local_cover_slots(
         rule::SplitRule, t::Tape{T}, k::Integer, av::Real,
         scales::AbstractVector; check::Bool = true
     ) where {T}
+    site = TapeSite(t, Int(k))
+    sl = SlotScales(scales, t.parents[k])
     # The assertion is the return type [`cover_slots`](@ref) promises. Without it inference gives
     # up at the open fallback inside `dispatchcurvature` and the sweeps, which call this once per
     # node, box every result.
     return dispatchcurvature(t.Cs[k], T) do C
-        cover_slots(C, rule, t, k, av, scales; check)
+        cover_slots(C, rule, site, av, sl; check)
     end::Union{Nothing, Vector{T}}
 end
 

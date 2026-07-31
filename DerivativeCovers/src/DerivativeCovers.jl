@@ -51,7 +51,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         Expr(
             :public, :Curvature, :NoCurvature, :UnaryCurvature, :BinaryCurvature,
             :DenseCurvature, :PairedCurvature, :DeclaredCurvature, :cover_slots,
-            :bound_contribution!, :curvature_apply!, :has_exact_partials
+            :bound_contribution!, :curvature_apply!, :has_exact_partials,
+            :CoverSite, :TapeSite, :site_label, :site_values
         )
     )
     # Ratios, bounds, and rescalings defined on a cover from any source.
