@@ -99,6 +99,11 @@ const FORWARD_RTOL = 1.0e-12
         @test_throws "no inputs" forward_cover(x -> x, Float64[])
         # A constant carries no channels, so asking one for its cover names the reason.
         @test_throws "carries no tangent or cover channel" forward_cover(FVar{Float64, ValueSplit}(nothing, 1.0))
+        # A declared sub-map belongs to recording; the propagation says so rather than
+        # presenting a bare MethodError from an elemental it has no method for.
+        @test_throws "available while recording" forward_cover(
+            x -> submap(z -> [z[1] * z[2]], x)[1], [0.6, -0.9]
+        )
     end
 
     @testset "a point that is not twice-differentiable is named by its values" begin

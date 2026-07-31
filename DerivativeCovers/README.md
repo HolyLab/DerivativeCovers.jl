@@ -50,6 +50,12 @@ objectives, and `cover_variance` for a cheaper, uncertified estimate. `cover_hyb
 trade computation for a tighter cover, while `SplitRule` controls how individual nodes select
 among equally valid local covers.
 
+Two choices buy tightness at `O(n*L)`. `TangentChannel` selects which tangents the merges run
+over: the default absolute-value bound is what makes the `O(L)` sweep possible, and `SignedTangents`
+gives the tightest cover the package computes. `forward_cover` instead propagates a cover forward
+with no tape at all, in memory that does not grow with the length of the program — a different
+corner of the same trade, keeping every tangent sign and discarding every adjoint one.
+
 ## Documentation
 
 See the [rendered documentation](https://HolyLab.github.io/DerivativeCovers.jl/dev/) for the full

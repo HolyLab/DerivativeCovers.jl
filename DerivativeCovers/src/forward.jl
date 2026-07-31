@@ -61,6 +61,11 @@ Build one with [`forward_cover`](@ref) rather than directly.
 struct FVar{T, R} <: CoverVar{T}
     channels::Union{ForwardChannels{T, R}, Nothing}
     val::T
+
+    # `R` reaches the fields only through the channels, so a constant -- which has none -- leaves
+    # the generated constructor unable to infer it. Both parameters are named at every call site
+    # instead, and the field declarations coerce.
+    FVar{T, R}(channels, val) where {T, R} = new{T, R}(channels, val)
 end
 
 isconstant(x::FVar) = x.channels === nothing
@@ -248,6 +253,20 @@ function dotnode(ws::AbstractVector{<:FVar{T, R}}, xs::AbstractVector{<:FVar{T, 
     add_atoms!(G, PairedCurvature(q), ctx, site, sl, gs)
     return FVar{T, R}(ForwardChannels(ctx, g, G), val)
 end
+
+# A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the
+# declaration by sweeping a tape of the sub-map, and a propagation has no tape to sweep. Naming
+# that beats the bare MethodError the missing recorder would otherwise raise.
+submapnode(
+    ::AbstractVector{<:FVar}, ::AbstractVector{<:Real}, ::AbstractMatrix{<:Real},
+    ::Union{Nothing, AbstractMatrix{<:Real}} = nothing
+) = throw(
+    ArgumentError(
+        "a declared sub-map is available while recording, not while propagating a cover " *
+            "forward: `declare_submap` builds the declaration by sweeping a tape of the sub-map. " *
+            "Call the sub-map's own operations instead, which the propagation follows directly"
+    )
+)
 
 """
     forward_cover(f, x0::AbstractVector; rule=VectorNormSplit(), check=true) -> ForwardCover
