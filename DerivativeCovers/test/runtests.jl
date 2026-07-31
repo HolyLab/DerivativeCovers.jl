@@ -195,8 +195,8 @@ include("genericaxes.jl")
         fv = intermediate_fvar(60)
         @test sprint(show, fv) == "FVar(2.0)"
         @test occursin("60 inputs", sprint(show, MIME"text/plain"(), fv))
-        @test occursin("constant", sprint(show, MIME"text/plain"(), FVar{Float64, ValueSplit}(nothing, 2.5)))
-        @test sprint(show, FVar{Float64, ValueSplit}(nothing, 2.5)) == "FVar(2.5)"
+        @test occursin("constant", sprint(show, MIME"text/plain"(), FVar{Float64, ValueSplit}(2.5)))
+        @test sprint(show, FVar{Float64, ValueSplit}(2.5)) == "FVar(2.5)"
 
         # A TVar carries a reference to the whole tape, so the default display would grow with
         # the program. Both displays must stay bounded as the tape gets ten times longer.

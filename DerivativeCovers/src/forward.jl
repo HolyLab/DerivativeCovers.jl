@@ -19,12 +19,16 @@ end
 State shared by every variable in a forward propagation: the [`SplitRule`](@ref) followed by local
 covers, the input count used to size channels, whether each local cover is verified, and a scratch
 vector reused during atom assembly.
+
+It is a reference type so that every variable of the propagation holds a pointer to the one
+context: storing an immutable into a variable's field would copy it, at one allocation per node.
+Identity is then also what `===` compares, which is what distinguishes two propagations.
 """
-struct ForwardContext{T, R <: SplitRule}
-    rule::R
-    ninputs::Int
-    check::Bool
-    scratch::Vector{T}
+mutable struct ForwardContext{T, R <: SplitRule}
+    const rule::R
+    const ninputs::Int
+    const check::Bool
+    const scratch::Vector{T}
 end
 
 """
@@ -35,6 +39,9 @@ squared cover `G` maintaining `sqrt.(G) * sqrt.(G)' >= abs.(∇²v)` entrywise.
 
 `G` is squared rather than rooted because the recursion that maintains it is *linear* in the
 parents' `G`, which is what keeps a per-node re-merge from compounding with depth.
+
+The channels live in the [`FVar`](@ref)'s own fields; [`channels`](@ref) assembles this view of
+them on demand, and it costs nothing once inlined.
 """
 struct ForwardChannels{T, R}
     ctx::ForwardContext{T, R}
@@ -59,18 +66,29 @@ never materializes a tape.
 Build one with [`forward_cover`](@ref) rather than directly.
 """
 struct FVar{T, R} <: CoverVar{T}
-    channels::Union{ForwardChannels{T, R}, Nothing}
     val::T
+    ctx::Union{ForwardContext{T, R}, Nothing}
+    g::Union{Vector{T}, Nothing}
+    G::Union{Vector{T}, Nothing}
 
-    # `R` reaches the fields only through the channels, so a constant -- which has none -- leaves
-    # the generated constructor unable to infer it. Both parameters are named at every call site
-    # instead, and the field declarations coerce.
-    FVar{T, R}(channels, val) where {T, R} = new{T, R}(channels, val)
+    # The channels are held field by field rather than as a nested struct: a struct is immutable
+    # and so would be copied into the field, at one allocation per node. Each is `nothing` for a
+    # constant, which carries no channels; `R` then reaches the fields through nothing at all, so
+    # both parameters are named at every call site and the field declarations coerce.
+    FVar{T, R}(val) where {T, R} = new{T, R}(val, nothing, nothing, nothing)
+    FVar{T, R}(val, ctx, g, G) where {T, R} = new{T, R}(val, ctx, g, G)
 end
 
-isconstant(x::FVar) = x.channels === nothing
+isconstant(x::FVar) = x.ctx === nothing
 value(x::FVar) = x.val
-constantvar(::Type{FVar{T, R}}, c::Real) where {T, R} = FVar{T, R}(nothing, c)
+constantvar(::Type{FVar{T, R}}, c::Real) where {T, R} = FVar{T, R}(c)
+
+@noinline _constant_channels(x::FVar) = throw(
+    ArgumentError(
+        "a constant FVar (value $(value(x))) carries no tangent or cover channel; it must be " *
+            "folded into an operand that does"
+    )
+)
 
 """
     channels(x::FVar) -> ForwardChannels
@@ -79,11 +97,10 @@ The tangent and cover channels behind `x`. A constant has neither: every element
 constant operand into one that propagates, so reaching here with a constant means a caller
 bypassed that folding.
 """
-function channels(x::FVar)
-    ch = x.channels
-    ch === nothing &&
-        throw(ArgumentError("a constant FVar (value $(value(x))) carries no tangent or cover channel; it must be folded into an operand that does"))
-    return ch
+function channels(x::FVar{T, R}) where {T, R}
+    ctx = x.ctx
+    ctx === nothing && _constant_channels(x)
+    return ForwardChannels{T, R}(ctx, x.g, x.G)
 end
 
 """
@@ -173,6 +190,13 @@ function add_atoms!(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
     return G
 end
 
+# The tangent of input `a`: the `a`th standard basis vector of the input space.
+function basis(::Type{T}, n::Integer, a::Integer) where {T}
+    g = zeros(T, n)
+    g[a] = one(T)
+    return g
+end
+
 function unarynode(x::FVar{T, R}, val, d, c) where {T, R}
     ch = channels(x)
     ctx = ch.ctx
@@ -183,7 +207,7 @@ function unarynode(x::FVar{T, R}, val, d, c) where {T, R}
         site = ElementalSite(convert(T, val), (value(x),))
         add_atoms!(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R}(val, ctx, g, G)
 end
 
 function binarynode(x::FVar{T, R}, y::FVar{T, R}, val, d1, d2, c11, c12, c22) where {T, R}
@@ -199,7 +223,7 @@ function binarynode(x::FVar{T, R}, y::FVar{T, R}, val, d1, d2, c11, c12, c22) wh
         sl = (forward_scale(ctx.rule, x), forward_scale(ctx.rule, y))
         add_atoms!(G, C, ctx, site, sl, (cx.g, cy.g))
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R}(val, ctx, g, G)
 end
 
 function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, R}}) where {T, R}
@@ -220,7 +244,7 @@ function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T,
             G[q] += acj * ch.G[q]
         end
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R}(val, ctx, g, G)
 end
 
 function dotnode(ws::AbstractVector{<:FVar{T, R}}, xs::AbstractVector{<:FVar{T, R}}) where {T, R}
@@ -251,7 +275,7 @@ function dotnode(ws::AbstractVector{<:FVar{T, R}}, xs::AbstractVector{<:FVar{T, 
     site = ElementalSite(val, ops)
     sl = [forward_scale(ctx.rule, v) for v in Iterators.flatten((ws, xs))]
     add_atoms!(G, PairedCurvature(q), ctx, site, sl, gs)
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R}(val, ctx, g, G)
 end
 
 # A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the
@@ -340,11 +364,7 @@ function forward_cover(
     n = length(x0)
     n == 0 && throw(ArgumentError("cannot propagate a cover through a program with no inputs"))
     ctx = ForwardContext{T, R}(rule, n, check, zeros(T, n))
-    xs = [
-        FVar{T, R}(
-                ForwardChannels(ctx, T[i == a for i in 1:n], zeros(T, n)), convert(T, x0[a])
-            ) for a in 1:n
-    ]
+    xs = [FVar{T, R}(x0[a], ctx, basis(T, n, a), zeros(T, n)) for a in 1:n]
     out = f(xs)
     out isa FVar{T, R} ||
         throw(ArgumentError("program output is not an FVar of this propagation (got a $(typeof(out))); forward_cover covers a scalar-valued program"))
