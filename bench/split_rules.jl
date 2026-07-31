@@ -14,7 +14,7 @@
 # global one -- the rules are compared against the best split found by sweeping the family, so a
 # rule can be beaten -- and a scale reference can be degenerate at the point of evaluation, which
 # looseness at that point does not reveal and a jitter of the point does. The four
-# `OptimizationProblems` fixtures are here for the second of those: their covers are tight under
+# The `OptimizationProblems` cases are here for the second reason: their covers are tight under
 # every rule and it is the stability of the split that separates them.
 
 using ADNLPModels, DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra,
@@ -77,7 +77,7 @@ function sampled_best(f, x0, channel; nw = 9)
 end
 
 function rule_table(fixtures)
-    @printf("%-22s %-9s", "fixture", "channel")
+    @printf("%-22s %-9s", "case", "channel")
     for (label, _) in RULES
         @printf(" %10s %10s", "$label sum", "$label quad")
     end
@@ -186,7 +186,7 @@ function split_jitter(f, x0, rule; ndraws = 24, releps = 1.0e-12, seed = 7)
 end
 
 function stability_table(fixtures)
-    @printf("%-22s", "fixture")
+    @printf("%-22s", "case")
     for (label, _) in RULES
         @printf(" %12s", label)
     end
@@ -201,7 +201,7 @@ function stability_table(fixtures)
     return println()
 end
 
-"Fixtures drawn from the `DerivativeCoverProblems` families, at a common input count."
+"Test problems drawn from the `DerivativeCoverProblems` families, at a common input count."
 function family_fixtures(n; seed = 3)
     return map(families(; seed)) do (name, generate)
         p = generate(n)

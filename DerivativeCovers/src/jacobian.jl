@@ -402,13 +402,13 @@ of two nearest `a`'s geometric mean, which is exact in floating point and leaves
 
 The tape form with `merge = SumMerge(), arule = :marginal` (the default) runs both steps as `O(L)`
 sweeps ([`abs_forward`](@ref) seeded `1/b_j` at the inputs, [`abs_reverse`](@ref) seeded `1/a_k`
-at the output nodes) without ever forming `Ũ` — the production path. Every other combination
+at the output nodes) without ever forming `Ũ`; this is the matrix-free path. Every other combination
 needs per-output separation, so the tape form forms the surrogate once (`O(mL)`, diagnostic tier)
 and balances it explicitly. The matrix form accepts any nonnegative magnitude matrix (a surrogate
 `Ũ`, or `abs.(J)`).
 
 `check` verifies the returned pair covers the surrogate. The tape form must form `Ũ` to do so,
-so checking costs `O(mL)` on top of the `O(L)` production path; the matrix form already holds
+so checking adds `O(mL)` to the `O(L)` matrix-free path; the matrix form already holds
 `Utilde` and checks against it for the cost of one pass over its entries.
 
 A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero column (a dead
@@ -686,7 +686,7 @@ end
 
 Worst-case ratio `max_kj abs(J[k,j]) / (a[k]*b[j])` over the nonzero entries of `J`. `(a, b)` is a
 valid asymmetric cover of `J` exactly when `r ≤ 1`. Zero entries of `J` constrain nothing and are
-skipped; a nonzero entry over a vanishing `a[k]*b[j]` gives `Inf`. The asymmetric twin of
+skipped; a nonzero entry over a vanishing `a[k]*b[j]` gives `Inf`. The asymmetric counterpart of
 [`cover_ratio`](@ref).
 """
 function jacobian_ratio(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)

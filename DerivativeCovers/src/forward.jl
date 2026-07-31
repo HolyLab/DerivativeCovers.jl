@@ -3,10 +3,10 @@
 """
     ForwardCover{T}
 
-The result of [`forward_cover`](@ref), in the element type `T` the propagation ran in.
+The result of [`forward_cover`](@ref), with `T` as the propagation's element type.
 
-- `grad`: gradient, the exact signed tangent at the variable.
-- `h_quad`: certified Hessian cover, the quadrature merge of the cover atoms.
+- `grad`: the gradient, represented by the exact signed tangent at the output.
+- `h_quad`: a certified Hessian cover formed by merging the cover atoms in quadrature.
 """
 struct ForwardCover{T}
     grad::Vector{T}
@@ -16,9 +16,9 @@ end
 """
     ForwardContext{T, R}
 
-What every variable of one forward propagation shares: the [`SplitRule`](@ref) the local covers
-follow, the input count the channels are sized by, whether to verify each local cover, and one
-scratch vector the atom assembly reuses.
+State shared by every variable in a forward propagation: the [`SplitRule`](@ref) followed by local
+covers, the input count used to size channels, whether each local cover is verified, and a scratch
+vector reused during atom assembly.
 """
 struct ForwardContext{T, R <: SplitRule}
     rule::R
@@ -45,13 +45,13 @@ end
 """
     FVar{T, R}
 
-A scalar propagating a Hessian cover forward, carrying a value of type `T`. The
-[`CoverVar`](@ref) backend that keeps no tape.
+A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
+[`CoverVar`](@ref) backend.
 
-`R` is the type of the [`SplitRule`](@ref) in force, which a constant must carry along with `T`
+`R` is the active [`SplitRule`](@ref) type, which a constant must carry along with `T`
 because generic numerical code builds typed literals from `eltype`.
 
-Per variable the propagation holds the value, the signed tangent `∇v`, and a squared cover of
+For each variable, the propagation holds the value, the signed tangent `∇v`, and a squared cover of
 `∇²v`; see [`ForwardChannels`](@ref). Working memory is `O(n)` per *live* variable rather than per
 recorded node, so a program whose intermediates go out of scope costs `O(n × live width)` and
 never materializes a tape.
@@ -89,8 +89,8 @@ end
 """
     ElementalSite(val, operands)
 
-The [`CoverSite`](@ref) of an elemental in a forward propagation. Nothing identifies the elemental
-but the values around it, there being no tape to number it on, so that is what it reports.
+The [`CoverSite`](@ref) of an elemental in a forward propagation. Without a tape to number the
+elemental, only its value and operand values identify it, so those are what the site reports.
 
 `operands` is held as given and read only when an error is raised, so naming a site costs nothing
 on the path that succeeds.
@@ -107,7 +107,7 @@ site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operan
 """
     forward_scale(rule::SplitRule, x::FVar)
 
-The scale reference `rule` reads off `x` when splitting a local cover — the forward twin of
+The scale reference that `rule` reads from `x` when splitting a local cover—the forward analogue of
 [`split_scales`](@ref), which reads a whole tape at once.
 
 A rule is usable here only if a forward propagation carries what it references.
@@ -288,17 +288,18 @@ forward pass cannot know how the output depends on the node it is at. The cover 
 The second form returns the cover of any variable reached along the way, the propagation having
 maintained the invariant at every one of them, not only at the output.
 
-# Cost, and what it buys
+# Computational cost and tightness
 
 `O(n*L)` time for `n` inputs and `L` operations, and `O(n)` memory per *live* variable — no tape,
-and nothing proportional to the length of the program. That is the whole case for it: at this time
-the tape-based [`cover_hessian`](@ref) with [`SignedTangents`](@ref) is tighter, since it merges
+and nothing proportional to the length of the program. Its main advantage is therefore the ability
+to process programs that are too long to record. Currently, the tape-based
+[`cover_hessian`](@ref) with [`SignedTangents`](@ref) is tighter, since it merges
 the same atoms weighted by exact adjoints rather than by the unsigned path sums a forward pass has
-to use. What a tape cannot do is run on a program too long to record.
+to use.
 
 The cover this reaches is exactly the signed-tangent, absolute-adjoint corner of
 [`cover_lattice`](@ref) — `h_quad_forward` — which is therefore what it is tested against. That
-corner is *incomparable* with the shipped `h_quad`: it keeps every tangent sign and discards every
+corner is *incomparable* with the default `h_quad`: it keeps every tangent sign and discards every
 adjoint sign, so which is tighter is a property of the program.
 
 `rule` selects the [`SplitRule`](@ref), and only rules that reference something a forward pass

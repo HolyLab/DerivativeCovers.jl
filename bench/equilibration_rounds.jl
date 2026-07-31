@@ -1,4 +1,4 @@
-# What the balancing alternation costs and what it buys.
+# The cost and tightness improvement of the balancing alternation.
 #
 # `balance_cover` is an unbounded, data-dependent iteration: it alternates until the per-round
 # product change falls below `rtol`, and errors when it does not. Its round count is therefore a

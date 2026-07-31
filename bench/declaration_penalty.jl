@@ -10,7 +10,7 @@
 #
 # Regimes are per-op because the ops degenerate differently: softmax is governed by how peaked `p`
 # is, while layernorm is invariant under `z -> a*z + b`, so a spread axis carries no information
-# there and an outlier entry is the analogous knob. The quadratic head is weighted because
+# there, and an outlier entry is the analogous parameter. The quadratic outer function is weighted because
 # `sum(abs2, layernorm(z))` is identically `n`, whose zero Hessian no cover can be tight on.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Statistics, Printf

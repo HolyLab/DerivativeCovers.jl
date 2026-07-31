@@ -40,7 +40,7 @@ Index of the first iterate along a trajectory at which the convergence test
 
 `grads` and `covers` are the gradients and covers at successive iterates of an optimization run
 (a single cover may be repeated when it is held fixed along the path). `tol` is likewise data
-describing that run — the convergence threshold it was run to test against — not a knob on the
+describing that run—the convergence threshold tested—not a parameter controlling the
 accuracy of the returned index.
 """
 function stopping_index(grads, covers, tol::Real)
@@ -64,7 +64,7 @@ reference one: `shift = k_ref - k_dist >= 0` counts the iterations it stops earl
 run really was from the requested tolerance when it declared success.
 
 `tol` is data describing the analyzed run, alongside `grads` and `covers` — the convergence
-threshold that run was tested against — not a knob on the accuracy of the returned shift.
+threshold tested in that run, not a parameter controlling the accuracy of the returned shift.
 
 Throws if the trajectory is too short for either test to fire; extend it or loosen `tol`.
 """
@@ -155,7 +155,7 @@ reference boost applies there,
 
 which is at least 1, and equals 1 for every coordinate exactly when the distortion is uniform:
 scaling a cover by a constant leaves the shift matrix `tau*Diagonal(h.^2)` unchanged, so this
-consumer is blind to isotropic looseness and feels only anisotropy. Summarize the profile with
+consumer is unaffected by isotropic looseness and responds only to anisotropy. Summarize the profile with
 `maximum` for the worst-hit coordinate. When `A` is already positive semidefinite both shifts are
 zero and the excess is 1 throughout.
 """

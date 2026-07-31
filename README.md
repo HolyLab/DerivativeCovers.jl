@@ -11,7 +11,7 @@ The test problems live in a separate package so users of DerivativeCovers do not
 or load them. The problems are written in generic Julia and have no dependency on the main
 package.
 
-Documentation for both is built from `DerivativeCovers/docs`.
+Documentation for both packages is built from `DerivativeCovers/docs`.
 
 [![Stable](https://img.shields.io/badge/docs-stable-blue.svg)](https://HolyLab.github.io/DerivativeCovers.jl/stable/)
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://HolyLab.github.io/DerivativeCovers.jl/dev/)

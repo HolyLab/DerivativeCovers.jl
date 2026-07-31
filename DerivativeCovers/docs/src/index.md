@@ -23,7 +23,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 
 ## Quick start
 
-Call [`cover_hessian`](@ref) with a scalar function and the point where you want to evaluate it:
+Call [`cover_hessian`](@ref) with a scalar function and an evaluation point:
 
 ```jldoctest quickstart
 julia> f(x) = exp(x[1]) + sum(x[i] * x[i+1] for i in 1:length(x)-1);
@@ -53,7 +53,7 @@ julia> round.(c.grad; digits=4)
   0.3
 ```
 
-This computation takes one forward pass and one paired reverse sweep, or `O(L)` work for a tape
+This computation takes one forward pass and one paired reverse sweep: `O(L)` work for a tape
 of length `L`. Use [`cover_jacobian`](@ref) for vector-valued functions, [`cover_nls`](@ref) for
 nonlinear least-squares objectives, and [`cover_variance`](@ref) for the cheaper, uncertified
 variance estimate.
@@ -93,11 +93,10 @@ julia> round(DerivativeCovers.cover_ratio(d.B, d.h_sum); digits=4)
 Diagnostics cost `O(n * L)` time and `O(n^2)` memory because they form an explicit matrix.
 They are therefore opt-in.
 
-A cover loses tightness wherever it propagates in absolute-value arithmetic a quantity that would
-have cancelled with signs. Two channels do so: the tangents carrying an input's influence forward,
-and the adjoints carrying the output's sensitivity back. [`cover_lattice`](@ref) computes the
-cover with all four combinations of signed and absolute channels, so each one's cost on a given
-program can be read off separately:
+A cover loses tightness whenever absolute-value arithmetic prevents cancellation. This can happen
+in two channels: tangents carry an input's influence forward, while adjoints carry the output's
+sensitivity backward. [`cover_lattice`](@ref) computes covers for all four combinations of signed
+and absolute channels, making the cost of each choice visible for a given program:
 
 ```jldoctest
 julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
@@ -115,8 +114,8 @@ julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)   # what the adjoint si
  0.364
 ```
 
-Here `d` cancels along the two paths from `x[1]`, and `u` reaches the output through arms of
-opposite adjoint sign, so both channels have something to lose.
+Here `d` cancels along the two paths from `x[1]`, and `u` reaches the output along paths with
+opposite adjoint signs, so both channels lose information.
 
 The [Diagnostics](@ref) module can perturb a cover in controlled ways and measure the effect on
 downstream computations. The companion `DerivativeCoverProblems` package provides the
@@ -141,15 +140,15 @@ tape_function
 
 ## Propagating a cover forward
 
-A cover can also be propagated forward, with no tape at all. Each variable carries its value, its
-signed tangent, and a squared cover of its own Hessian; the cover of the output falls out of the
-last of these. Working memory is `O(n)` per *live* variable rather than per recorded operation, so
+A cover can also be propagated forward without a tape. Each variable carries its value, its
+signed tangent, and a squared cover of its own Hessian; the last quantity directly gives the
+output's cover. Working memory is `O(n)` per *live* variable rather than per recorded operation, so
 the cost does not grow with the length of the program.
 
-This reaches a specific corner of the sign lattice — every tangent sign kept, every adjoint sign
-discarded, since a forward pass cannot know how the output depends on the variable it is at. That
-corner is *incomparable* with what [`cover_hessian`](@ref) computes, which keeps the adjoint signs
-and discards the tangent ones. Which is tighter is a property of the program.
+This reaches a specific corner of the sign lattice: every tangent sign is kept and every adjoint
+sign is discarded, because a forward pass cannot know how the output depends on its current
+variable. This corner is *incomparable* with the result from [`cover_hessian`](@ref), which keeps
+adjoint signs and discards tangent signs. Which result is tighter depends on the program.
 
 ```@docs
 FVar
@@ -158,12 +157,12 @@ forward_cover
 
 ## Cover entry points
 
-At equal `O(n*L)` cost the tangent channel is what separates the covers below. The default
-`cover_hessian` merges over an absolute-value bound on the tangents, which is what lets its sum
-merge collapse into a single `O(L)` reverse sweep. Asking instead for [`SignedTangents`](@ref)
-gives the tightest cover the package computes — tighter at every coordinate than the default, with
-only cancellation *between* elementals still discarded — at `O(n*L)`, since taking magnitudes
-inside the merge leaves nothing for a reverse sweep to collapse.
+At the same `O(n*L)` cost, the tangent channel distinguishes the covers below. By default,
+`cover_hessian` merges an absolute-value bound on the tangents, allowing its sum merge to collapse
+into a single `O(L)` reverse sweep. [`SignedTangents`](@ref) instead gives the tightest cover the
+package computes. It is tighter than the default at every coordinate and discards only
+cancellation *between* elementals. Its cost is `O(n*L)` because taking magnitudes inside the merge
+leaves nothing for a reverse sweep to collapse.
 
 ```@docs
 cover_hessian
@@ -197,10 +196,10 @@ VarianceCover
 
 ## Split rules
 
-Some second-derivative blocks admit a family of covers, and a rule picks one member of it. Each of
-the three is the exact optimum of a different thing: `SensitivitySplit` of the sum merge,
-`VectorNormSplit` of the quadrature merge, and `ValueSplit` of nothing in particular — it is the
-default because it is the only one whose scale reference a cover already has on hand.
+Some second-derivative blocks admit a family of covers, and a rule selects one member. Two rules
+are exact optima: `SensitivitySplit` for the sum merge and `VectorNormSplit` for the quadrature
+merge. `ValueSplit` does not optimize either merge; it is the default because its scale reference
+is already available during cover computation.
 
 ```@docs
 SplitRule

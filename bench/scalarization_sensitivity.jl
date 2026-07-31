@@ -2,9 +2,9 @@
 #
 # `cover_hybrid` sums cover contributions within a group and combines the group totals in
 # quadrature, so what it can recover depends on which contributions the partition is able to
-# separate. It deals cover atoms, and dealing atoms is blind to how many of them one elemental
+# separate. It distributes cover atoms without regard to how many of them one elemental
 # carries: on the programs below the two recordings give the same curve. A node-granular partition
-# (`cyclic_partition`) is not blind to it. It separates siblings on a scalar tape, which lists them
+# (`cyclic_partition`) depends on that number. It separates siblings on a scalar tape, which lists them
 # consecutively, but an array primitive holds those same siblings inside one node, where no such
 # partition reaches them.
 #

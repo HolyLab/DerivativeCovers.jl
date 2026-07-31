@@ -186,7 +186,7 @@ end
 Forward signed tangents: `u[k][a] = ∂v_k/∂x_a`, obtained by propagating
 `u[k] = sum_{i in P_k} (∂φ_k/∂v_i) * u[i]` from `u[x_a] = e_a`.
 
-The signed twin of [`sensitivities`](@ref), which runs the same recursion in absolute-value
+The signed counterpart of [`sensitivities`](@ref), which runs the same recursion in absolute-value
 arithmetic and so returns a bound `utilde >= abs.(u)` rather than the derivatives themselves. The
 gap between the two is the cancellation that occurs along paths from an input to a node.
 
@@ -397,7 +397,7 @@ once. Among the elementals of `overloads.jl` it is the only source of the first 
 never presents a vanishing `z1`. The second is also reached by `x^y` at a zero exponent, where
 `c11 == 0` and `z2 == 0` while `c22 > 0`.
 
-These zero-reference arms concern the value channel: under [`SensitivitySplit`](@ref) a zero
+These zero-reference cases concern the value channel: under [`SensitivitySplit`](@ref) a zero
 scale certifies a dead slot and [`local_cover_slots`](@ref) resolves it before this function
 is reached, so this function only ever receives positive references from that rule.
 """
@@ -455,7 +455,7 @@ the exact minimizer of the weighted sum-merge objective `sum_a w[a]*h_sum[a]` ov
 per-node splits: the sum merge is linear in the per-node weights, so the objective decouples
 into one term `rho1*sigma_1 + rho2*sigma_2` per node, minimized on the feasible segment by
 exactly this clamped equalization. `w` is therefore the statement of *which* cover the rule
-optimizes — the weighted sum of the input bounds — not a tuning knob.
+optimizes—the weighted sum of the input bounds—rather than a user-selected tuning parameter.
 
 A zero scale is a certificate here, not a gap: `sigma_j == 0` implies every path from the
 inputs to `v_j` carries a zero derivative product, so the total gradient of `v_j` vanishes
@@ -520,10 +520,9 @@ covariant when the weights are rescaled as `w -> D^2*w`; with `w` held fixed (th
 included) the *choice* of split — never its validity — depends on the units the inputs are
 expressed in.
 
-Cost: the tangents themselves, `O(n*L)` time and memory for `n` inputs. That is the diagnostic
-tier, well above the `O(L)` of the other two rules, and it is the price of a scale reference that
-sees whole vectors rather than one number per node. A forward propagation carries the tangents
-already and pays nothing extra.
+Cost: the tangents themselves, `O(n*L)` time and memory for `n` inputs. This exceeds the `O(L)`
+cost of the other two rules because the scale reference uses whole vectors rather than one number
+per node. A forward propagation already carries the tangents and incurs no additional cost.
 """
 struct VectorNormSplit{W} <: SplitRule
     w::W
@@ -959,7 +958,7 @@ the unsigned `acheck = abs_reverse(t, e_outidx)`, whose entry `acheck[k]` sums `
 over every path from `k` to the output and therefore satisfies `acheck >= abs.(vbar)`.
 
 An absolute channel bounds the exact one wherever it cancels, so replacing a signed channel by
-its absolute twin can only inflate the cover. That orders the corners: `h_sum_signed` and
+its absolute counterpart can only inflate the cover. That orders the corners: `h_sum_signed` and
 `h_quad_signed` are the smallest, `h_sum_absadj` and `h_quad_absadj` the largest, and the two
 mixed corners fall between them but are incomparable with each other. The ordering in the adjoint
 channel relies on the split rule scaling with the local matrix, which [`ValueSplit`](@ref) and

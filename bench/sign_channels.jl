@@ -12,7 +12,7 @@
 #
 # Looseness is `1/cover_ratio(H, h)` against the exact Hessian from ForwardDiff, the scale the
 # other scripts use: 1 is exact, larger is looser. The two mixed corners are incomparable, so
-# `fwd/quad` above 1 says the shipped cover wins on the worst entry and below 1 says the tapeless
+# `fwd/quad` above 1 says the default cover is tighter on the worst entry; below 1 says the tapeless
 # one does.
 #
 # A third loss survives all four corners: signs that cancel *between* elementals, which the
@@ -88,7 +88,7 @@ end
 function corner_table(fixtures)
     @printf(
         "%-22s %5s %6s %6s %9s %9s %9s %9s %8s\n",
-        "fixture", "n", "nodes", "atoms", "quad", "signed", "fwd-G", "fwd", "fwd/quad"
+        "case", "n", "nodes", "atoms", "quad", "signed", "fwd-G", "fwd", "fwd/quad"
     )
     for (name, f, x0) in fixtures
         c = corners(f, x0)
@@ -103,7 +103,7 @@ end
 function decomposition_table(fixtures)
     @printf(
         "%-22s %15s %15s %15s %15s %13s\n",
-        "fixture", "tangent geo/max", "adjoint geo/max", "within-path", "cross-elem",
+        "case", "tangent geo/max", "adjoint geo/max", "within-path", "cross-elem",
         "acheck/vbar"
     )
     anydead = false
@@ -130,7 +130,7 @@ often an operand is an existing node rather than a fresh one: at `sharing = 0` t
 tree, every input reaches every node along one path, and no sign anywhere can cancel.
 
 Every sharing level replays the same `ndraws` seeds, so the draws are paired across the sweep and
-the medians differ only in the knob. A single program says little here — the looseness of one
+the medians differ only in this parameter. A single program says little here — the looseness of one
 random DAG is dominated by which elementals it happened to draw.
 """
 function sharing_sweep(n, sharings; ndraws = 12)
@@ -179,7 +179,7 @@ function cross_elemental(n, ms)
     return println()
 end
 
-"Fixtures drawn from the `DerivativeCoverProblems` families, at a common input count."
+"Test problems drawn from the `DerivativeCoverProblems` families, at a common input count."
 function family_fixtures(n; seed = 3)
     return map(families(; seed)) do (name, generate)
         p = generate(n)
