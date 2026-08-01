@@ -22,6 +22,7 @@ module DerivativeCovers
 
 using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
+using StaticArrays: StaticMatrix, StaticVector, similar_type
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!
 
@@ -53,7 +54,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     eval(
         Expr(
             :public, :Curvature, :NoCurvature, :UnaryCurvature, :BinaryCurvature,
-            :DenseCurvature, :PairedCurvature, :DeclaredCurvature, :cover_slots,
+            :DenseCurvature, :PairedCurvature, :DeclaredCurvature, :cover_slots, :cover_slots!,
             :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values
         )

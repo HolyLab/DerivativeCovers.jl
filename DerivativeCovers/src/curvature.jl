@@ -223,6 +223,7 @@ atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
     cover_slots(C::Curvature, rule, site, av, sl; check=true) -> Union{Nothing,Vector{T}}
+    cover_slots!(rho::Vector, C::Curvature, rule, site, av, sl; check=true) -> Bool
 
 The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `rho` with
 `rho[i]*rho[j] >= av*abs(C[i,j])`, where `av` is the weight the elemental's second-order term
@@ -231,6 +232,11 @@ carries (the absolute adjoint `abs(vbar[k])` in a reverse sweep, `1` in a forwar
 
 `rho` must be a `Vector{T}` for `T = eltype(site)`: [`local_cover_slots`](@ref) asserts that type
 so that the sweeps, which call it once per node, need not box the result.
+
+The mutating form resizes `rho` to the elemental's slot count and fills it, returning whether
+there is a second-order term at all and leaving `rho` untouched when there is not. Every
+construction lives there, so that a sweep can hand it one buffer and let no node allocate for its
+slot weights; `cover_slots` allocates a fresh `rho` and forwards.
 
 `rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks and `sl` its
 scale references, one per slot and in slot order — not indexed by node, so that a backend holding
@@ -243,16 +249,40 @@ forward propagation; see [`local_cover_slots`](@ref).
 """
 cover_slots(::NoCurvature, rule, site, av, sl; check::Bool = true) = nothing
 
-function cover_slots(C::DeclaredCurvature, rule, site, av, sl; check::Bool = true)
-    av == 0 && return nothing
-    return eltype(site)[sqrt(av) * s for s in C.s]
+function cover_slots(C::Curvature, rule, site, av, sl; check::Bool = true)
+    rho = Vector{eltype(site)}(undef, cover_nslots(C, sl))
+    cover_slots!(rho, C, rule, site, av, sl; check) || return nothing
+    return rho
 end
 
-function cover_slots(C::PairedCurvature, rule, site, av, sl; check::Bool = true)
+# How large `cover_slots` allocates. A form that does not say is measured by its scale references,
+# which the contract supplies one per slot; `cover_slots!` resizes to the exact count either way,
+# so this only decides whether that resize has to reallocate.
+cover_nslots(::Curvature, sl) = length(sl)
+cover_nslots(::UnaryCurvature, sl) = 1
+cover_nslots(::BinaryCurvature, sl) = 2
+cover_nslots(C::PairedCurvature, sl) = 2 * C.q
+cover_nslots(C::DeclaredCurvature, sl) = length(C.s)
+
+@doc (@doc cover_slots)
+cover_slots!(rho::Vector, ::NoCurvature, rule, site, av, sl; check::Bool = true) = false
+
+function cover_slots!(rho::Vector, C::DeclaredCurvature, rule, site, av, sl; check::Bool = true)
+    av == 0 && return false
+    resize!(rho, length(C.s))
+    r = sqrt(av)
+    for (i, s) in enumerate(C.s)
+        rho[i] = r * s
+    end
+    return true
+end
+
+function cover_slots!(rho::Vector, C::PairedCurvature, rule, site, av, sl; check::Bool = true)
     c = av
-    c == 0 && return nothing
+    c == 0 && return false
     q = C.q
-    rho = zeros(eltype(site), 2q)
+    resize!(rho, 2q)
+    fill!(rho, 0)
     for j in 1:q
         s1 = sl[j]
         s2 = sl[q + j]
@@ -271,27 +301,32 @@ function cover_slots(C::PairedCurvature, rule, site, av, sl; check::Bool = true)
         rho[j] = a
         rho[q + j] = b
     end
-    return rho
+    return true
 end
 
-function cover_slots(C::UnaryCurvature, rule, site, av, sl; check::Bool = true)
+function cover_slots!(rho::Vector, C::UnaryCurvature, rule, site, av, sl; check::Bool = true)
     c11 = av * abs(C.c)
-    c11 == 0 && return nothing
+    c11 == 0 && return false
     check && check_finite_partials(site, av, (c11,))
-    return eltype(site)[sqrt(c11)]
+    resize!(rho, 1)
+    rho[1] = sqrt(c11)
+    return true
 end
 
-function cover_slots(C::BinaryCurvature, rule, site, av, sl; check::Bool = true)
+function cover_slots!(rho::Vector, C::BinaryCurvature, rule, site, av, sl; check::Bool = true)
     T = eltype(site)
     c11 = av * abs(C.c11)
     c12 = av * abs(C.c12)
     c22 = av * abs(C.c22)
-    (c11 == 0 && c12 == 0 && c22 == 0) && return nothing
+    (c11 == 0 && c12 == 0 && c22 == 0) && return false
     s1, s2 = sl[1], sl[2]
+    resize!(rho, 2)
     if certifies_dead(rule) && (s1 == 0 || s2 == 0)
         # A dead slot contributes no diagonal or cross term; only its live partner needs
         # cover weight.
-        return T[s1 == 0 ? 0 : sqrt(c11), s2 == 0 ? 0 : sqrt(c22)]
+        rho[1] = s1 == 0 ? 0 : sqrt(c11)
+        rho[2] = s2 == 0 ? 0 : sqrt(c22)
+        return true
     end
     if c12^2 <= c11 * c22
         rho1, rho2 = sqrt(c11), sqrt(c22)
@@ -310,12 +345,14 @@ function cover_slots(C::BinaryCurvature, rule, site, av, sl; check::Bool = true)
                 "rho=($rho1,$rho2), c=($c11,$c12,$c22)"
         )
     end
-    return T[rho1, rho2]
+    rho[1] = rho1
+    rho[2] = rho2
+    return true
 end
 
 # The general form carries no fixed arity, and the rank-1 cover of a block larger than 2x2 is not
 # a single split.
-cover_slots(C::DenseCurvature, rule, site, av, sl; check::Bool = true) =
+cover_slots!(rho::Vector, C::DenseCurvature, rule, site, av, sl; check::Bool = true) =
     error(
     "$(site_label(site)) carries a $(join(size(C), "x")) dense curvature; the rank-1 cover is " *
         "defined for the unary and binary forms, not for a general dense block"

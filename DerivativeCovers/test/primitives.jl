@@ -196,6 +196,38 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test all(res.h_quad .<= res.h_sum .* GATE)
     end
 
+    # A square written `r*r` records a binary multiplication node, whose two identical parents the
+    # split treats as distinct: its atom is `2*rho*utilde_r` against the true contribution
+    # `utilde_r*utilde_r'`, a factor 2 on the outer product. Where the squares carry the program's
+    # whole curvature that is exactly sqrt(2) on every cover coordinate. `B` is untouched, which
+    # places the whole cost in the split rather than in the elementwise bound.
+    @testset "a square written r*r costs exactly sqrt(2)" begin
+        residuals(z) = (
+            1.0z[1] - 2.0z[2] + 0.3,
+            0.5z[1] + 3.0z[2] - 0.7,
+            -1.5z[1] + 0.25z[2] + 1.1,
+        )
+        squared = z -> sum(rk^2 for rk in residuals(z))
+        selfmul = z -> sum(rk * rk for rk in residuals(z))
+        for x0 in ([0.4, -0.9], [1.0, 1.0], [-2.5, 0.125])
+            sq = cover_hessian(WithDiagnostics(), squared, x0)
+            sm = cover_hessian(WithDiagnostics(), selfmul, x0)
+            @test sm.h_sum ≈ sqrt(2) .* sq.h_sum rtol = 1.0e-14
+            @test sm.h_quad ≈ sqrt(2) .* sq.h_quad rtol = 1.0e-14
+            @test sm.B ≈ sq.B rtol = 1.0e-14
+        end
+        # Curvature reaching a coordinate from elsewhere dilutes the doubled atom, so the penalty
+        # falls below sqrt(2) — but the form is never the tighter of the two.
+        outer_squared = z -> exp(0.3 * sum(z[i]^2 for i in eachindex(z)))
+        outer_selfmul = z -> exp(0.3 * sum(z[i] * z[i] for i in eachindex(z)))
+        x0 = [0.7, -1.3, 0.4]
+        sq = cover_hessian(WithDiagnostics(), outer_squared, x0)
+        sm = cover_hessian(WithDiagnostics(), outer_selfmul, x0)
+        @test all(sq.h_sum .<= sm.h_sum)
+        @test all(sm.h_sum .<= sqrt(2) .* sq.h_sum)
+        @test sm.B ≈ sq.B
+    end
+
     # The split is over parent slots, so a vector against itself splits pairwise as well: the
     # constant slot pairs with itself into the offset, the recording slots into the atom set.
     @testset "repeated parents in a mixed operand" begin

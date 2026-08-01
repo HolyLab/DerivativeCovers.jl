@@ -1,55 +1,92 @@
 # A Hessian cover propagated forward, in one pass and with no tape.
 
 """
-    ForwardCover{T}
+    ForwardCover{T, V}
 
-The result of [`forward_cover`](@ref), with `T` as the propagation's element type.
+The result of [`forward_cover`](@ref), with `T` as the propagation's element type and `V` the
+channel storage it ran in (see [`ForwardContext`](@ref)).
 
 - `grad`: the gradient, represented by the exact signed tangent at the output.
 - `h_quad`: a certified Hessian cover formed by merging the cover atoms in quadrature.
 """
-struct ForwardCover{T}
-    grad::Vector{T}
-    h_quad::Vector{T}
+struct ForwardCover{T, V <: AbstractVector{T}}
+    grad::V
+    h_quad::V
+
+    ForwardCover{T, V}(grad, h_quad) where {T, V} = new{T, V}(grad, h_quad)
+end
+
+ForwardCover(grad::AbstractVector{T}, h_quad::AbstractVector) where {T} =
+    ForwardCover{T}(grad, h_quad)
+
+function ForwardCover{T}(grad, h_quad) where {T}
+    g = convert(AbstractArray{T}, grad)::AbstractArray{T}
+    return ForwardCover{T, typeof(g)}(g, h_quad)
 end
 
 """
-    ForwardContext{T, R}
+    ForwardContext{T, R, S}
 
 State shared by every variable in a forward propagation: the [`SplitRule`](@ref) followed by local
-covers, the input count used to size channels, whether each local cover is verified, and a scratch
-vector reused during atom assembly.
+covers, whether each local cover is verified, and the scratch a node writes through while
+assembling its cover.
+
+`S` is the channel storage, one entry per input; [`forward_cover`](@ref) derives it from the point
+it is given, so a `Vector` input propagates in `Vector`s and a `StaticVector` input in
+`StaticVector`s. `zerochannel` is a zero of that storage, from which a node seeds a fresh channel;
+`scratch` is the atom accumulator, written in place when `S` is mutable and left alone when it is
+not; and `rho` holds the slot weights of the elemental being covered.
+
+It is a reference type so that every variable of the propagation holds a pointer to the one
+context: storing an immutable into a variable's field would copy it, at one allocation per node.
+Identity is then also what `===` compares, which is what distinguishes two propagations.
 """
-struct ForwardContext{T, R <: SplitRule}
-    rule::R
-    ninputs::Int
-    check::Bool
-    scratch::Vector{T}
+mutable struct ForwardContext{T, R <: SplitRule, S <: AbstractVector{T}}
+    const rule::R
+    const check::Bool
+    const zerochannel::S
+    const scratch::S
+    const rho::Vector{T}
+
+    ForwardContext{T, R, S}(rule, check, zerochannel, scratch, rho) where {T, R, S} =
+        new{T, R, S}(rule, check, zerochannel, scratch, rho)
+end
+
+function ForwardContext{T, R}(rule, check, zerochannel::AbstractVector{T}) where {T, R}
+    return ForwardContext{T, R, typeof(zerochannel)}(
+        rule, check, zerochannel, zero(zerochannel), T[]
+    )
 end
 
 """
-    ForwardChannels{T, R}
+    ForwardChannels{T, R, S}
 
 The two channels an [`FVar`](@ref) carries beyond its value: the signed tangent `g = ∇v`, and the
 squared cover `G` maintaining `sqrt.(G) * sqrt.(G)' >= abs.(∇²v)` entrywise.
 
 `G` is squared rather than rooted because the recursion that maintains it is *linear* in the
 parents' `G`, which is what keeps a per-node re-merge from compounding with depth.
+
+The channels live in the [`FVar`](@ref)'s own fields; [`channels`](@ref) assembles this view of
+them on demand, and it costs nothing once inlined.
 """
-struct ForwardChannels{T, R}
-    ctx::ForwardContext{T, R}
-    g::Vector{T}
-    G::Vector{T}
+struct ForwardChannels{T, R, S}
+    ctx::ForwardContext{T, R, S}
+    g::S
+    G::S
+
+    ForwardChannels{T, R, S}(ctx, g, G) where {T, R, S} = new{T, R, S}(ctx, g, G)
 end
 
 """
-    FVar{T, R}
+    FVar{T, R, S}
 
 A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
 [`CoverVar`](@ref) backend.
 
-`R` is the active [`SplitRule`](@ref) type, which a constant must carry along with `T`
-because generic numerical code builds typed literals from `eltype`.
+`R` is the active [`SplitRule`](@ref) type and `S` the channel storage (see
+[`ForwardContext`](@ref)). A constant carries both because generic numerical code builds typed
+literals from `eltype`, which is all it has to reach the backend by.
 
 For each variable, the propagation holds the value, the signed tangent `∇v`, and a squared cover of
 `∇²v`; see [`ForwardChannels`](@ref). Working memory is `O(n)` per *live* variable rather than per
@@ -58,19 +95,37 @@ never materializes a tape.
 
 Build one with [`forward_cover`](@ref) rather than directly.
 """
-struct FVar{T, R} <: CoverVar{T}
-    channels::Union{ForwardChannels{T, R}, Nothing}
+struct FVar{T, R, S} <: CoverVar{T}
     val::T
+    ctx::Union{ForwardContext{T, R, S}, Nothing}
+    g::S
+    G::S
 
-    # `R` reaches the fields only through the channels, so a constant -- which has none -- leaves
-    # the generated constructor unable to infer it. Both parameters are named at every call site
-    # instead, and the field declarations coerce.
-    FVar{T, R}(channels, val) where {T, R} = new{T, R}(channels, val)
+    # The channels are held field by field rather than as a nested struct: a struct is immutable
+    # and so would be copied into the field, at one allocation per node. Their type must stay
+    # concrete for the same reason -- an immutable `S` is then stored inline, where a
+    # `Union{S,Nothing}` would be copied to the heap at every node -- so a constant, which has no
+    # channels, gets `constantchannel` in the fields and is recognized by a null context instead.
+    FVar{T, R, S}(val, ctx, g, G) where {T, R, S} = new{T, R, S}(val, ctx, g, G)
 end
 
-isconstant(x::FVar) = x.channels === nothing
+# A constant. Its storage is named rather than defaulted: a constant of the wrong storage combines
+# with nothing in the propagation that produced it.
+function FVar{T, R, S}(val) where {T, R, S}
+    ch = constantchannel(S)
+    return FVar{T, R, S}(val, nothing, ch, ch)
+end
+
+isconstant(x::FVar) = x.ctx === nothing
 value(x::FVar) = x.val
-constantvar(::Type{FVar{T, R}}, c::Real) where {T, R} = FVar{T, R}(nothing, c)
+constantvar(::Type{FVar{T, R, S}}, c::Real) where {T, R, S} = FVar{T, R, S}(c)
+
+@noinline _constant_channels(x::FVar) = throw(
+    ArgumentError(
+        "a constant FVar (value $(value(x))) carries no tangent or cover channel; it must be " *
+            "folded into an operand that does"
+    )
+)
 
 """
     channels(x::FVar) -> ForwardChannels
@@ -79,12 +134,89 @@ The tangent and cover channels behind `x`. A constant has neither: every element
 constant operand into one that propagates, so reaching here with a constant means a caller
 bypassed that folding.
 """
-function channels(x::FVar)
-    ch = x.channels
-    ch === nothing &&
-        throw(ArgumentError("a constant FVar (value $(value(x))) carries no tangent or cover channel; it must be folded into an operand that does"))
-    return ch
+function channels(x::FVar{T, R, S}) where {T, R, S}
+    ctx = x.ctx
+    ctx === nothing && _constant_channels(x)
+    return ForwardChannels{T, R, S}(ctx, x.g, x.G)
 end
+
+# --- channel storage ---------------------------------------------------------------------------
+# The storage a propagation runs in is whatever the point it is given is made of, so that a caller
+# asking for static arrays gets a propagation that allocates nothing per node. Two shapes of
+# accumulation follow from that: writable storage is filled in place, and immutable storage is
+# rebuilt at every step. Which one applies is a property of the type, so the branch below is
+# resolved at compile time and only one of the two ever appears in the generated code.
+
+struct MutableChannels end
+struct ImmutableChannels end
+
+channelkind(::Type{S}) where {S} = Base.ismutabletype(S) ? MutableChannels() : ImmutableChannels()
+channelkind(g::AbstractVector) = channelkind(typeof(g))
+
+# A zero channel matching the point `x0`, and the tangent of its `a`th coordinate.
+channel_zero(x0::AbstractVector, ::Type{T}) where {T} = zeros(T, length(x0))
+channel_zero(x0::StaticVector, ::Type{T}) where {T} = zeros(similar_type(x0, T))
+
+function channel_basis(x0::AbstractVector, ::Type{T}, a::Integer) where {T}
+    g = channel_zero(x0, T)
+    g[a] = one(T)
+    return g
+end
+
+channel_basis(x0::StaticVector{N}, ::Type{T}, a::Integer) where {N, T} =
+    similar_type(x0, T)(ntuple(i -> T(i == a), Val(N)))
+
+# The channels of a constant, which has none. Nothing reads them; they exist so that the fields
+# they fill can stay concretely typed.
+constantchannel(::Type{S}) where {S} = zero(S)
+constantchannel(::Type{S}) where {S <: Array} = S(undef, 0)
+
+# Channel accumulation. Each returns the accumulator, which the caller must use: only writable
+# storage is updated in place, and immutable storage comes back as a new value.
+add_scaled!(acc, c, v) = add_scaled!(channelkind(acc), acc, c, v)
+add_scaled!(::ImmutableChannels, acc, c, v) = acc .+ c .* v
+function add_scaled!(::MutableChannels, acc, c, v)
+    for q in eachindex(acc, v)
+        acc[q] += c * v[q]
+    end
+    return acc
+end
+
+add_scaled_abs!(acc, c, v) = add_scaled_abs!(channelkind(acc), acc, c, v)
+add_scaled_abs!(::ImmutableChannels, acc, c, v) = acc .+ c .* abs.(v)
+function add_scaled_abs!(::MutableChannels, acc, c, v)
+    for q in eachindex(acc, v)
+        acc[q] += c * abs(v[q])
+    end
+    return acc
+end
+
+add_squares!(acc, v) = add_squares!(channelkind(acc), acc, v)
+add_squares!(::ImmutableChannels, acc, v) = acc .+ v .^ 2
+function add_squares!(::MutableChannels, acc, v)
+    for q in eachindex(acc, v)
+        acc[q] += v[q]^2
+    end
+    return acc
+end
+
+# The variables a propagation starts from. The container is a `Vector` whatever the point is: a
+# program reaches its inputs at indices it computes, and a static container answers such an index
+# only by spilling the whole thing to the stack. The channels inside are static or not according
+# to the point, which is where the cost of the propagation actually lies.
+function input_vars(::Type{FVar{T, R, S}}, ctx, x0) where {T, R, S}
+    var(a) = FVar{T, R, S}(x0[a], ctx, channel_basis(x0, T, a), channel_zero(x0, T))
+    # `Base.OneTo`, not `eachindex(x0)`: a static point indexes over `SOneTo`, and a comprehension
+    # over that rebuilds the static container this is here to avoid. The caller has already
+    # declared one-based indexing.
+    return [var(a) for a in Base.OneTo(length(x0))]
+end
+
+# A zero channel to accumulate into: a fresh one, and the context's reusable one.
+freshchannel(ctx::ForwardContext) = zero(ctx.zerochannel)
+zeroscratch(ctx::ForwardContext) = zeroscratch(channelkind(ctx.scratch), ctx)
+zeroscratch(::MutableChannels, ctx::ForwardContext) = fill!(ctx.scratch, 0)
+zeroscratch(::ImmutableChannels, ctx::ForwardContext) = ctx.scratch
 
 """
     ElementalSite(val, operands)
@@ -150,30 +282,24 @@ forward_scale(rule::SplitRule, ::FVar) = throw(
 #
 # The first term is folded in by the callers, which have the partials; this adds the second. The
 # atoms are assembled exactly as `merge_atoms` assembles them on a tape, with `av = 1` in place of
-# the adjoint, which is the one factor a forward pass cannot know.
-function add_atoms!(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
-    T = eltype(G)
-    rho = cover_slots(C, ctx.rule, site, one(T), sl; check = ctx.check)
-    rho === nothing && return G
-    s = ctx.scratch
+# the adjoint, which is the one factor a forward pass cannot know. `G` comes back rather than
+# being filled: immutable storage cannot be filled.
+function add_atoms(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
+    rho = ctx.rho
+    cover_slots!(rho, C, ctx.rule, site, one(eltype(G)), sl; check = ctx.check) || return G
     for atom in atom_slots(C, length(gs))
-        fill!(s, 0)
+        s = zeroscratch(ctx)
         for i in atom
             r = rho[i]
             r == 0 && continue
-            gi = gs[i]
-            for q in eachindex(s, gi)
-                s[q] += r * abs(gi[q])
-            end
+            s = add_scaled_abs!(s, r, gs[i])
         end
-        for q in eachindex(G, s)
-            G[q] += s[q]^2
-        end
+        G = add_squares!(G, s)
     end
     return G
 end
 
-function unarynode(x::FVar{T, R}, val, d, c) where {T, R}
+function unarynode(x::FVar{T, R, S}, val, d, c) where {T, R, S}
     ch = channels(x)
     ctx = ch.ctx
     dT = convert(T, d)
@@ -181,12 +307,14 @@ function unarynode(x::FVar{T, R}, val, d, c) where {T, R}
     G = abs(dT) .* ch.G
     if !iszero(c)
         site = ElementalSite(convert(T, val), (value(x),))
-        add_atoms!(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
+        G = add_atoms(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R, S}(val, ctx, g, G)
 end
 
-function binarynode(x::FVar{T, R}, y::FVar{T, R}, val, d1, d2, c11, c12, c22) where {T, R}
+function binarynode(
+        x::FVar{T, R, S}, y::FVar{T, R, S}, val, d1, d2, c11, c12, c22
+    ) where {T, R, S}
     cx, cy = channels(x), channels(y)
     ctx = cx.ctx
     ctx === cy.ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
@@ -197,42 +325,43 @@ function binarynode(x::FVar{T, R}, y::FVar{T, R}, val, d1, d2, c11, c12, c22) wh
         C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
         site = ElementalSite(convert(T, val), (value(x), value(y)))
         sl = (forward_scale(ctx.rule, x), forward_scale(ctx.rule, y))
-        add_atoms!(G, C, ctx, site, sl, (cx.g, cy.g))
+        G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R, S}(val, ctx, g, G)
 end
 
-function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, R}}) where {T, R}
+function linearnode(
+        coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, R, S}}
+    ) where {T, R, S}
     isempty(xs) && throw(ArgumentError("cannot propagate an empty linear combination"))
     idxs = eachindex(coeffs, xs)
     ctx = channels(xs[first(idxs)]).ctx
     val = zero(T)
-    g = zeros(T, ctx.ninputs)
-    G = zeros(T, ctx.ninputs)
+    g = freshchannel(ctx)
+    G = freshchannel(ctx)
     for j in idxs
         ch = channels(xs[j])
         ch.ctx === ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
         cj = convert(T, coeffs[j])
         val += cj * value(xs[j])
-        acj = abs(cj)
-        for q in eachindex(g, ch.g)
-            g[q] += cj * ch.g[q]
-            G[q] += acj * ch.G[q]
-        end
+        g = add_scaled!(g, cj, ch.g)
+        G = add_scaled!(G, abs(cj), ch.G)
     end
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    return FVar{T, R, S}(val, ctx, g, G)
 end
 
-function dotnode(ws::AbstractVector{<:FVar{T, R}}, xs::AbstractVector{<:FVar{T, R}}) where {T, R}
+function dotnode(
+        ws::AbstractVector{<:FVar{T, R, S}}, xs::AbstractVector{<:FVar{T, R, S}}
+    ) where {T, R, S}
     isempty(ws) && throw(ArgumentError("cannot propagate an empty inner product"))
     idxs = eachindex(ws, xs)
     q = length(idxs)
     ctx = channels(ws[first(idxs)]).ctx
     val = zero(T)
-    g = zeros(T, ctx.ninputs)
-    G = zeros(T, ctx.ninputs)
+    g = freshchannel(ctx)
+    G = freshchannel(ctx)
     # Slot order is `(w_1..w_q, x_1..x_q)`, matching `PairedCurvature`'s pairing of `j` with `q+j`.
-    gs = Vector{Vector{T}}(undef, 2q)
+    gs = Vector{S}(undef, 2q)
     ops = Vector{T}(undef, 2q)
     for (n, j) in enumerate(idxs)
         cw, cx = channels(ws[j]), channels(xs[j])
@@ -241,17 +370,15 @@ function dotnode(ws::AbstractVector{<:FVar{T, R}}, xs::AbstractVector{<:FVar{T, 
         vw, vx = value(ws[j]), value(xs[j])
         val += vw * vx
         # The partial with respect to one side of a pair is the value of the other.
-        for r in eachindex(g, cw.g, cx.g)
-            g[r] += vx * cw.g[r] + vw * cx.g[r]
-            G[r] += abs(vx) * cw.G[r] + abs(vw) * cx.G[r]
-        end
+        g = add_scaled!(add_scaled!(g, vx, cw.g), vw, cx.g)
+        G = add_scaled!(add_scaled!(G, abs(vx), cw.G), abs(vw), cx.G)
         gs[n], gs[q + n] = cw.g, cx.g
         ops[n], ops[q + n] = vw, vx
     end
     site = ElementalSite(val, ops)
     sl = [forward_scale(ctx.rule, v) for v in Iterators.flatten((ws, xs))]
-    add_atoms!(G, PairedCurvature(q), ctx, site, sl, gs)
-    return FVar{T, R}(ForwardChannels(ctx, g, G), val)
+    G = add_atoms(G, PairedCurvature(q), ctx, site, sl, gs)
+    return FVar{T, R, S}(val, ctx, g, G)
 end
 
 # A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the
@@ -292,7 +419,15 @@ maintained the invariant at every one of them, not only at the output.
 
 `O(n*L)` time for `n` inputs and `L` operations, and `O(n)` memory per *live* variable — no tape,
 and nothing proportional to the length of the program. Its main advantage is therefore the ability
-to process programs that are too long to record. Currently, the tape-based
+to process programs that are too long to record.
+
+The channels are stored in whatever `x0` is made of, so a `StaticVector` point propagates in
+static arrays and no node allocates at all. That is worth doing for a handful of inputs and not
+for many: the propagation is then compiled for the exact input count, which for large `n` costs
+more in compilation than it saves at run time. A `Vector` point propagates in `Vector`s and
+compiles once for every size.
+
+Currently, the tape-based
 [`cover_hessian`](@ref) with [`SignedTangents`](@ref) is tighter, since it merges
 the same atoms weighted by exact adjoints rather than by the unsigned path sums a forward pass has
 to use.
@@ -337,16 +472,14 @@ function forward_cover(
     Base.require_one_based_indexing(x0)
     T = float(eltype(x0))
     R = typeof(rule)
-    n = length(x0)
-    n == 0 && throw(ArgumentError("cannot propagate a cover through a program with no inputs"))
-    ctx = ForwardContext{T, R}(rule, n, check, zeros(T, n))
-    xs = [
-        FVar{T, R}(
-                ForwardChannels(ctx, T[i == a for i in 1:n], zeros(T, n)), convert(T, x0[a])
-            ) for a in 1:n
-    ]
+    length(x0) == 0 &&
+        throw(ArgumentError("cannot propagate a cover through a program with no inputs"))
+    z = channel_zero(x0, T)
+    S = typeof(z)
+    ctx = ForwardContext{T, R}(rule, check, z)
+    xs = input_vars(FVar{T, R, S}, ctx, x0)
     out = f(xs)
-    out isa FVar{T, R} ||
+    out isa FVar{T, R, S} ||
         throw(ArgumentError("program output is not an FVar of this propagation (got a $(typeof(out))); forward_cover covers a scalar-valued program"))
     isconstant(out) &&
         throw(ArgumentError("program output is a constant (value $(value(out))); it does not depend on the inputs"))

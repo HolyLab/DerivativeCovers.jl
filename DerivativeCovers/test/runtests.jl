@@ -30,6 +30,7 @@ using ForwardDiff
 using LinearAlgebra
 using OffsetArrays
 using Random
+using StaticArrays
 using Test
 
 include("programs.jl")
@@ -115,7 +116,7 @@ include("genericaxes.jl")
             :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
-            :cover_slots, :bound_contribution!, :curvature_apply!, :has_exact_partials,
+            :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
             :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
             :jacobian_representability, :jacobian_minimax, :dependency_severity,
@@ -195,8 +196,9 @@ include("genericaxes.jl")
         fv = intermediate_fvar(60)
         @test sprint(show, fv) == "FVar(2.0)"
         @test occursin("60 inputs", sprint(show, MIME"text/plain"(), fv))
-        @test occursin("constant", sprint(show, MIME"text/plain"(), FVar{Float64, ValueSplit}(nothing, 2.5)))
-        @test sprint(show, FVar{Float64, ValueSplit}(nothing, 2.5)) == "FVar(2.5)"
+        fconst = FVar{Float64, ValueSplit, Vector{Float64}}(2.5)
+        @test occursin("constant", sprint(show, MIME"text/plain"(), fconst))
+        @test sprint(show, fconst) == "FVar(2.5)"
 
         # A TVar carries a reference to the whole tape, so the default display would grow with
         # the program. Both displays must stay bounded as the tape gets ten times longer.
