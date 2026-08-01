@@ -992,6 +992,9 @@ at fixed problem size, or sweep `n` within one to measure how a cover's loosenes
 
 The three quadratic forms are seeded alike, so at a given `n` they carry the *same* Hessian and
 differ only as programs.
+
+Every family but the last cancels in the tangents; `adjcancel` cancels in the adjoints, and is
+the only one whose looseness is set by a knob rather than by `n`.
 """
 function families(; sigma::Real = 0.0, seed::Integer = 1)
     return [
@@ -1001,6 +1004,7 @@ function families(; sigma::Real = 0.0, seed::Integer = 1)
         "deep w=4" => n -> deep_composition(n; depth = 4, width = 4, sigma, rng = MersenneTwister(seed)),
         "dag tree" => n -> random_dag(n; sharing = 0.0, sigma, rng = MersenneTwister(seed)),
         "dag shared" => n -> random_dag(n; sharing = 0.6, sigma, rng = MersenneTwister(seed)),
+        "adjcancel δ=0.01" => n -> adjoint_cancellation(n; delta = 1.0e-2, sigma, rng = MersenneTwister(seed)),
     ]
 end
 
