@@ -55,6 +55,26 @@ using Test
         @test exact_jacobian(jc) ≈ ForwardDiff.jacobian(jc.r, jc.x0)
     end
 
+    @testset "stationary outputs" begin
+        # The output is stationary in each u_j to second order, so its derivative there is
+        # 1 - cos(u_j) while the two paths carrying it contribute 1 and abs(cos(u_j)).
+        for n in (2, 3, 8), delta in (1.0e-1, 1.0e-2)
+            p = adjoint_cancellation(n; delta)
+            @test nvars(p) == n
+            @test exact_hessian(p) ≈ ForwardDiff.hessian(p.f, p.x0)
+            @test p.twin(p.x0) ≈ p.f(p.x0)
+            @test ForwardDiff.gradient(p.twin, p.x0) ≈ ForwardDiff.gradient(p.f, p.x0)
+            # Every unit sits at the same u_j, which is what makes the family size-independent.
+            @test all(≈(delta), p.x0[j] * p.x0[j + 1] for j in 1:(n - 1))
+        end
+
+        # More Newton steps, a more nearly stationary output: the inner residual falls
+        # quadratically, so the gradient of the inner objective at the final iterate does too.
+        inner_residual(k) = (p = converged_inner_solve(; steps = k);
+                             abs(ForwardDiff.gradient(p.f, p.x0)[1]))
+        @test inner_residual(0) > inner_residual(1) > inner_residual(2) > inner_residual(3)
+    end
+
     @testset "rescale is exactly the input-units transformation" begin
         p = quadratic(4; rng = MersenneTwister(5))
         d = logscales(MersenneTwister(6), 4; sigma = 4.0)
@@ -74,6 +94,9 @@ using Test
         @test_throws ArgumentError random_dag(4; sharing = 1.5)
         @test_throws ArgumentError cancellation(1)
         @test_throws "n must be at least 2" jacobian_cancellation(1)
+        @test_throws "n must be at least 2" adjoint_cancellation(1)
+        @test_throws "delta must be positive" adjoint_cancellation(4; delta = 0.0)
+        @test_throws "steps must be nonnegative" converged_inner_solve(; steps = -1)
     end
 
 end

@@ -154,6 +154,51 @@ function sharing_sweep(n, sharings; ndraws = 12)
 end
 
 """
+    adjoint_sweep(deltas; ns=(2, 8, 64))
+
+What the *adjoint* channel is worth. [`sharing_sweep`](@ref) varies reconvergence, which feeds the
+tangent channel; an adjoint cancels only where the output is nearly stationary in an interior node,
+and no amount of reconvergence through `+` produces that.
+
+`adjoint_cancellation`'s `delta` sets how nearly stationary, so `adjoint` should track `2/delta`
+while `tangent` stays pinned at 1 — the family has one path from each input to the product node, so
+it isolates the channel. Each row repeats at several `ns` because the mechanism belongs to the
+node, not the program: the separation is the same at every size.
+"""
+function adjoint_sweep(deltas; ns = (2, 8, 64))
+    @printf("%9s %5s %6s %9s %9s %9s %9s %9s %9s\n",
+            "delta", "n", "atoms", "quad", "signed", "fwd-G", "fwd", "tangent", "adjoint")
+    for delta in deltas, n in ns
+        p = adjoint_cancellation(n; delta)
+        c = corners(p.f, p.x0)
+        @printf("%9.3g %5d %6.0f %9.4g %9.4g %9.4g %9.4g %9.3f %9.3f\n",
+                delta, n, c.natoms, c.quad, c.signed, c.fwdg, c.fwd,
+                c.tangent.geo, c.adjoint.geo)
+    end
+    return println()
+end
+
+"""
+    inner_solve_sweep(steps)
+
+The same condition reached by the envelope theorem rather than by construction. Each Newton step on
+the inner problem makes the output more nearly stationary in the final iterate, so the adjoint gain
+climbs with `steps` — and unlike [`adjoint_sweep`](@ref) the tangent channel is engaged too, which
+is what differentiating through a converged solve actually looks like.
+"""
+function inner_solve_sweep(steps)
+    @printf("%6s %6s %9s %9s %9s %9s %9s %9s\n",
+            "steps", "atoms", "quad", "signed", "fwd-G", "fwd", "tangent", "adjoint")
+    for k in steps
+        p = converged_inner_solve(; steps = k)
+        c = corners(p.f, p.x0)
+        @printf("%6d %6.0f %9.4g %9.4g %9.4g %9.4g %9.3f %9.3f\n",
+                k, c.natoms, c.quad, c.signed, c.fwdg, c.fwd, c.tangent.geo, c.adjoint.geo)
+    end
+    return println()
+end
+
+"""
     cross_elemental(n, ms)
 
 What no corner of the lattice recovers. `cancellation`'s two variants differ only in the sign of
@@ -242,6 +287,12 @@ function main()
 
     println("--- reconvergence is what the channels cancel over ---")
     sharing_sweep(n, (0.0, 0.2, 0.4, 0.6, 0.8, 1.0))
+
+    println("--- a stationary output is what the adjoint channel cancels over ---")
+    adjoint_sweep((1.0, 1.0e-1, 1.0e-2, 1.0e-3))
+
+    println("--- the same condition, reached by a converged inner solve ---")
+    inner_solve_sweep(0:4)
 
     println("--- the loss no corner recovers ---")
     return cross_elemental(8, (1, 4, 16))
