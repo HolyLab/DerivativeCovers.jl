@@ -361,6 +361,17 @@ include("genericaxes.jl")
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
     end
 
+    # A test problem's declared dimension is its real one: every coordinate reaches the output.
+    # A parameter that is dead in both the gradient and the Hessian contributes nothing, so the
+    # problem silently exercises a smaller program than its `n` claims — and an indexing slip that
+    # aliases one parameter onto another looks exactly like this while leaving the count right.
+    @testset "no coordinate is dead — $name" for (name, f, x0) in PROBLEMS
+        g = ForwardDiff.gradient(f, x0)
+        H = ForwardDiff.hessian(f, x0)
+        dead = [i for i in eachindex(g) if g[i] == 0 && all(iszero, view(H, i, :))]
+        @test isempty(dead)
+    end
+
     @testset "covering chain — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)
