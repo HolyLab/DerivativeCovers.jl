@@ -104,7 +104,7 @@ include("genericaxes.jl")
                 :TangentChannel, :AbsoluteTangents, :SignedTangents,
                 :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
                 :NLSDiagnostics, :VarianceCover,
-                :SplitRule, :ValueSplit, :SensitivitySplit, :VectorNormSplit,
+                :SplitRule, :ValueSplit, :SensitivitySplit, :VectorNormSplit, :GuardedValueSplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
         )
@@ -113,7 +113,7 @@ include("genericaxes.jl")
         internals = (
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
-            :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
+            :submapnode, :split_scales, :split_block, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
@@ -137,7 +137,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :dispatchcurvature,
+            :value_bounds_split, :guards_any_block, :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
         )
@@ -738,6 +738,126 @@ include("genericaxes.jl")
         @test_throws "strictly positive" VectorNormSplit([1.0, Inf])
         @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = VectorNormSplit([1.0]))
         @test VectorNormSplit() === VectorNormSplit(nothing) === VectorNormSplit{Nothing}()
+
+        # GuardedValueSplit satisfies the same covering chain on the whole battery.
+        @testset "GuardedValueSplit covering chain — $name" for (name, f, x0) in PROBLEMS
+            H = ForwardDiff.hessian(f, x0)
+            res = cover_hessian(WithDiagnostics(), f, x0; rule = GuardedValueSplit())
+            for h in (res.h_sum, res.h_quad)
+                @test all(>=(0), h)
+                @test rank1_ratio(res.B, h) <= GATE
+                @test cover_ratio(H, h) <= GATE
+            end
+            @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
+            @test cover_hybrid(f, x0, 1; rule = GuardedValueSplit()) ≈ res.h_sum rtol = 1.0e-12
+        end
+
+        # Where no block reaches the fallback the rule reproduces ValueSplit bitwise, and the
+        # declared scales are never built. `guards_any_block` predicts which case a tape is in
+        # without running a cover; it may overcount, since a block whose adjoint vanishes
+        # contributes no cover term, so it is checked in the direction it claims.
+        @testset "GuardedValueSplit is ValueSplit off the guard — $name" for (name, f, x0) in PROBLEMS
+            rule = GuardedValueSplit()
+            t, _ = tape_function(f, x0)
+            resv = cover_hessian(WithDiagnostics(), f, x0; rule = ValueSplit())
+            resg = cover_hessian(WithDiagnostics(), f, x0; rule)
+            if !DerivativeCovers.guards_any_block(rule, t)
+                @test resg.h_sum == resv.h_sum
+                @test resg.h_quad == resv.h_quad
+            end
+        end
+
+        # The declared scales are built by the first block that asks and not before: a tape whose
+        # blocks all keep a usable value pair leaves the store empty after a whole cover sweep,
+        # which is the cost claim stated as a property rather than as a timing.
+        let rule = GuardedValueSplit(), fplain = x -> exp(x[1] * x[2]) + x[1]^3 + sin(x[2])
+            t, outidx = tape_function(fplain, [0.7, -1.3])
+            scales = DerivativeCovers.split_scales(rule, t)
+            @test isempty(scales.store.sigmas)
+            DerivativeCovers.local_covers(t, adjoints(t, outidx); rule)
+            @test isempty(DerivativeCovers.split_scales(rule, t).store.sigmas)
+            # A guarded block fills it, and refills it for no one.
+            tg, og = tape_function(fmul, x0)
+            sg = DerivativeCovers.split_scales(rule, tg)
+            @test isempty(sg.store.sigmas)
+            @test DerivativeCovers.declared_scale(sg[1]) == 1
+            @test length(sg.store.sigmas) == DerivativeCovers.nnodes(tg)
+        end
+
+        # The guard is a property of the block, so it fires at the zero-zero product and not at a
+        # perturbed point whose value ratio carries scale: `xp`'s operands are `2^-40` and `2^-38`,
+        # tiny but in a ratio of 4, which is a scale reference like any other.
+        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = GuardedValueSplit()).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = GuardedValueSplit()).h_sum == [2.0, 0.5]
+
+        # Where the value ratio itself is degenerate, the declared scales replace it and the split
+        # stops tracking a quantity that carries no scale. `ValueSplit` sends the same cover to
+        # `1e10` and moves it by `sqrt(3)` when the vanishing operand is perturbed; the guarded
+        # rule does not move at all.
+        fdeg = x -> x[1] * x[2]
+        for z1 in (1.0e-20, 3.0e-20)
+            xdeg = [z1, 1.0]
+            @test cover_hessian(WithDiagnostics(), fdeg, xdeg; rule = GuardedValueSplit()).h_sum ==
+                [1.0, 1.0]
+            @test cover_ratio(
+                ForwardDiff.hessian(fdeg, xdeg),
+                cover_hessian(WithDiagnostics(), fdeg, xdeg; rule = GuardedValueSplit()).h_sum
+            ) <= GATE
+        end
+        @test cover_hessian(WithDiagnostics(), fdeg, [1.0e-20, 1.0]; rule = ValueSplit()).h_sum ≈
+            [1.0e10, 1.0e-10]
+
+        # A bounded feasible segment keeps the value channel however lopsided the pair, because the
+        # clamp already fixes the split and both endpoints are covariant. Only a degenerate pair
+        # meeting a degenerate endpoint hands over.
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 1.0, 1.0e-20, 1.0, 1.0e-8)
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 1.0, 1.0, 1.0e-20, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(1.0, 10.0, 0.0, 1.0e-20, 1.0, 1.0e-8)
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 0.0, 1.0, 1.0e-20, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 0.0, 1.0e-8)
+        # `ratio = 0` narrows the guard to the exactly vanishing pair, which is the only degeneracy
+        # test that survives a rescaling of the intermediates unchanged.
+        @test DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 0.0)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 1.0, 0.0)
+
+        # Input covariance on a program that reaches no guarded block is exact with the weights
+        # held fixed, since the rule never reads them.
+        resg = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = GuardedValueSplit(w))
+        resg2 = cover_hessian(
+            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
+            rule = GuardedValueSplit(w)
+        )
+        @test resg2.h_sum ≈ resg.h_sum ./ d rtol = 1.0e-12
+        # Where it does reach one, covariance needs the weights rescaled alongside, exactly as for
+        # the rule the fallback borrows.
+        dm = [4.0, 0.25]
+        resm = cover_hessian(WithDiagnostics(), fmul, x0; rule = GuardedValueSplit([2.0, 3.0]))
+        resm2 = cover_hessian(
+            WithDiagnostics(), xt -> fmul(xt ./ dm), dm .* x0;
+            rule = GuardedValueSplit(dm .* [2.0, 3.0])
+        )
+        @test resm2.h_sum ≈ resm.h_sum ./ dm rtol = 1.0e-12
+
+        # A zero value certifies nothing, so no slot is marked dead and the fallback covers the
+        # pair rather than dropping it.
+        @test !DerivativeCovers.certifies_dead(GuardedValueSplit())
+        resgd = cover_hessian(WithDiagnostics(), fdead, xd; rule = GuardedValueSplit())
+        @test cover_ratio(Hd, resgd.h_sum) <= GATE
+
+        @test_throws "strictly positive" GuardedValueSplit([1.0, 0.0])
+        @test_throws "strictly positive" GuardedValueSplit([1.0, NaN])
+        @test_throws "must lie in [0, 1)" GuardedValueSplit(; ratio = 1.0)
+        @test_throws "must lie in [0, 1)" GuardedValueSplit(; ratio = -1.0e-8)
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = GuardedValueSplit([1.0]))
+        @test GuardedValueSplit() === GuardedValueSplit(nothing) ===
+            GuardedValueSplit{Nothing, Float64}(nothing, 1.0e-8)
+
+        # The declared scales come from a sweep over a tape, so a forward propagation cannot
+        # supply them and says so rather than substituting something else.
+        @test_throws "a forward propagation has none" forward_cover(
+            fmul, x0; rule = GuardedValueSplit()
+        )
     end
 
     @testset "node levels and partitions" begin

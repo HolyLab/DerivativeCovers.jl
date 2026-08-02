@@ -11,7 +11,8 @@ work for a tape of length `L`. The result is deterministic and certified.
 The default [`ValueSplit`](@ref) rule is covariant under rescaling: if `x -> D*x`, then
 `h -> inv(D)*h`; if `f -> c*f`, then `h -> sqrt(c)*h`.
 [`SensitivitySplit`](@ref) has the same input covariance when its weights are rescaled as
-`w -> D*w`.
+`w -> D*w`, and [`GuardedValueSplit`](@ref) needs that rescaling only on programs whose blocks
+reach its fallback.
 
 `using DerivativeCovers` imports the main entry points and result types. Public utilities such as
 `cover_ratio`, `tightness`, and `equilibrate` are not exported; call them with the
@@ -35,7 +36,7 @@ export CoverOnly, WithDiagnostics
 export TangentChannel, AbsoluteTangents, SignedTangents
 export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
 export NLSCover, NLSDiagnostics, VarianceCover
-export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit
+export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit, GuardedValueSplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
@@ -46,8 +47,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         Expr(
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
-            :split_scales, :value, :isconstant, :nnodes, :natoms, :CoverVar, :constantvar,
-            :tangent_channel, :forward_scale
+            :split_scales, :split_block, :value, :isconstant, :nnodes, :natoms, :CoverVar,
+            :constantvar, :tangent_channel, :forward_scale
         )
     )
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.

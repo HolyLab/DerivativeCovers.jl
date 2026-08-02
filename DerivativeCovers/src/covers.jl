@@ -416,15 +416,37 @@ function balanced_split(c11, c12, c22, z1, z2)
 end
 
 """
+    value_bounds_split(c11, c12, c22, z1, z2, ratio) -> Bool
+
+Whether the value pair `(z1, z2)` fixes the split of the block `[c11 c12; c12 c22]`.
+
+[`balanced_split`](@ref) aims at `sqrt(c12*z2/z1)` and clamps it to the feasible segment
+`[sqrt(c11), c12/sqrt(c22)]`, so a pair carrying no scale is harmless wherever the endpoint it runs
+toward is positive and finite: the clamp supplies the answer, and both endpoints are covariant.
+What is left is the pair of cases where that endpoint is degenerate as well — `c22 == 0` puts the
+upper endpoint at infinity, `c11 == 0` puts the lower one at zero — together with two vanishing
+values, which leave the ratio `z2/z1` undefined whatever the block. `ratio` is how lopsided a pair
+must be to count as carrying no scale.
+"""
+function value_bounds_split(c11, c12, c22, z1, z2, ratio)
+    (z1 == 0 && z2 == 0) && return false
+    z1 <= ratio * z2 && return c22 > 0
+    z2 <= ratio * z1 && return c11 > 0
+    return true
+end
+
+"""
     SplitRule
 
 Policy for choosing among the valid rank-1 covers of a single tape node.
 
 Some 2×2 second-derivative blocks admit a one-parameter family of covers. A `SplitRule` supplies
-the scale used to choose one member of that family. The built-in rules are [`ValueSplit`](@ref),
-the default, [`SensitivitySplit`](@ref), which minimizes the sum merge, and
-[`VectorNormSplit`](@ref), which minimizes the quadrature merge. Pass a rule with the `rule`
-keyword to cover functions. The choice can affect tightness, but not validity.
+the scale that selects one member of that family. The built-in rules are [`ValueSplit`](@ref),
+the default, [`SensitivitySplit`](@ref), which minimizes the sum merge,
+[`VectorNormSplit`](@ref), which minimizes the quadrature merge, and
+[`GuardedValueSplit`](@ref), which reads values where they carry scale and declared input scales
+where they do not. Pass a rule with the `rule` keyword to cover functions. The choice can affect
+tightness, but not validity.
 """
 abstract type SplitRule end
 
@@ -544,6 +566,70 @@ VectorNormSplit{W}() where {W} = VectorNormSplit{W}(nothing)
 VectorNormSplit() = VectorNormSplit(nothing)
 
 """
+    GuardedValueSplit(w=nothing; ratio=1e-8)
+
+The [`SplitRule`](@ref) that reads parent values wherever they carry a usable scale and the
+declared input scales — [`SensitivitySplit`](@ref)'s propagated weights — wherever they do not.
+
+A block's split is fixed by the ratio of its two scale references. The value ratio fixes it
+covariantly and continuously except at blocks where a vanishing value meets a degenerate feasible
+segment, and there no covariant local choice exists at all: the equalizing point runs to an
+endpoint that is itself zero or infinite. This rule keeps covariance wherever it is attainable and
+asks for units only where it is not, which neither pure rule can do — [`ValueSplit`](@ref) has an
+uncovariant fallback at those blocks, [`SensitivitySplit`](@ref) imports a units assumption at
+every block whether one is needed or not. [`value_bounds_split`](@ref) is the test, and `ratio` is
+its parameter: how lopsided a value pair must be before it counts as carrying no scale. A cover is
+discontinuous in the evaluation point at exactly these blocks, hence discontinuous in `ratio` too,
+so `ratio` belongs with any number measured under this rule.
+
+`w` states the input scales, one strictly positive finite entry per input, exactly as
+[`SensitivitySplit`](@ref) takes them; `w = nothing` means unit weights, which asserts that the
+inputs share units. That assertion is an assumption rather than a neutral choice, and it is the
+price of the fallback.
+
+Covariance: both channels transform as the values do under a rescaling of the intermediate
+variables, so wherever the guard makes the same choice the argument of [`balanced_split`](@ref)
+applies unchanged. The guard itself compares two differently scaled quantities and is therefore
+not invariant: a rescaling moves a block's value ratio, and one sitting near `ratio` can cross it.
+`ratio = 0` narrows the guard to an exactly vanishing pair, which is the one degeneracy test a
+rescaling leaves alone, at the price of reading the values wherever they are merely small. Under
+an input rescaling `x -> D*x` the cover is exactly covariant on a program whose blocks all keep a
+usable value pair; where the fallback fires it is covariant when the weights are rescaled
+alongside, `w -> D*w`.
+
+Cost: the guard is three comparisons on values already recorded, and the declared scales are built
+by the first block that asks for them rather than in advance — so a program whose blocks all keep a
+usable value pair takes [`ValueSplit`](@ref)'s splits bitwise and pays no sweep. One that reaches a
+guarded block pays [`SensitivitySplit`](@ref)'s extra `O(L)` forward sweep, once.
+[`guards_any_block`](@ref) answers which case a tape is in without running a cover.
+"""
+struct GuardedValueSplit{W, R} <: SplitRule
+    w::W
+    ratio::R
+
+    function GuardedValueSplit{W, R}(w, ratio) where {W, R}
+        w === nothing || all(wi -> isfinite(wi) && wi > 0, w) ||
+            throw(
+            ArgumentError(
+                "GuardedValueSplit weights must be strictly positive and finite: " *
+                    "a zero weight could zero a live slot's scale and falsely " *
+                    "certify it dead"
+            )
+        )
+        isfinite(ratio) && 0 <= ratio < 1 ||
+            throw(
+            ArgumentError(
+                "GuardedValueSplit ratio must lie in [0, 1): it is the value ratio below " *
+                    "which a pair counts as carrying no scale, and 1 would condemn every pair"
+            )
+        )
+        return new{W, R}(w, ratio)
+    end
+end
+GuardedValueSplit(w = nothing; ratio = 1.0e-8) =
+    GuardedValueSplit{typeof(w), typeof(ratio)}(w, ratio)
+
+"""
     certifies_dead(rule::SplitRule) -> Bool
 
 Whether a zero scale reference from `rule` certifies that the slot's total gradient vanishes
@@ -551,11 +637,16 @@ identically, so the slot's Hessian contributions are zero and it needs no cover 
 *value* certifies nothing of the sort, so [`ValueSplit`](@ref) answers `false`; a zero
 absolute sensitivity does, so [`SensitivitySplit`](@ref) answers `true`.
 
-With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must define.
+With [`split_scales`](@ref), this is the pair of methods a new `SplitRule` must define; a rule
+whose choice depends on the block as well as on its references defines [`split_block`](@ref) too.
+
+[`GuardedValueSplit`](@ref) answers `false`: it reads values wherever a block's cover depends on
+them, and a zero value certifies nothing.
 """
 certifies_dead(::ValueSplit) = false
 certifies_dead(::SensitivitySplit) = true
 certifies_dead(::VectorNormSplit) = false
+certifies_dead(::GuardedValueSplit) = false
 
 # Lazy absolute-value view used by ValueSplit, avoiding an O(L) copy.
 struct AbsValues{T} <: AbstractVector{T}
@@ -576,16 +667,73 @@ Base.IndexStyle(::Type{<:SlotScales}) = IndexLinear()
 Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
 
 """
+    DeclaredScales(rule, t)
+
+[`GuardedValueSplit`](@ref)'s declared-scale channel over the tape `t`, built by the first block
+that asks for it and shared by every block after.
+
+Deferring the sweep is what makes the rule free on a program that never needs it. Deciding in
+advance would take its own `O(L)` pass over the recorded blocks, which on a tape whose blocks all
+keep a usable value pair costs about as much as the cover sweep it precedes — so the rule would
+charge every program for the possibility of a fallback none of its blocks reach.
+"""
+mutable struct DeclaredScales{T, R <: SplitRule, TT <: Tape{T}}
+    const rule::R
+    const tape::TT
+    sigmas::Vector{T}
+end
+DeclaredScales(rule::SplitRule, t::Tape{T}) where {T} = DeclaredScales(rule, t, T[])
+
+function declared_scale(d::DeclaredScales, i::Integer)
+    isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.rule, d.tape))
+    return d.sigmas[i]
+end
+
+"""
+    GuardedScale(value, store, index)
+
+Both scale references [`GuardedValueSplit`](@ref) may read at one slot: the parent value, and the
+means of reaching the declared scale that stands in for it. They travel together because the choice
+between them belongs to a *block*, not to a node — a variable whose value carries scale in one
+product can be the vanishing operand of another — so a single scale per node cannot express the
+rule.
+"""
+struct GuardedScale{T, D}
+    value::T
+    store::D
+    index::Int
+end
+
+declared_scale(s::GuardedScale) = declared_scale(s.store, s.index)
+
+# `GuardedValueSplit`'s scale references over a whole tape, gathered per slot on demand.
+struct GuardedScales{T, V <: AbstractVector{T}, D} <: AbstractVector{GuardedScale{T, D}}
+    values::V
+    store::D
+end
+Base.size(g::GuardedScales) = size(g.values)
+Base.IndexStyle(::Type{<:GuardedScales}) = IndexLinear()
+Base.getindex(g::GuardedScales, i::Int) = GuardedScale(g.values[i], g.store, i)
+
+"""
     split_scales(rule::SplitRule, t::Tape) -> scales
 
 The per-node scale references `rule` supplies to [`local_cover_slots`](@ref): a lazy view of
 `abs.(t.vals)` for [`ValueSplit`](@ref), one [`abs_forward`](@ref) sweep seeded with the input
 weights for [`SensitivitySplit`](@ref), the weighted norms of [`tangents`](@ref) for
-[`VectorNormSplit`](@ref). Obtained once per cover sweep and shared by every node.
+[`VectorNormSplit`](@ref), and both channels for [`GuardedValueSplit`](@ref). Obtained once per
+cover sweep and shared by every node.
 """
 split_scales(::ValueSplit, t::Tape) = AbsValues(t.vals)
 
-function split_scales(rule::SensitivitySplit, t::Tape{T}) where {T}
+split_scales(rule::SensitivitySplit, t::Tape) = sensitivity_scales(rule, t)
+
+split_scales(rule::GuardedValueSplit, t::Tape) =
+    GuardedScales(AbsValues(t.vals), DeclaredScales(rule, t))
+
+# One `abs_forward` sweep seeded with `rule.w` at the inputs, shared by the two rules that
+# reference the absolute sensitivities.
+function sensitivity_scales(rule::SplitRule, t::Tape{T}) where {T}
     theta = zeros(T, nnodes(t))
     w = rule.w
     if w === nothing
@@ -593,10 +741,66 @@ function split_scales(rule::SensitivitySplit, t::Tape{T}) where {T}
     else
         Base.require_one_based_indexing(w)
         length(w) == t.ninputs ||
-            throw(DimensionMismatch("SensitivitySplit weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
+            throw(DimensionMismatch("$(nameof(typeof(rule))) weights have length $(length(w)), expected $(t.ninputs) (one per input)"))
         copyto!(view(theta, 1:t.ninputs), w)
     end
     return abs_forward(t, theta)
+end
+
+"""
+    guards_any_block(rule::GuardedValueSplit, t::Tape) -> Bool
+
+Whether any block of `t` could reach `rule`'s fallback, decided by the same
+[`value_bounds_split`](@ref) test the split itself applies and under the same conditions in which
+[`cover_slots!`](@ref) consults a scale at all.
+
+The test reads recorded values and second partials, never an adjoint. The adjoint scales a block's
+three entries together, so it changes neither the value ratio nor which diagonal entries are
+nonzero, except where it underflows one of them to zero. Reading it that way overcounts — a block
+whose adjoint vanishes contributes no cover term for the fallback to reach — and, in that
+underflow corner alone, can undercount.
+
+So this predicts which programs will ask for the declared scales without running a cover; the
+covers themselves build those scales on demand and never call it, and they are the authority on
+what a given tape does.
+"""
+function guards_any_block(rule::GuardedValueSplit, t::Tape{T}) where {T}
+    z = AbsValues(t.vals)
+    for k in (t.ninputs + 1):nnodes(t)
+        C, ps = t.Cs[k], t.parents[k]
+        if C isa BinaryCurvature
+            c11, c12, c22 = abs(C.c11), abs(C.c12), abs(C.c22)
+            c12^2 > c11 * c22 || continue   # the diagonal cover, which consults no scale
+            value_bounds_split(c11, c12, c22, z[ps[1]], z[ps[2]], rule.ratio) || return true
+        elseif C isa PairedCurvature
+            for j in 1:C.q
+                # Every pair of an inner product is the multiplication block `[0 c; c 0]`.
+                value_bounds_split(
+                    zero(T), one(T), zero(T), z[ps[j]], z[ps[C.q + j]], rule.ratio
+                ) || return true
+            end
+        end
+    end
+    return false
+end
+
+"""
+    split_block(rule::SplitRule, c11, c12, c22, s1, s2) -> (rho1, rho2)
+
+The member of the block's cover family that `rule` selects, from the scale references it supplies
+for the two slots.
+
+Most rules hand their references straight to [`balanced_split`](@ref) and need no method here.
+[`GuardedValueSplit`](@ref) defines one because its choice of *reference* depends on the block:
+it carries both channels per slot and reads the declared scales only where the value pair leaves
+the split unbounded.
+"""
+split_block(::SplitRule, c11, c12, c22, s1, s2) = balanced_split(c11, c12, c22, s1, s2)
+
+function split_block(rule::GuardedValueSplit, c11, c12, c22, s1::GuardedScale, s2::GuardedScale)
+    value_bounds_split(c11, c12, c22, s1.value, s2.value, rule.ratio) &&
+        return balanced_split(c11, c12, c22, s1.value, s2.value)
+    return balanced_split(c11, c12, c22, declared_scale(s1), declared_scale(s2))
 end
 
 function split_scales(rule::VectorNormSplit, t::Tape{T}) where {T}

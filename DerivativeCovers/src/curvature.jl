@@ -238,10 +238,11 @@ there is a second-order term at all and leaving `rho` untouched when there is no
 construction lives there, so that a sweep can hand it one buffer and let no node allocate for its
 slot weights; `cover_slots` allocates a fresh `rho` and forwards.
 
-`rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks and `sl` its
-scale references, one per slot and in slot order — not indexed by node, so that a backend holding
-no nodes can supply them. `check` verifies the covering invariant against the recorded entries; a
-curvature that declares a bound rather than recording entries has nothing to check against.
+`rule` is the [`SplitRule`](@ref) that breaks the tie at off-diagonal-active blocks, through
+[`split_block`](@ref), and `sl` its scale references, one per slot and in slot order — not indexed
+by node, so that a backend holding no nodes can supply them. `check` verifies the covering
+invariant against the recorded entries; a curvature that declares a bound rather than recording
+entries has nothing to check against.
 
 `site` is a [`CoverSite`](@ref), used for the element type and for error reporting. This is the
 per-elemental kernel shared by [`local_covers`](@ref), the [`CoverOnly`](@ref) sweep, and the
@@ -289,7 +290,7 @@ function cover_slots!(rho::Vector, C::PairedCurvature, rule, site, av, sl; check
         if certifies_dead(rule) && (s1 == 0 || s2 == 0)
             continue   # dead pair: both slots stay zero; see `local_cover_slots`
         end
-        a, b = balanced_split(zero(c), c, zero(c), s1, s2)
+        a, b = split_block(rule, zero(c), c, zero(c), s1, s2)
         if check
             check_finite_partials(site, av, (c,))
             # Allow for roundoff accumulated across the program, not just this comparison.
@@ -331,7 +332,7 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, rule, site, av, sl; check
     if c12^2 <= c11 * c22
         rho1, rho2 = sqrt(c11), sqrt(c22)
     else
-        rho1, rho2 = balanced_split(c11, c12, c22, s1, s2)
+        rho1, rho2 = split_block(rule, c11, c12, c22, s1, s2)
     end
     if check
         check_finite_partials(site, av, (c11, c12, c22))
