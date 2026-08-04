@@ -20,6 +20,9 @@ knobs for size, reconvergence, and dynamic range:
   fans a single node out to `width` consumers that immediately reconverge.
 - [`random_dag`](@ref): a random program whose `sharing` parameter interpolates from a tree
   (`sharing = 0`) to heavy subexpression reuse (`sharing = 1`).
+- [`adjoint_cancellation`](@ref): a chain of multiplication nodes the output is nearly stationary
+  in, so the paths from each node to the output cancel in the *adjoints* rather than the tangents.
+  [`converged_inner_solve`](@ref) reaches the same condition by the envelope theorem.
 
 Wide dynamic range enters along two independent axes: `sigma` widens the log-magnitude spread of
 a family's coefficients, while [`rescale`](@ref) (with scales from [`logscales`](@ref)) spreads
@@ -32,6 +35,7 @@ using Random: AbstractRNG, MersenneTwister
 
 export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
 export quadratic, deep_composition, random_dag, mlp, cancellation, rescale, logscales, families
+export adjoint_cancellation, converged_inner_solve
 export JacobianProblem, noutputs, exact_jacobian, has_exact_jacobian, jacobian_cancellation
 
 """
@@ -649,6 +653,107 @@ function cancellation(
     return CoverProblem(name, f, x0; twin, hessian = _ -> H)
 end
 
+# ---- stationary outputs ----------------------------------------------------------------------
+#
+# Programs whose output is *stationary* in an interior node. That is what makes a signed adjoint
+# collapse while the unsigned sum over paths from the same node does not, so these are the
+# families that separate the two adjoint channels. Everything above cancels in the tangents
+# instead, along paths from an input.
+
+"""
+    adjoint_cancellation(n; delta=1e-2, sigma=0.0, rng=MersenneTwister(1)) -> CoverProblem
+
+A chain of `n - 1` multiplication nodes `u_j = x_j * x_{j+1}`, each reaching the output through
+`u_j - sin(u_j)`, evaluated where every `u_j` is small.
+
+`u - sin(u)` has derivative `1 - cos(u)`, which vanishes to second order at `u = 0`, so the output
+is nearly stationary in each `u_j`: the signed adjoint of that node is `~u_j^2/2` while its two
+paths to the output contribute `~2` in absolute-value arithmetic. The adjoint index
+`acheck/abs(vbar)` at the node is therefore `~4/u_j^2` and the cover separation `~2/u_j`, both set
+by `delta` alone.
+
+`x0` alternates `delta, 1, delta, 1, ...`, so every `u_j` is `delta` and every unit carries the
+same index. The units overlap — `x_j` feeds both `u_{j-1}` and `u_j` — so the Hessian is
+tridiagonal rather than block diagonal, and the separation is a property of each node rather than
+of the problem size: **it is the same at every `n`**, which is what makes the family usable in a
+size sweep.
+
+Each input reaches the output along one path per unit, so the tangent channel is exactly inert:
+`cover_lattice`'s tangent corners coincide and the family isolates the adjoint channel. `sigma`
+spreads the log-magnitudes of the odd coordinates, spreading the per-unit index without touching
+the mechanism.
+"""
+function adjoint_cancellation(
+        n::Integer; delta::Real = 1.0e-2, sigma::Real = 0.0,
+        rng::AbstractRNG = MersenneTwister(1)
+    )
+    n >= 2 || throw(ArgumentError("n must be at least 2, got $n"))
+    delta > 0 || throw(ArgumentError("delta must be positive, got $delta"))
+    nunits = n - 1
+    x0 = [isodd(i) ? delta * exp(sigma * randn(rng)) : 1.0 for i in 1:n]
+
+    function f(x)
+        u = [x[j] * x[j + 1] for j in 1:nunits]
+        return _sum([u[j] - sin(u[j]) for j in 1:nunits])
+    end
+
+    function twin(x)
+        v = x[1:nunits] .* x[2:n]
+        return sum(v .- sin.(v))
+    end
+
+    # Each unit contributes sin(u_j) * (du_j)(du_j)' + (1 - cos(u_j)) * d2u_j, and d2u_j is 1 in
+    # the (j, j+1) entry alone. Off-diagonals come from one unit each; diagonals from two.
+    function hessian(x)
+        H = zeros(promote_type(eltype(x), Float64), n, n)
+        for j in 1:nunits
+            uj = x[j] * x[j + 1]
+            s, c = sin(uj), 1 - cos(uj)
+            H[j, j] += s * x[j + 1]^2
+            H[j + 1, j + 1] += s * x[j]^2
+            H[j, j + 1] = s * x[j] * x[j + 1] + c
+            H[j + 1, j] = H[j, j + 1]
+        end
+        return H
+    end
+
+    return CoverProblem("adjcancel n=$n δ=$delta", f, x0; twin, hessian)
+end
+
+"""
+    converged_inner_solve(; steps=2) -> CoverProblem
+
+A bilevel program: `steps` Newton iterations on the inner problem `min_u (u - x1)^2/2 + x2 u^4/4`,
+with the output that same inner objective at the final iterate.
+
+By the envelope theorem the output is stationary in `u` at the exact inner minimizer, so the
+adjoint through the final iterate collapses as the solve converges while the unsigned sum over
+paths does not. Newton doubles the accuracy each step, so the adjoint index grows
+superexponentially in `steps`. At `steps = 0` the inner variable keeps its initial value and
+nothing cancels, which is the control.
+
+Unlike [`adjoint_cancellation`](@ref) this engages the tangent channel too — the realistic case,
+since the same structure appears in implicit layers, self-consistent field iterations, and any
+objective differentiated through a converged inner solve. Its knob is `steps` rather than a size,
+so it takes no `n` and is not one of [`families`](@ref).
+
+Past four steps the inner residual is at roundoff and a further step measures the floor rather
+than the mechanism.
+"""
+function converged_inner_solve(; steps::Integer = 2)
+    steps >= 0 || throw(ArgumentError("steps must be nonnegative, got $steps"))
+    function f(x)
+        u = x[1]
+        for _ in 1:steps
+            g = (u - x[1]) + x[2] * u^3
+            h = 1 + 3 * x[2] * u^2
+            u = u - g / h
+        end
+        return (u - x[1])^2 / 2 + x[2] * u^4 / 4
+    end
+    return CoverProblem("innersolve k=$steps", f, [1.3, 0.7])
+end
+
 # ---- vector-output cancellation pairs --------------------------------------------------------
 
 """
@@ -887,6 +992,9 @@ at fixed problem size, or sweep `n` within one to measure how a cover's loosenes
 
 The three quadratic forms are seeded alike, so at a given `n` they carry the *same* Hessian and
 differ only as programs.
+
+Every family but the last cancels in the tangents; `adjcancel` cancels in the adjoints, and is
+the only one whose looseness is set by a knob rather than by `n`.
 """
 function families(; sigma::Real = 0.0, seed::Integer = 1)
     return [
@@ -896,6 +1004,7 @@ function families(; sigma::Real = 0.0, seed::Integer = 1)
         "deep w=4" => n -> deep_composition(n; depth = 4, width = 4, sigma, rng = MersenneTwister(seed)),
         "dag tree" => n -> random_dag(n; sharing = 0.0, sigma, rng = MersenneTwister(seed)),
         "dag shared" => n -> random_dag(n; sharing = 0.6, sigma, rng = MersenneTwister(seed)),
+        "adjcancel δ=0.01" => n -> adjoint_cancellation(n; delta = 1.0e-2, sigma, rng = MersenneTwister(seed)),
     ]
 end
 

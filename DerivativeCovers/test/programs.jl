@@ -99,7 +99,7 @@ function mlp_loss(xin, ytar)
             yhat = first ? t : yhat + t
             first = false
         end
-        yhat = yhat + p[off2 + nh]                    # + b2
+        yhat = yhat + p[off2 + nh + 1]                # + b2, the last parameter
         return (yhat - ytar)^2
     end
 end

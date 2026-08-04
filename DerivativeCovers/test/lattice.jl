@@ -132,6 +132,33 @@ const LATTICE_X = [0.7, 1.3]
         @test any(lat.h_quad .< lat.h_quad_forward)
     end
 
+    # What the adjoint channel is worth must be a function of the mechanism, not of whichever
+    # fixture happens to exhibit it: `adjcancel`'s knob sets how nearly the output is stationary
+    # in each product node, and the separation has to follow it.
+    @testset "the adjoint separation follows the knob" begin
+        deltas = (1.0, 1.0e-1, 1.0e-2, 1.0e-3)
+        gains = map(deltas) do delta
+            p = Problems.adjoint_cancellation(2; delta)
+            lat = cover_lattice(p.f, p.x0)
+            # The tangent channel is inert here, so this isolates the adjoint one.
+            @test lat.h_quad == lat.h_quad_signed
+            @test lat.h_quad_absadj == lat.h_quad_forward
+            maximum(lat.h_quad_absadj ./ lat.h_quad)
+        end
+        @test issorted(gains)
+        # The separation scales as 2/delta, so a tenfold knob is worth about tenfold.
+        @test all(gains[i + 1] / gains[i] > 5 for i in 1:(length(gains) - 1))
+
+        # The mechanism is a property of each node, so a chain of them holds the separation at
+        # every size. This is what admits the family into a size sweep.
+        wide = map((2, 4, 16, 64)) do n
+            p = Problems.adjoint_cancellation(n; delta = 1.0e-2)
+            lat = cover_lattice(p.f, p.x0)
+            maximum(lat.h_quad_absadj ./ lat.h_quad)
+        end
+        @test all(≈(wide[1]), wide)
+    end
+
     @testset "tangents are the signed twin of sensitivities" begin
         t, outidx = tape_function(lattice_program, LATTICE_X)
         u = DerivativeCovers.tangents(t)
