@@ -108,11 +108,11 @@ const LATTICE_X = [0.7, 1.3]
             cover_hessian(CoverOnly(), lattice_program, LATTICE_X).h_sum
     end
 
-    @testset "the signed channel threads the split rule" begin
-        for rule in (ValueSplit(), SensitivitySplit(), VectorNormSplit())
-            lat = cover_lattice(lattice_program, LATTICE_X; rule)
+    @testset "the signed channel threads the split keywords" begin
+        for kw in ((; ), (; ratio = 0.5), (; scales = fill(3.0, length(LATTICE_X))))
+            lat = cover_lattice(lattice_program, LATTICE_X; kw...)
             sgn = cover_hessian(
-                WithDiagnostics(), lattice_program, LATTICE_X; rule, channel = SignedTangents()
+                WithDiagnostics(), lattice_program, LATTICE_X; kw..., channel = SignedTangents()
             )
             @test sgn.h_quad == lat.h_quad_signed
         end
@@ -185,12 +185,12 @@ const LATTICE_X = [0.7, 1.3]
         end
     end
 
-    @testset "the split rule threads through" begin
-        for rule in (ValueSplit(), SensitivitySplit())
-            lat = cover_lattice(lattice_program, LATTICE_X; rule)
-            res = cover_hessian(WithDiagnostics(), lattice_program, LATTICE_X; rule)
+    @testset "the split keywords thread through" begin
+        for kw in ((; ), (; ratio = 0.5), (; scales = fill(3.0, length(LATTICE_X))))
+            lat = cover_lattice(lattice_program, LATTICE_X; kw...)
+            res = cover_hessian(WithDiagnostics(), lattice_program, LATTICE_X; kw...)
             @test lat.h_quad == res.h_quad
-            # The ordering is a property of the rule, not of the default.
+            # The ordering is a property of the construction, not of the default split.
             @test all(lat.h_quad_signed .<= lat.h_quad .* GATE)
             @test all(lat.h_quad .<= lat.h_quad_absadj .* GATE)
         end

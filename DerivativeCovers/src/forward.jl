@@ -25,10 +25,10 @@ function ForwardCover{T}(grad, h_quad) where {T}
 end
 
 """
-    ForwardContext{T, R, S}
+    ForwardContext{T, S}
 
-State shared by every variable in a forward propagation: the [`SplitRule`](@ref) followed by local
-covers, whether each local cover is verified, and the scratch a node writes through while
+State shared by every variable in a forward propagation: the degeneracy threshold local covers
+split at, whether each local cover is verified, and the scratch a node writes through while
 assembling its cover.
 
 `S` is the channel storage, one entry per input; [`forward_cover`](@ref) derives it from the point
@@ -41,28 +41,29 @@ It is a reference type so that every variable of the propagation holds a pointer
 context: storing an immutable into a variable's field would copy it, at one allocation per node.
 Identity is then also what `===` compares, which is what distinguishes two propagations.
 """
-mutable struct ForwardContext{T, R <: SplitRule, S <: AbstractVector{T}}
-    const rule::R
+mutable struct ForwardContext{T, S <: AbstractVector{T}}
+    const ratio::T
     const check::Bool
     const zerochannel::S
     const scratch::S
     const rho::Vector{T}
 
-    ForwardContext{T, R, S}(rule, check, zerochannel, scratch, rho) where {T, R, S} =
-        new{T, R, S}(rule, check, zerochannel, scratch, rho)
+    ForwardContext{T, S}(ratio, check, zerochannel, scratch, rho) where {T, S} =
+        new{T, S}(ratio, check, zerochannel, scratch, rho)
 end
 
-function ForwardContext{T, R}(rule, check, zerochannel::AbstractVector{T}) where {T, R}
-    return ForwardContext{T, R, typeof(zerochannel)}(
-        rule, check, zerochannel, zero(zerochannel), T[]
+function ForwardContext{T}(ratio, check, zerochannel::AbstractVector{T}) where {T}
+    return ForwardContext{T, typeof(zerochannel)}(
+        ratio, check, zerochannel, zero(zerochannel), T[]
     )
 end
 
 """
-    ForwardChannels{T, R, S}
+    ForwardChannels{T, S}
 
-The two channels an [`FVar`](@ref) carries beyond its value: the signed tangent `g = ∇v`, and the
-squared cover `G` maintaining `sqrt.(G) * sqrt.(G)' >= abs.(∇²v)` entrywise.
+The two vector channels an [`FVar`](@ref) carries beyond its value and its declared scale: the
+signed tangent `g = ∇v`, and the squared cover `G` maintaining
+`sqrt.(G) * sqrt.(G)' >= abs.(∇²v)` entrywise.
 
 `G` is squared rather than rooted because the recursion that maintains it is *linear* in the
 parents' `G`, which is what keeps a per-node re-merge from compounding with depth.
@@ -70,34 +71,35 @@ parents' `G`, which is what keeps a per-node re-merge from compounding with dept
 The channels live in the [`FVar`](@ref)'s own fields; [`channels`](@ref) assembles this view of
 them on demand, and it costs nothing once inlined.
 """
-struct ForwardChannels{T, R, S}
-    ctx::ForwardContext{T, R, S}
+struct ForwardChannels{T, S}
+    ctx::ForwardContext{T, S}
     g::S
     G::S
 
-    ForwardChannels{T, R, S}(ctx, g, G) where {T, R, S} = new{T, R, S}(ctx, g, G)
+    ForwardChannels{T, S}(ctx, g, G) where {T, S} = new{T, S}(ctx, g, G)
 end
 
 """
-    FVar{T, R, S}
+    FVar{T, S}
 
 A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
 [`CoverVar`](@ref) backend.
 
-`R` is the active [`SplitRule`](@ref) type and `S` the channel storage (see
-[`ForwardContext`](@ref)). A constant carries both because generic numerical code builds typed
-literals from `eltype`, which is all it has to reach the backend by.
+`S` is the channel storage (see [`ForwardContext`](@ref)). A constant carries it too, because
+generic numerical code builds typed literals from `eltype`, which is all it has to reach the
+backend by.
 
-For each variable, the propagation holds the value, the signed tangent `∇v`, and a squared cover of
-`∇²v`; see [`ForwardChannels`](@ref). Working memory is `O(n)` per *live* variable rather than per
-recorded node, so a program whose intermediates go out of scope costs `O(n × live width)` and
-never materializes a tape.
+For each variable, the propagation holds the value, the signed tangent `∇v`, a squared cover of
+`∇²v` (see [`ForwardChannels`](@ref)), and the scalar declared scale `sigma` the split falls back
+on. Working memory is `O(n)` per *live* variable rather than per recorded node, so a program whose
+intermediates go out of scope costs `O(n × live width)` and never materializes a tape.
 
 Build one with [`forward_cover`](@ref) rather than directly.
 """
-struct FVar{T, R, S} <: CoverVar{T}
+struct FVar{T, S} <: CoverVar{T}
     val::T
-    ctx::Union{ForwardContext{T, R, S}, Nothing}
+    sigma::T
+    ctx::Union{ForwardContext{T, S}, Nothing}
     g::S
     G::S
 
@@ -106,19 +108,19 @@ struct FVar{T, R, S} <: CoverVar{T}
     # concrete for the same reason -- an immutable `S` is then stored inline, where a
     # `Union{S,Nothing}` would be copied to the heap at every node -- so a constant, which has no
     # channels, gets `constantchannel` in the fields and is recognized by a null context instead.
-    FVar{T, R, S}(val, ctx, g, G) where {T, R, S} = new{T, R, S}(val, ctx, g, G)
+    FVar{T, S}(val, sigma, ctx, g, G) where {T, S} = new{T, S}(val, sigma, ctx, g, G)
 end
 
 # A constant. Its storage is named rather than defaulted: a constant of the wrong storage combines
 # with nothing in the propagation that produced it.
-function FVar{T, R, S}(val) where {T, R, S}
+function FVar{T, S}(val) where {T, S}
     ch = constantchannel(S)
-    return FVar{T, R, S}(val, nothing, ch, ch)
+    return FVar{T, S}(val, zero(T), nothing, ch, ch)
 end
 
 isconstant(x::FVar) = x.ctx === nothing
 value(x::FVar) = x.val
-constantvar(::Type{FVar{T, R, S}}, c::Real) where {T, R, S} = FVar{T, R, S}(c)
+constantvar(::Type{FVar{T, S}}, c::Real) where {T, S} = FVar{T, S}(c)
 
 @noinline _constant_channels(x::FVar) = throw(
     ArgumentError(
@@ -134,10 +136,10 @@ The tangent and cover channels behind `x`. A constant has neither: every element
 constant operand into one that propagates, so reaching here with a constant means a caller
 bypassed that folding.
 """
-function channels(x::FVar{T, R, S}) where {T, R, S}
+function channels(x::FVar{T, S}) where {T, S}
     ctx = x.ctx
     ctx === nothing && _constant_channels(x)
-    return ForwardChannels{T, R, S}(ctx, x.g, x.G)
+    return ForwardChannels{T, S}(ctx, x.g, x.G)
 end
 
 # --- channel storage ---------------------------------------------------------------------------
@@ -204,8 +206,9 @@ end
 # program reaches its inputs at indices it computes, and a static container answers such an index
 # only by spilling the whole thing to the stack. The channels inside are static or not according
 # to the point, which is where the cost of the propagation actually lies.
-function input_vars(::Type{FVar{T, R, S}}, ctx, x0) where {T, R, S}
-    var(a) = FVar{T, R, S}(x0[a], ctx, channel_basis(x0, T, a), channel_zero(x0, T))
+function input_vars(::Type{FVar{T, S}}, ctx, x0, w) where {T, S}
+    sigma(a) = w === nothing ? one(T) : convert(T, w[a])
+    var(a) = FVar{T, S}(x0[a], sigma(a), ctx, channel_basis(x0, T, a), channel_zero(x0, T))
     # `Base.OneTo`, not `eachindex(x0)`: a static point indexes over `SOneTo`, and a comprehension
     # over that rebuilds the static container this is here to avoid. The caller has already
     # declared one-based indexing.
@@ -237,44 +240,21 @@ site_label(::ElementalSite) = "this elemental"
 site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operands))"
 
 """
-    forward_scale(rule::SplitRule, x::FVar)
+    forward_scale(x::FVar) -> SplitScale
 
-The scale reference that `rule` reads from `x` when splitting a local cover—the forward analogue of
+The scale references [`split_block`](@ref) reads at `x` — the forward analogue of
 [`split_scales`](@ref), which reads a whole tape at once.
 
-A rule is usable here only if a forward propagation carries what it references.
-[`ValueSplit`](@ref) needs the value and [`VectorNormSplit`](@ref) the tangent, both of which are
-channels of an [`FVar`](@ref). [`SensitivitySplit`](@ref) needs the absolute sensitivities, which
-are a third channel this propagation does not carry, so it is rejected rather than approximated by
-something else.
+Both channels are already on the variable: the value, and the declared scale `sigma` the
+propagation carries alongside it. So a propagation splits its local covers by exactly the rule a
+tape does, and the two backends are comparable coordinate by coordinate.
+
+Nothing is deferred here, unlike on a tape. `sigma` obeys the same recursion as the tape's
+[`sensitivity_scales`](@ref) sweep, `sigma_k = sum_i abs(d_i) * sigma_{p_i}`, but it is a single
+scalar per variable rather than a pass over recorded nodes — so carrying it costs `O(1)` per
+elemental whether or not any block asks for it, against the `O(L)` sweep a tape would have to run.
 """
-forward_scale(::ValueSplit, x::FVar) = abs(value(x))
-forward_scale(::VectorNormSplit{Nothing}, x::FVar) = norm(channels(x).g)
-
-function forward_scale(rule::VectorNormSplit, x::FVar)
-    g = channels(x).g
-    w = rule.w
-    Base.require_one_based_indexing(w)
-    length(w) == length(g) ||
-        throw(DimensionMismatch("VectorNormSplit weights have length $(length(w)), expected $(length(g)) (one per input)"))
-    return sqrt(sum(w[a] * g[a]^2 for a in eachindex(g)))
-end
-
-forward_scale(::SensitivitySplit, ::FVar) = throw(
-    ArgumentError(
-        "SensitivitySplit references the absolute sensitivities, which a forward propagation " *
-            "does not carry: it propagates the signed tangents and the cover, not the " *
-            "absolute-value twin of the tangents. Use ValueSplit or VectorNormSplit"
-    )
-)
-
-forward_scale(rule::SplitRule, ::FVar) = throw(
-    ArgumentError(
-        "$(nameof(typeof(rule))) supplies its scale references through `split_scales`, which " *
-            "reads a tape; a forward propagation has none. A rule usable here defines " *
-            "`forward_scale`"
-    )
-)
+forward_scale(x::FVar) = SplitScale(abs(value(x)), x.sigma)
 
 # The cover recursion of one elemental, in the squared channel:
 #
@@ -286,7 +266,7 @@ forward_scale(rule::SplitRule, ::FVar) = throw(
 # being filled: immutable storage cannot be filled.
 function add_atoms(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
     rho = ctx.rho
-    cover_slots!(rho, C, ctx.rule, site, one(eltype(G)), sl; check = ctx.check) || return G
+    cover_slots!(rho, C, ctx.ratio, site, one(eltype(G)), sl; check = ctx.check) || return G
     for atom in atom_slots(C, length(gs))
         s = zeroscratch(ctx)
         for i in atom
@@ -299,44 +279,47 @@ function add_atoms(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
     return G
 end
 
-function unarynode(x::FVar{T, R, S}, val, d, c) where {T, R, S}
+function unarynode(x::FVar{T, S}, val, d, c) where {T, S}
     ch = channels(x)
     ctx = ch.ctx
     dT = convert(T, d)
     g = dT .* ch.g
     G = abs(dT) .* ch.G
+    sigma = abs(dT) * x.sigma
     if !iszero(c)
         site = ElementalSite(convert(T, val), (value(x),))
         G = add_atoms(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
-    return FVar{T, R, S}(val, ctx, g, G)
+    return FVar{T, S}(val, sigma, ctx, g, G)
 end
 
 function binarynode(
-        x::FVar{T, R, S}, y::FVar{T, R, S}, val, d1, d2, c11, c12, c22
-    ) where {T, R, S}
+        x::FVar{T, S}, y::FVar{T, S}, val, d1, d2, c11, c12, c22
+    ) where {T, S}
     cx, cy = channels(x), channels(y)
     ctx = cx.ctx
     ctx === cy.ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
     a, b = convert(T, d1), convert(T, d2)
     g = a .* cx.g .+ b .* cy.g
     G = abs(a) .* cx.G .+ abs(b) .* cy.G
+    sigma = abs(a) * x.sigma + abs(b) * y.sigma
     if !(iszero(c11) && iszero(c12) && iszero(c22))
         C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
         site = ElementalSite(convert(T, val), (value(x), value(y)))
-        sl = (forward_scale(ctx.rule, x), forward_scale(ctx.rule, y))
+        sl = (forward_scale(x), forward_scale(y))
         G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
-    return FVar{T, R, S}(val, ctx, g, G)
+    return FVar{T, S}(val, sigma, ctx, g, G)
 end
 
 function linearnode(
-        coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, R, S}}
-    ) where {T, R, S}
+        coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, S}}
+    ) where {T, S}
     isempty(xs) && throw(ArgumentError("cannot propagate an empty linear combination"))
     idxs = eachindex(coeffs, xs)
     ctx = channels(xs[first(idxs)]).ctx
     val = zero(T)
+    sigma = zero(T)
     g = freshchannel(ctx)
     G = freshchannel(ctx)
     for j in idxs
@@ -344,20 +327,22 @@ function linearnode(
         ch.ctx === ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
         cj = convert(T, coeffs[j])
         val += cj * value(xs[j])
+        sigma += abs(cj) * xs[j].sigma
         g = add_scaled!(g, cj, ch.g)
         G = add_scaled!(G, abs(cj), ch.G)
     end
-    return FVar{T, R, S}(val, ctx, g, G)
+    return FVar{T, S}(val, sigma, ctx, g, G)
 end
 
 function dotnode(
-        ws::AbstractVector{<:FVar{T, R, S}}, xs::AbstractVector{<:FVar{T, R, S}}
-    ) where {T, R, S}
+        ws::AbstractVector{<:FVar{T, S}}, xs::AbstractVector{<:FVar{T, S}}
+    ) where {T, S}
     isempty(ws) && throw(ArgumentError("cannot propagate an empty inner product"))
     idxs = eachindex(ws, xs)
     q = length(idxs)
     ctx = channels(ws[first(idxs)]).ctx
     val = zero(T)
+    sigma = zero(T)
     g = freshchannel(ctx)
     G = freshchannel(ctx)
     # Slot order is `(w_1..w_q, x_1..x_q)`, matching `PairedCurvature`'s pairing of `j` with `q+j`.
@@ -370,15 +355,16 @@ function dotnode(
         vw, vx = value(ws[j]), value(xs[j])
         val += vw * vx
         # The partial with respect to one side of a pair is the value of the other.
+        sigma += abs(vx) * ws[j].sigma + abs(vw) * xs[j].sigma
         g = add_scaled!(add_scaled!(g, vx, cw.g), vw, cx.g)
         G = add_scaled!(add_scaled!(G, abs(vx), cw.G), abs(vw), cx.G)
         gs[n], gs[q + n] = cw.g, cx.g
         ops[n], ops[q + n] = vw, vx
     end
     site = ElementalSite(val, ops)
-    sl = [forward_scale(ctx.rule, v) for v in Iterators.flatten((ws, xs))]
+    sl = [forward_scale(v) for v in Iterators.flatten((ws, xs))]
     G = add_atoms(G, PairedCurvature(q), ctx, site, sl, gs)
-    return FVar{T, R, S}(val, ctx, g, G)
+    return FVar{T, S}(val, sigma, ctx, g, G)
 end
 
 # A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the
@@ -396,18 +382,19 @@ submapnode(
 )
 
 """
-    forward_cover(f, x0::AbstractVector; rule=VectorNormSplit(), check=true) -> ForwardCover
+    forward_cover(f, x0::AbstractVector; scales=nothing, ratio=nothing, check=true) -> ForwardCover
     forward_cover(x::FVar) -> ForwardCover
 
 Compute a certified rank-1 cover of a scalar function's Hessian by propagating it forward, in one
 pass and with no tape.
 
 `f` must accept a vector of [`FVar`](@ref)s and return one, using operations `FVar` supports. Per
-variable the propagation carries the value, the signed tangent `∇v`, and a squared cover of `∇²v`;
-the recursions are
+variable the propagation carries the value, the signed tangent `∇v`, a squared cover of `∇²v`, and
+the scalar declared scale `sigma`; the recursions are
 
-    ∇v_k = sum_i d_i * ∇v_i
-    G_k  = sum_i abs(d_i) * G_i + sum over atoms of (sum_{i in atom} rho_i * abs.(∇v_i))^2
+    ∇v_k    = sum_i d_i * ∇v_i
+    sigma_k = sum_i abs(d_i) * sigma_i
+    G_k     = sum_i abs(d_i) * G_i + sum over atoms of (sum_{i in atom} rho_i * abs.(∇v_i))^2
 
 with `rho` the same local cover a reverse sweep builds, except that the adjoint factor is `1`: a
 forward pass cannot know how the output depends on the node it is at. The cover is `sqrt.(G)`.
@@ -437,16 +424,10 @@ The cover this reaches is exactly the signed-tangent, absolute-adjoint corner of
 corner is *incomparable* with the default `h_quad`: it keeps every tangent sign and discards every
 adjoint sign, so which is tighter is a property of the program.
 
-`rule` selects the [`SplitRule`](@ref), and only rules that reference something a forward pass
-carries are usable; see [`forward_scale`](@ref). The default [`VectorNormSplit`](@ref) is the one
-whose scale reference — the tangent norm — the propagation already has, and it is the per-node
-minimizer of the quadrature merge this construction performs. `check=true` verifies every local
-cover.
-
-That default differs from the tape entry points, which default to [`ValueSplit`](@ref) because a
-tape cannot afford a tangent norm. Two covers are comparable only under the same rule, so pass
-`rule` on both sides when comparing this against [`cover_hessian`](@ref) or
-[`cover_lattice`](@ref).
+`scales` and `ratio` govern the split exactly as in [`cover_hessian`](@ref): the propagation
+carries both of the references [`split_block`](@ref) reads, so it splits by the same rule a tape
+does and its cover is comparable with the tape's coordinate by coordinate. See
+[`forward_scale`](@ref). `check=true` verifies every local cover.
 
 # Examples
 
@@ -467,19 +448,19 @@ true
 ```
 """
 function forward_cover(
-        f, x0::AbstractVector; rule::SplitRule = VectorNormSplit(), check::Bool = true
+        f, x0::AbstractVector; scales = nothing, ratio = nothing, check::Bool = true
     )
     Base.require_one_based_indexing(x0)
     T = float(eltype(x0))
-    R = typeof(rule)
     length(x0) == 0 &&
         throw(ArgumentError("cannot propagate a cover through a program with no inputs"))
+    w = check_input_scales(scales, length(x0))
     z = channel_zero(x0, T)
     S = typeof(z)
-    ctx = ForwardContext{T, R}(rule, check, z)
-    xs = input_vars(FVar{T, R, S}, ctx, x0)
+    ctx = ForwardContext{T}(split_ratio(ratio, T), check, z)
+    xs = input_vars(FVar{T, S}, ctx, x0, w)
     out = f(xs)
-    out isa FVar{T, R, S} ||
+    out isa FVar{T, S} ||
         throw(ArgumentError("program output is not an FVar of this propagation (got a $(typeof(out))); forward_cover covers a scalar-valued program"))
     isconstant(out) &&
         throw(ArgumentError("program output is a constant (value $(value(out))); it does not depend on the inputs"))

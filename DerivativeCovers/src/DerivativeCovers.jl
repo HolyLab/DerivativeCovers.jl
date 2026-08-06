@@ -8,11 +8,11 @@ A Hessian cover is a nonnegative vector `h` satisfying
 function on a [`Tape`](@ref) and computes such a cover, together with the gradient, in `O(L)`
 work for a tape of length `L`. The result is deterministic and certified.
 
-The default [`ValueSplit`](@ref) rule is covariant under rescaling: if `x -> D*x`, then
-`h -> inv(D)*h`; if `f -> c*f`, then `h -> sqrt(c)*h`.
-[`SensitivitySplit`](@ref) has the same input covariance when its weights are rescaled as
-`w -> D*w`, and [`GuardedValueSplit`](@ref) needs that rescaling only on programs whose blocks
-reach its fallback.
+A cover is covariant under rescaling: if `x -> D*x`, then `h -> inv(D)*h`; if `f -> c*f`, then
+`h -> sqrt(c)*h`. That holds exactly on any program whose blocks all split on parent values
+carrying a scale of their own. Where one does not, the split falls back on declared input scales
+and stays covariant when those are rescaled alongside, `scales -> D*scales`;
+[`guards_any_block`](@ref) says whether a given program is in that case.
 
 `using DerivativeCovers` imports the main entry points and result types. Public utilities such as
 `cover_ratio`, `tightness`, and `equilibrate` are not exported; call them with the
@@ -36,7 +36,6 @@ export CoverOnly, WithDiagnostics
 export TangentChannel, AbsoluteTangents, SignedTangents
 export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
 export NLSCover, NLSDiagnostics, VarianceCover
-export SplitRule, ValueSplit, SensitivitySplit, VectorNormSplit, GuardedValueSplit
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
@@ -46,8 +45,9 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     eval(
         Expr(
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-            :constantnode, :atom_slots, :certifies_dead, :check_finite_partials, :submapnode,
-            :split_scales, :split_block, :value, :isconstant, :nnodes, :natoms, :CoverVar,
+            :constantnode, :atom_slots, :check_finite_partials, :submapnode,
+            :split_scales, :split_block, :split_ratio, :guards_any_block, :sensitivity_scales,
+            :SplitScale, :value, :isconstant, :nnodes, :natoms, :CoverVar,
             :constantvar, :tangent_channel, :forward_scale
         )
     )

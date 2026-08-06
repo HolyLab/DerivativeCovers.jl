@@ -48,8 +48,10 @@ all(abs.(hvp(f, x0, v)) .<= c.h_sum .* (c.h_sum' * abs.(v)))  # true
 
 Use `cover_jacobian` for vector-valued functions, `cover_nls` for nonlinear least-squares
 objectives, and `cover_variance` for a cheaper, uncertified estimate. `cover_hybrid` lets you
-trade computation for a tighter cover, while `SplitRule` controls how individual nodes select
-among equally valid local covers.
+trade computation for a tighter cover. Where a node admits several equally valid local covers the
+split reads its parent values, falling back on declared input scales only where those carry none;
+`scales` and `ratio` state that fallback and `guards_any_block` says whether a program reaches
+it.
 
 Two options improve tightness at a cost of `O(n*L)`. `TangentChannel` selects the tangents over
 which merges operate. The default absolute-value bound makes the `O(L)` sweep possible;

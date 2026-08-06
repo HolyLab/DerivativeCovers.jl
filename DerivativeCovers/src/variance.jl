@@ -109,8 +109,8 @@ function dependency_severity(h_sum::AbstractVector, h_var::AbstractVector)
 end
 
 """
-    cover_variance(t::Tape, outidx::Integer; check::Bool=true, rule=ValueSplit()) -> VarianceCover
-    cover_variance(f, x0::AbstractVector; check::Bool=true, rule=ValueSplit()) -> VarianceCover
+    cover_variance(t::Tape, outidx::Integer; check::Bool=true, scales=nothing, ratio=nothing) -> VarianceCover
+    cover_variance(f, x0::AbstractVector; check::Bool=true, scales=nothing, ratio=nothing) -> VarianceCover
 
 Compute a certified sum-merge cover and an inexpensive estimate of the quadrature merge.
 
@@ -118,8 +118,8 @@ Pass either a tape and scalar output node, or a function and evaluation point. T
 [`VarianceCover`](@ref) contains the gradient, both channels, and their coordinatewise ratio.
 
 Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Computing both costs
-`O(L)` time and memory, independent of the number of inputs. `rule` selects the
-[`SplitRule`](@ref), and `check=true` verifies the local covering conditions.
+`O(L)` time and memory, independent of the number of inputs. `scales` and `ratio` govern the
+split, as in [`cover_hessian`](@ref), and `check=true` verifies the local covering conditions.
 
 # Examples
 
@@ -144,17 +144,17 @@ julia> round.(vc.severity; digits=4)
  1.3938
 ```
 """
-function cover_variance(t::Tape, outidx::Integer; check::Bool = true, rule::SplitRule = ValueSplit())
+function cover_variance(t::Tape, outidx::Integer; check::Bool = true, scales = nothing, ratio = nothing)
     n = t.ninputs
     vbar = adjoints(t, outidx)
-    rhos, theta = local_covers(t, vbar; check, rule)
+    rhos, theta = local_covers(t, vbar; check, scales, ratio)
     abar, w = dependency_sweep(t, theta, variance_seeds(t, rhos))
     h_sum = abar[1:n]
     h_var = sqrt.(w[1:n])
     return VarianceCover(vbar[1:n], h_sum, h_var, dependency_severity(h_sum, h_var))
 end
 
-function cover_variance(f, x0::AbstractVector; check::Bool = true, rule::SplitRule = ValueSplit())
+function cover_variance(f, x0::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing)
     t, outidx = tape_function(f, x0)
-    return cover_variance(t, outidx; check, rule)
+    return cover_variance(t, outidx; check, scales, ratio)
 end
