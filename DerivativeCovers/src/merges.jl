@@ -157,9 +157,9 @@ function abs_reverse(t::Tape, Theta::AbstractMatrix)
 end
 
 """
-    cover_hybrid(t::Tape, outidx::Integer, ngroups::Integer; check::Bool=true, rule=ValueSplit()) -> h
-    cover_hybrid(t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool=true, rule=ValueSplit()) -> h
-    cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, rule=ValueSplit()) -> h
+    cover_hybrid(t::Tape, outidx::Integer, ngroups::Integer; check::Bool=true, scales=nothing, ratio=nothing) -> h
+    cover_hybrid(t::Tape, outidx::Integer, groups::AbstractVector{<:Integer}; check::Bool=true, scales=nothing, ratio=nothing) -> h
+    cover_hybrid(f, x0::AbstractVector, spec; check::Bool=true, scales=nothing, ratio=nothing) -> h
 
 Compute a Hessian cover by grouping cover contributions: contributions are summed within each
 group, then the group totals are combined in quadrature.
@@ -176,8 +176,8 @@ Alternatively, `groups[k]` assigns tape node `k` to a group, holding all of that
 together; [`cyclic_partition`](@ref) and [`level_partition`](@ref) build such partitions.
 
 Every grouping produces a valid cover, and one group is always the sum merge. The computation
-costs `O(G * L)` time and memory for `G` groups. `rule` selects the [`SplitRule`](@ref), and
-`check=true` verifies local covers.
+costs `O(G * L)` time and memory for `G` groups. `scales` and `ratio` govern the split, as in
+[`cover_hessian`](@ref), and `check=true` verifies local covers.
 
 # Examples
 
@@ -199,22 +199,22 @@ julia> round.(cover_hybrid(f, [0.5, 2.0], 3); digits=4)   # a group per atom: th
 """
 function cover_hybrid(
         t::Tape, outidx::Integer, spec; check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        scales = nothing, ratio = nothing
     )
-    return _cover_hybrid(t, adjoints(t, outidx), spec; check, rule)
+    return _cover_hybrid(t, adjoints(t, outidx), spec; check, scales, ratio)
 end
 
 # Accept precomputed adjoints so callers such as cover_nls can reuse their gradient sweep.
 function _cover_hybrid(
         t::Tape, vbar::AbstractVector, spec;
-        check::Bool = true, rule::SplitRule = ValueSplit()
+        check::Bool = true, scales = nothing, ratio = nothing
     )
-    rhos, _ = local_covers(t, vbar; check, rule)
+    rhos, _ = local_covers(t, vbar; check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, rhos, spec))
     return [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs]
 end
 
-function cover_hybrid(f, x0::AbstractVector, spec; check::Bool = true, rule::SplitRule = ValueSplit())
+function cover_hybrid(f, x0::AbstractVector, spec; check::Bool = true, scales = nothing, ratio = nothing)
     t, outidx = tape_function(f, x0)
-    return cover_hybrid(t, outidx, spec; check, rule)
+    return cover_hybrid(t, outidx, spec; check, scales, ratio)
 end

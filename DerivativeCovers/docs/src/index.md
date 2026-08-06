@@ -70,9 +70,10 @@ Two options control the result:
 - **Cost versus tightness.** [`cover_hybrid`](@ref) and
   [`cover_jacobian_hybrid`](@ref) divide contributions into `G` groups. Larger `G` usually gives
   a tighter cover and costs `O(G * L)`.
-- **How local covers are scaled.** Some nodes admit a family of equally valid rank-1 covers. A
-  [`SplitRule`](@ref) chooses among them. [`ValueSplit`](@ref), the default, uses the magnitudes
-  of parent values; [`SensitivitySplit`](@ref) uses input-weighted sensitivities.
+- **How local covers are scaled.** Some nodes admit a family of equally valid rank-1 covers, and
+  [`split_block`](@ref) chooses among them from the magnitudes of the parent values. Where those
+  carry no scale it falls back on declared input scales; the `scales` and `ratio` keywords are
+  what state them. See [Splitting a local cover](@ref).
 
 Utilities such as [`cover_ratio`](@ref), [`tightness`](@ref), and [`equilibrate`](@ref) are
 public but not exported. Call them with the `DerivativeCovers.` prefix; see
@@ -199,18 +200,28 @@ NLSDiagnostics
 VarianceCover
 ```
 
-## Split rules
+## Splitting a local cover
 
-Some second-derivative blocks admit a family of covers, and a rule selects one member. Two rules
-are exact optima: `SensitivitySplit` for the sum merge and `VectorNormSplit` for the quadrature
-merge. `ValueSplit` does not optimize either merge; it is the default because its scale reference
-is already available during cover computation.
+Some second-derivative blocks admit a family of covers, and the split selects one member from the
+ratio of two scale references. Parent values are the reference wherever they carry a scale, which
+keeps the cover exactly covariant under a rescaling of the inputs and costs nothing beyond what
+the sweep already reads. At the blocks where they carry none — a vanishing value meeting a
+degenerate feasible segment — no covariant local choice exists at all, and the declared input
+scales stand in.
+
+Two keywords on every cover entry point state that fallback: `scales`, one strictly positive
+entry per input (`nothing` means unit scales, asserting that the inputs share units), and `ratio`,
+how lopsided a value pair must be before it counts as carrying no scale. Neither affects validity.
+`guards_any_block` answers whether a given program consults them at all — on one that does not,
+the cover is exactly covariant with `scales` held fixed and no extra sweep is run.
 
 ```@docs
-SplitRule
-ValueSplit
-SensitivitySplit
-VectorNormSplit
+DerivativeCovers.split_block
+DerivativeCovers.split_ratio
+DerivativeCovers.guards_any_block
+DerivativeCovers.sensitivity_scales
+DerivativeCovers.value_bounds_split
+DerivativeCovers.balanced_split
 ```
 
 ## Tangent channels

@@ -104,7 +104,6 @@ include("genericaxes.jl")
                 :TangentChannel, :AbsoluteTangents, :SignedTangents,
                 :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
                 :NLSDiagnostics, :VarianceCover,
-                :SplitRule, :ValueSplit, :SensitivitySplit, :VectorNormSplit,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
         )
@@ -112,8 +111,9 @@ include("genericaxes.jl")
         # Public extension points and utilities remain available only by qualification.
         internals = (
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
-            :constantnode, :atom_slots, :certifies_dead, :check_finite_partials,
-            :submapnode, :split_scales, :value, :isconstant, :nnodes, :natoms,
+            :constantnode, :atom_slots, :check_finite_partials,
+            :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
+            :sensitivity_scales, :SplitScale, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
@@ -137,7 +137,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :dispatchcurvature,
+            :value_bounds_split, :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
         )
@@ -196,7 +196,7 @@ include("genericaxes.jl")
         fv = intermediate_fvar(60)
         @test sprint(show, fv) == "FVar(2.0)"
         @test occursin("60 inputs", sprint(show, MIME"text/plain"(), fv))
-        fconst = FVar{Float64, ValueSplit, Vector{Float64}}(2.5)
+        fconst = FVar{Float64, Vector{Float64}}(2.5)
         @test occursin("constant", sprint(show, MIME"text/plain"(), fconst))
         @test sprint(show, fconst) == "FVar(2.5)"
 
@@ -580,101 +580,184 @@ include("genericaxes.jl")
         @test all(isfinite, cover_hessian(WithDiagnostics(), recipdot, [1.0, 2.0, 2.0, 1.0]).h_sum)
     end
 
-    @testset "split rules" begin
-        # Passing ValueSplit explicitly is the default, bitwise.
-        @testset "ValueSplit is the default — $name" for (name, f, x0) in PROBLEMS
-            res = cover_hessian(WithDiagnostics(), f, x0)
-            resv = cover_hessian(WithDiagnostics(), f, x0; rule = ValueSplit())
-            @test resv.h_sum == res.h_sum
-            @test resv.h_quad == res.h_quad
-        end
+    @testset "the split" begin
+        # The degeneracy threshold resolves against the tape's element type, and the quantity it
+        # bounds is representability: `eps(T)` is the floor below which one parent value is
+        # indistinguishable from zero at the scale of the other.
+        @test DerivativeCovers.split_ratio(nothing, Float64) === sqrt(eps(Float64))
+        @test DerivativeCovers.split_ratio(nothing, Float32) === sqrt(eps(Float32))
+        @test DerivativeCovers.split_ratio(1.0e-8, Float64) === 1.0e-8
+        @test_throws "must lie in [0, 1)" DerivativeCovers.split_ratio(1.0, Float64)
+        @test_throws "must lie in [0, 1)" DerivativeCovers.split_ratio(-1.0e-8, Float64)
+        @test_throws "must lie in [0, 1)" DerivativeCovers.split_ratio(NaN, Float64)
 
-        # SensitivitySplit satisfies the same covering chain on the whole battery.
-        @testset "SensitivitySplit covering chain — $name" for (name, f, x0) in PROBLEMS
-            H = ForwardDiff.hessian(f, x0)
-            res = cover_hessian(WithDiagnostics(), f, x0; rule = SensitivitySplit())
-            for h in (res.h_sum, res.h_quad)
-                @test all(>=(0), h)
-                @test rank1_ratio(res.B, h) <= GATE
-                @test cover_ratio(H, h) <= GATE
-            end
-            @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
-            # The one-group hybrid reproduces the sum merge under any rule.
-            @test cover_hybrid(f, x0, 1; rule = SensitivitySplit()) ≈ res.h_sum rtol = 1.0e-12
-        end
+        # A threshold stored as a constant is silently wrong at another precision. `1e-8` lies
+        # *below* `eps(Float32)`, so at single precision it collapses the guard to an
+        # exactly-vanishing test: this product's operands are in a ratio of `1e-5`, degenerate
+        # against `sqrt(eps(Float32))` and ordinary against `1e-8`, and the two give different
+        # covers. Nothing in a `Float64` battery can catch that.
+        fdeg = x -> x[1] * x[2]
+        x32 = Float32[1.0e-5, 1.0]
+        @test cover_hessian(fdeg, x32).h_sum == Float32[1.0, 1.0]
+        @test cover_hessian(fdeg, x32; ratio = 1.0e-8).h_sum ≈ Float32[sqrt(1.0f5), sqrt(1.0f-5)]
+        @test cover_hessian(fdeg, Float64.(x32)).h_sum ≈ [sqrt(1.0e5), sqrt(1.0e-5)]
 
-        # At a zero-zero product, ValueSplit is discontinuous while SensitivitySplit retains unit
-        # scales. Dyadic perturbations make the expected 4:1 value ratio exact.
+        # At a zero-zero product no value ratio exists, so the declared scales replace it and the
+        # cover stops tracking a quantity that carries none. Perturbing the vanishing operand does
+        # not move it.
+        for z1 in (1.0e-20, 3.0e-20)
+            xdeg = [z1, 1.0]
+            res = cover_hessian(WithDiagnostics(), fdeg, xdeg)
+            @test res.h_sum == [1.0, 1.0]
+            @test cover_ratio(ForwardDiff.hessian(fdeg, xdeg), res.h_sum) <= GATE
+        end
+        # Reading the values there instead sends the cover to `1e10` and moves it by `sqrt(3)`
+        # between the two points above.
+        @test cover_hessian(fdeg, [1.0e-20, 1.0]; ratio = 0.0).h_sum ≈ [1.0e10, 1.0e-10]
+
+        # The guard belongs to a block, not to a program: it fires at the zero-zero product and
+        # not at a perturbed point whose values are tiny but in a ratio of 4, which is a scale
+        # reference like any other. Dyadic perturbations make that ratio exact.
         fmul = x -> (x[1] - 1) * (x[2] - 1)
         x0 = [1.0, 1.0]
         xp = [1.0 + 2.0^-40, 1.0 + 2.0^-38]
-        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = SensitivitySplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = ValueSplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = ValueSplit()).h_sum == [2.0, 0.5]
+        @test cover_hessian(WithDiagnostics(), fmul, x0).h_sum == [1.0, 1.0]
+        @test cover_hessian(WithDiagnostics(), fmul, xp).h_sum == [2.0, 0.5]
+        # Widening the threshold past that ratio condemns the pair and hands it to the scales.
+        @test cover_hessian(WithDiagnostics(), fmul, xp; ratio = 0.5).h_sum == [1.0, 1.0]
 
-        # A zero sensitivity certifies a dead slot; only the x[1]^2 node contributes here.
+        # A bounded feasible segment keeps the value channel however lopsided the pair, because
+        # the clamp already fixes the split and both endpoints are covariant. Only a degenerate
+        # pair meeting a degenerate endpoint hands over.
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 1.0, 1.0e-20, 1.0, 1.0e-8)
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 1.0, 1.0, 1.0e-20, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(1.0, 10.0, 0.0, 1.0e-20, 1.0, 1.0e-8)
+        @test DerivativeCovers.value_bounds_split(1.0, 10.0, 0.0, 1.0, 1.0e-20, 1.0e-8)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 0.0, 1.0e-8)
+        # `ratio = 0` narrows the guard to the exactly vanishing pair, which is the only degeneracy
+        # test that survives a rescaling of the intermediates unchanged — and the only one that
+        # does not survive a perturbation of the evaluation point, which is why it is not the
+        # default.
+        @test DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 0.0)
+        @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 1.0, 0.0)
+
+        # `guards_any_block` predicts which case a tape is in without running a cover. It may
+        # overcount, since a block whose adjoint vanishes contributes no cover term, so it is
+        # checked in the direction it claims: a tape it clears takes the value channel at every
+        # block, which is what makes the cover exactly covariant under an input rescaling with the
+        # declared scales held fixed.
+        d5 = [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]
+        w5 = [0.5, 4.0, 1.0, 2.0, 0.25]
+        @testset "off the guard the scales are inert — $name" for (name, f, x0) in PROBLEMS
+            t, _ = tape_function(f, x0)
+            if !DerivativeCovers.guards_any_block(t)
+                res = cover_hessian(WithDiagnostics(), f, x0)
+                resw = cover_hessian(WithDiagnostics(), f, x0; scales = fill(3.0, length(x0)))
+                @test resw.h_sum == res.h_sum
+                @test resw.h_quad == res.h_quad
+            end
+        end
+        @test !DerivativeCovers.guards_any_block(first(tape_function(quad_matvec(AQ), XQ)))
+        resq = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; scales = w5)
+        resq2 = cover_hessian(
+            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d5), d5 .* XQ; scales = w5
+        )
+        @test resq2.h_sum ≈ resq.h_sum ./ d5 rtol = 1.0e-12
+        @test resq2.h_quad ≈ resq.h_quad ./ d5 rtol = 1.0e-12
+
+        # Where a block does reach the fallback, covariance needs the declared scales rescaled
+        # alongside the inputs: they are the units the cover borrows there.
+        @test DerivativeCovers.guards_any_block(first(tape_function(fmul, x0)))
+        dm = [4.0, 0.25]
+        resm = cover_hessian(WithDiagnostics(), fmul, x0; scales = [2.0, 3.0])
+        resm2 = cover_hessian(
+            WithDiagnostics(), xt -> fmul(xt ./ dm), dm .* x0; scales = dm .* [2.0, 3.0]
+        )
+        @test resm2.h_sum ≈ resm.h_sum ./ dm rtol = 1.0e-12
+
+        # The declared scales are built by the first block that asks and not before: a tape whose
+        # blocks all keep a usable value pair leaves the store empty after a whole cover sweep,
+        # which is the cost claim stated as a property rather than as a timing.
+        let fplain = x -> exp(x[1] * x[2]) + x[1]^3 + sin(x[2])
+            t, outidx = tape_function(fplain, [0.7, -1.3])
+            # The references are indexed by node, and a sweep gathers them into slot order through
+            # a parent lookup, so spanning the tape linearly is what keeps that lookup in range.
+            let sc = DerivativeCovers.split_scales(nothing, t)
+                @test size(sc) == (nnodes(t),)
+                @test IndexStyle(typeof(sc)) === IndexLinear()
+                @test sc[nnodes(t)].value == abs(t.vals[nnodes(t)])
+            end
+            @test isempty(DerivativeCovers.split_scales(nothing, t).store.sigmas)
+            DerivativeCovers.local_covers(t, adjoints(t, outidx))
+            @test isempty(DerivativeCovers.split_scales(nothing, t).store.sigmas)
+            # A guarded block fills it, and refills it for no one.
+            tg, _ = tape_function(fmul, x0)
+            sg = DerivativeCovers.split_scales(nothing, tg)
+            @test isempty(sg.store.sigmas)
+            @test DerivativeCovers.declared_scale(sg[1]) == 1
+            @test length(sg.store.sigmas) == DerivativeCovers.nnodes(tg)
+        end
+
+        # A zero value certifies nothing about a slot, so none is dropped: the fallback covers the
+        # pair rather than leaving it uncovered.
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
-        resd = cover_hessian(WithDiagnostics(), fdead, xd; rule = SensitivitySplit())
-        @test resd.h_sum ≈ [sqrt(6), 0.0]
-        @test cover_ratio(Hd, resd.h_sum) <= GATE
-        # The cover approaches a dead point through a square-root cusp, not a jump.
-        rese = cover_hessian(WithDiagnostics(), fdead, [2.0^-20, 3.0]; rule = SensitivitySplit())
-        @test maximum(abs, rese.h_sum .- resd.h_sum) <= 2.0^-8
-
-        # A dead inner-product pair: the (x[1]^2, x[3]) pair contributes nothing at x[1] == 0,
-        # the (x[2], x[4]) pair splits 1:1, and the x[1]^2 node covers the (1,1) entry.
+        @test cover_ratio(Hd, cover_hessian(WithDiagnostics(), fdead, xd).h_sum) <= GATE
         fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
         xdot = [0.0, 1.0, 2.0, 3.0]
-        resdot = cover_hessian(WithDiagnostics(), fdot, xdot; rule = SensitivitySplit())
-        @test resdot.h_sum ≈ [2.0, 1.0, 0.0, 1.0]
-        @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
+        @test cover_ratio(
+            ForwardDiff.hessian(fdot, xdot),
+            cover_hessian(WithDiagnostics(), fdot, xdot).h_sum
+        ) <= GATE
 
-        # Input covariance holds when the weights are rescaled alongside the inputs.
-        w = [0.5, 4.0, 1.0, 2.0, 0.25]
-        d = [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]
-        res = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = SensitivitySplit(w))
-        resd2 = cover_hessian(
-            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
-            rule = SensitivitySplit(d .* w)
-        )
-        @test resd2.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
-        @test resd2.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
-
-        # Weights must be strictly positive and finite — a zero weight could zero a live slot's
-        # scale and falsely certify it dead — and a malformed rule cannot be built at all.
-        @test_throws "strictly positive" SensitivitySplit([1.0, 0.0])
-        @test_throws "strictly positive" SensitivitySplit([1.0, Inf])
-        @test_throws "strictly positive" SensitivitySplit([1.0, NaN])
-        # Length is the one requirement that cannot be checked without a tape.
-        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = SensitivitySplit([1.0]))
-
-        # Every reachable call form builds the same rule.
-        @test SensitivitySplit() === SensitivitySplit(nothing) === SensitivitySplit{Nothing}()
-        let w = [1.0, 2.0]
-            @test SensitivitySplit(w) === SensitivitySplit{typeof(w)}(w)
+        # An inner product puts the same question to each of its pairs, and one degenerate pair
+        # decides the node: the `(x[1]^2, x[3])` pair vanishes at `xdot`, no pair does at `xlive`,
+        # and a pair further along the product is read as readily as the first.
+        xlive = [1.0, 1.0, 2.0, 3.0]
+        xtail = [1.0, 1.0, 2.0, 0.0]
+        @test DerivativeCovers.guards_any_block(first(tape_function(fdot, xdot)))
+        @test !DerivativeCovers.guards_any_block(first(tape_function(fdot, xlive)))
+        @test DerivativeCovers.guards_any_block(first(tape_function(fdot, xtail)))
+        # The prediction is measured against the sweep it predicts: the declared-scale store fills
+        # exactly on the tapes it names.
+        for xf in (xdot, xlive, xtail)
+            t, outidx = tape_function(fdot, xf)
+            sc = DerivativeCovers.split_scales(nothing, t)
+            r = DerivativeCovers.split_ratio(nothing, eltype(t))
+            vbar = adjoints(t, outidx)
+            for k in (t.ninputs + 1):nnodes(t)
+                DerivativeCovers.local_cover_slots(r, t, k, abs(vbar[k]), sc)
+            end
+            @test !isempty(sc.store.sigmas) == DerivativeCovers.guards_any_block(t)
         end
 
-        # Both channels of the variance pair are seeded from the same splits, so the rule
-        # carries through: the hard channel reproduces the sum merge under the same rule.
-        vc = cover_variance(fmul, xp; rule = SensitivitySplit())
+        # Declared scales must be strictly positive and finite: a zero entry would blank a live
+        # slot's scale where the guard falls back on them. Both keywords are validated at the
+        # entry point, before any sweep runs.
+        @test_throws "strictly positive" cover_hessian(fmul, x0; scales = [1.0, 0.0])
+        @test_throws "strictly positive" cover_hessian(fmul, x0; scales = [1.0, Inf])
+        @test_throws "strictly positive" cover_hessian(fmul, x0; scales = [1.0, NaN])
+        @test_throws DimensionMismatch cover_hessian(fmul, x0; scales = [1.0])
+        @test_throws "must lie in [0, 1)" cover_hessian(fmul, x0; ratio = 1.0)
+
+        # Every entry point that splits threads both keywords. `ratio = 0.5` condemns `xp`'s value
+        # pair, which the default keeps, so each of these separates.
+        vc = cover_variance(fmul, xp; ratio = 0.5)
         @test vc.h_sum == [1.0, 1.0]
         @test all(>=(1 - 1.0e-12), vc.severity)
         @test cover_variance(fmul, xp).h_sum == [2.0, 0.5]
 
-        # A declaration's curvature covers follow the rule; its sensitivities are relative to
-        # the sub-map's own arguments.
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
-        @test declare_submap(Fsub, xp; rule = SensitivitySplit()).S == [1.0 1.0]
+        @test declare_submap(Fsub, xp; ratio = 0.5).S == [1.0 1.0]
         @test declare_submap(Fsub, xp).S == [2.0 0.5]
 
-        # The NLS loss reaches the same splits through its hybrid merge, so `h` follows the rule.
-        # The residual channels carry unit atoms, which admit no split, and the gradient is an
-        # ordinary adjoint sweep, so neither moves.
+        # The NLS loss reaches the same splits through its hybrid merge, so `h` follows. The
+        # residual channels carry unit atoms, which admit no split, and the gradient is an ordinary
+        # adjoint sweep, so neither moves.
         nv = cover_nls(Fsub, xp)
-        ns = cover_nls(Fsub, xp; rule = SensitivitySplit())
+        ns = cover_nls(Fsub, xp; ratio = 0.5)
         @test nv.h != ns.h
         @test nv.h_gn == ns.h_gn
         @test nv.grad == ns.grad
@@ -683,61 +766,33 @@ include("genericaxes.jl")
             @test cover_ratio(H, ns.h) <= GATE
         end
 
-        # VectorNormSplit satisfies the same covering chain on the whole battery.
-        @testset "VectorNormSplit covering chain — $name" for (name, f, x0) in PROBLEMS
+        # A forward propagation carries both scale references itself, so it splits by the same
+        # rule a tape does and reaches the lattice's forward corner under either threshold.
+        for ratio in (nothing, 0.5)
+            fc = forward_cover(fmul, xp; ratio)
+            lat = cover_lattice(fmul, xp; ratio)
+            @test fc.h_quad ≈ lat.h_quad_forward rtol = 1.0e-12
+        end
+        @test_throws "strictly positive" forward_cover(fmul, x0; scales = [1.0, 0.0])
+        @test_throws DimensionMismatch forward_cover(fmul, x0; scales = [1.0])
+
+        # The covering chain holds on the whole battery under a threshold and scales that are not
+        # the defaults, since neither may affect validity.
+        @testset "covering chain off the defaults — $name" for (name, f, x0) in PROBLEMS
             H = ForwardDiff.hessian(f, x0)
-            res = cover_hessian(WithDiagnostics(), f, x0; rule = VectorNormSplit())
+            res = cover_hessian(
+                WithDiagnostics(), f, x0; ratio = 1.0e-4, scales = fill(2.0, length(x0))
+            )
             for h in (res.h_sum, res.h_quad)
                 @test all(>=(0), h)
                 @test rank1_ratio(res.B, h) <= GATE
                 @test cover_ratio(H, h) <= GATE
             end
             @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
-            @test cover_hybrid(f, x0, 1; rule = VectorNormSplit()) ≈ res.h_sum rtol = 1.0e-12
+            # The one-group hybrid reproduces the sum merge whatever the split.
+            @test cover_hybrid(f, x0, 1; ratio = 1.0e-4, scales = fill(2.0, length(x0))) ≈
+                res.h_sum rtol = 1.0e-12
         end
-
-        # A tangent norm is a scale reference at the zero-zero product where a value is not: both
-        # tangents are unit basis vectors there and stay so under perturbation, where the value
-        # ratio swings by the 4:1 of `xp`.
-        @test cover_hessian(WithDiagnostics(), fmul, x0; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
-        @test cover_hessian(WithDiagnostics(), fmul, xp; rule = VectorNormSplit()).h_sum == [1.0, 1.0]
-
-        # It minimizes the quadrature objective `sum(h_quad.^2)` over the split family. The two
-        # operands here have tangents of different shape -- `[1,1,1,1]` against `[3,0,0,0]` -- so
-        # the 1-norm and the 2-norm rank them differently and the rules separate. One product node
-        # carries the whole Hessian, so the per-node optimum is the cover's.
-        fshape = x -> (x[1] + x[2] + x[3] + x[4]) * (3 * x[1])
-        xshape = [0.3, -0.7, 1.1, 0.5]
-        objective(rule) = sum(abs2, cover_hessian(WithDiagnostics(), fshape, xshape; rule).h_quad)
-        # Sweeping SensitivitySplit's weights sweeps the scale ratio, hence the split family.
-        family = minimum(
-            objective(SensitivitySplit([a, b, b, b]))
-                for a in exp10.(-3:0.25:3), b in exp10.(-3:0.25:3)
-        )
-        @test objective(VectorNormSplit()) <= family
-        @test objective(VectorNormSplit()) < objective(ValueSplit())
-        @test objective(VectorNormSplit()) < objective(SensitivitySplit())
-
-        # A zero tangent norm certifies nothing: a tangent can cancel at a point while the
-        # gradient stays live, so unlike SensitivitySplit this rule marks no slot dead.
-        @test !DerivativeCovers.certifies_dead(VectorNormSplit())
-        resn = cover_hessian(WithDiagnostics(), fdead, xd; rule = VectorNormSplit())
-        @test cover_ratio(Hd, resn.h_sum) <= GATE
-
-        # Input covariance holds when the weights transport as the squares of the input scales,
-        # the norm being quadratic in the tangents where a sensitivity is linear.
-        resn2 = cover_hessian(WithDiagnostics(), quad_matvec(AQ), XQ; rule = VectorNormSplit(w))
-        resn3 = cover_hessian(
-            WithDiagnostics(), xt -> quad_matvec(AQ)(xt ./ d), d .* XQ;
-            rule = VectorNormSplit(d .^ 2 .* w)
-        )
-        @test resn3.h_sum ≈ resn2.h_sum ./ d rtol = 1.0e-12
-        @test resn3.h_quad ≈ resn2.h_quad ./ d rtol = 1.0e-12
-
-        @test_throws "strictly positive" VectorNormSplit([1.0, 0.0])
-        @test_throws "strictly positive" VectorNormSplit([1.0, Inf])
-        @test_throws DimensionMismatch cover_hessian(fmul, x0; rule = VectorNormSplit([1.0]))
-        @test VectorNormSplit() === VectorNormSplit(nothing) === VectorNormSplit{Nothing}()
     end
 
     @testset "node levels and partitions" begin

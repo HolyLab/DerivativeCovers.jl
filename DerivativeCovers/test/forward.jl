@@ -14,31 +14,49 @@ const FORWARD_ARRAY = [
 
 const FORWARD_FIXTURES = vcat(PROBLEMS, FORWARD_ARRAY)
 
-# A rule with no `forward_scale` method, standing for one whose scale references a forward
-# propagation cannot produce.
-struct TapeOnlySplit <: DerivativeCovers.SplitRule end
-
 # Two routes to the same number differ in the order they accumulate it, and the split weights
 # differ by a factor `sqrt(acheck)` between them, so equality is to roundoff rather than to the
 # bit. Measured worst case over these fixtures is 4e-16.
 const FORWARD_RTOL = 1.0e-12
 
+# The propagation carries both of the split's scale references, so it takes the same split a tape
+# does at every block and the two are comparable coordinate by coordinate. The threshold and the
+# declared scales are swept alongside, since the corner must hold for any of them.
+const FORWARD_SPLITS = (
+    (;), (; ratio = 0.5), (; ratio = 0.0), (; scales = nothing, ratio = 1.0e-4),
+)
+
 @testset "forward.jl" begin
 
-    @testset "the cover is the lattice's forward corner — $name ($(nameof(typeof(rule))))" for
-        (name, f, x0) in FORWARD_FIXTURES, rule in (ValueSplit(), VectorNormSplit())
-        fc = forward_cover(f, x0; rule)
-        lat = cover_lattice(f, x0; rule)
-        @test fc.h_quad ≈ lat.h_quad_forward rtol = FORWARD_RTOL
-        @test fc.grad ≈ ForwardDiff.gradient(f, x0) rtol = FORWARD_RTOL
+    @testset "the cover is the lattice's forward corner — $name" for
+        (name, f, x0) in FORWARD_FIXTURES
+        for kw in FORWARD_SPLITS
+            fc = forward_cover(f, x0; kw...)
+            lat = cover_lattice(f, x0; kw...)
+            @test fc.h_quad ≈ lat.h_quad_forward rtol = FORWARD_RTOL
+            @test fc.grad ≈ ForwardDiff.gradient(f, x0) rtol = FORWARD_RTOL
+        end
     end
 
     @testset "the cover covers — $name" for (name, f, x0) in FORWARD_FIXTURES
         H = ForwardDiff.hessian(f, x0)
-        for rule in (ValueSplit(), VectorNormSplit())
-            fc = forward_cover(f, x0; rule)
+        for kw in FORWARD_SPLITS
+            fc = forward_cover(f, x0; kw...)
             @test all(>=(0), fc.h_quad)
             @test cover_ratio(H, fc.h_quad) <= GATE
+        end
+    end
+
+    @testset "the declared scales propagate as a tape's sweep computes them" begin
+        # `sigma` obeys the same recursion `sensitivity_scales` runs over a tape, so the value a
+        # propagation reaches at its output is the value that sweep reaches at the output node.
+        for (name, f, x0) in FORWARD_FIXTURES, weighted in (false, true)
+            ws = weighted ? exp10.(range(-2, 2; length = length(x0))) : nothing
+            captured = Ref{Any}(nothing)
+            forward_cover(z -> (y = f(z); captured[] = y; y), x0; scales = ws)
+            t, outidx = tape_function(f, x0)
+            @test captured[].sigma ≈
+                DerivativeCovers.sensitivity_scales(ws, t)[outidx] rtol = FORWARD_RTOL
         end
     end
 
@@ -55,17 +73,12 @@ const FORWARD_RTOL = 1.0e-12
         @test cover_ratio(ForwardDiff.hessian(inner, x0), mid.h_quad) <= GATE
     end
 
-    @testset "a rule needs a channel the propagation carries" begin
+    @testset "the split keywords are checked as the tape's are" begin
         f = x -> x[1] * x[2]
-        @test_throws "SensitivitySplit references the absolute sensitivities" forward_cover(
-            f, [1.0, 2.0]; rule = SensitivitySplit()
-        )
-        # A rule that supplies its scales only through `split_scales` names what it would take to
-        # make it usable here, rather than failing as a missing method.
-        @test_throws "A rule usable here defines" forward_cover(f, [1.0, 2.0]; rule = TapeOnlySplit())
-        # The weighted form is checked against the input count, as its tape twin is.
-        @test_throws DimensionMismatch forward_cover(f, [1.0, 2.0]; rule = VectorNormSplit([1.0]))
-        @test forward_cover(f, [1.0, 2.0]; rule = VectorNormSplit([1.0, 4.0])) isa ForwardCover
+        @test_throws DimensionMismatch forward_cover(f, [1.0, 2.0]; scales = [1.0])
+        @test_throws "strictly positive" forward_cover(f, [1.0, 2.0]; scales = [1.0, 0.0])
+        @test_throws "must lie in [0, 1)" forward_cover(f, [1.0, 2.0]; ratio = 1.0)
+        @test forward_cover(f, [1.0, 2.0]; scales = [1.0, 4.0]) isa ForwardCover
     end
 
     @testset "the element type is preserved" begin
@@ -99,7 +112,7 @@ const FORWARD_RTOL = 1.0e-12
         @test_throws "no inputs" forward_cover(x -> x, Float64[])
         # A constant carries no channels, so asking one for its cover names the reason.
         @test_throws "carries no tangent or cover channel" forward_cover(
-            FVar{Float64, ValueSplit, Vector{Float64}}(1.0)
+            FVar{Float64, Vector{Float64}}(1.0)
         )
         # A declared sub-map belongs to recording; the propagation says so rather than
         # presenting a bare MethodError from an elemental it has no method for.
@@ -149,8 +162,8 @@ const FORWARD_RTOL = 1.0e-12
         end
 
         f = x -> exp(x[1]) + x[1] * x[2]^2
-        @test forward_cover(f, SVector(0.5, 2.0); rule = ValueSplit()).h_quad ≈
-            forward_cover(f, [0.5, 2.0]; rule = ValueSplit()).h_quad rtol = FORWARD_RTOL
+        @test forward_cover(f, SVector(0.5, 2.0)).h_quad ≈
+            forward_cover(f, [0.5, 2.0]).h_quad rtol = FORWARD_RTOL
         @test forward_cover(f, SVector(0.5f0, 2.0f0)) isa ForwardCover{Float32}
         @test forward_cover(x -> x[1] * x[2], SVector(1, 2)) isa ForwardCover{Float64}
 

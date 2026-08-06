@@ -98,12 +98,16 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test eltype(theta) === Float32
         @test all(r -> eltype(r) === Float32, rhos)
 
-        # Both split rules, so the dead-slot branch of the local cover is typed too.
-        @test cover_hessian(t, outidx; rule = SensitivitySplit()).h_sum isa Vector{Float32}
-        @test cover_hessian(t, outidx; rule = SensitivitySplit(ones(Float32, 2))).h_sum isa
-            Vector{Float32}
-        @test eltype(DerivativeCovers.split_scales(ValueSplit(), t)) === Float32
-        @test eltype(DerivativeCovers.split_scales(SensitivitySplit(), t)) === Float32
+        # The fallback channel is typed too, whether or not it is seeded with declared scales,
+        # and the threshold resolves against the tape rather than to a `Float64` constant.
+        @test cover_hessian(t, outidx; scales = ones(Float32, 2)).h_sum isa Vector{Float32}
+        @test cover_hessian(t, outidx; ratio = 0.5).h_sum isa Vector{Float32}
+        @test DerivativeCovers.split_ratio(nothing, eltype(t)) === sqrt(eps(Float32))
+        @test eltype(DerivativeCovers.sensitivity_scales(nothing, t)) === Float32
+        let sc = DerivativeCovers.split_scales(nothing, t)
+            @test sc[1].value isa Float32
+            @test DerivativeCovers.declared_scale(sc[1]) isa Float32
+        end
 
         # Products mix the tape's type with the vector's.
         @test hvp(t, outidx, Float32[1, 0]) isa Vector{Float32}

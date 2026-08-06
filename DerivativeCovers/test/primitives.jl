@@ -403,4 +403,21 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test all(C[i, j] == C[j, i] for i in 1:6, j in 1:6)
     end
 
+    @testset "a curvature-free node leaves a caller's buffer alone" begin
+        # The in-place kernel is handed one buffer that a whole sweep reuses, so a node with no
+        # second-order term has to report that without writing slot weights: what the buffer held
+        # is still there for the next node.
+        site = DerivativeCovers.ElementalSite(3.0, (1.0, 2.0))
+        r = DerivativeCovers.split_ratio(nothing, Float64)
+        rho = [1.0, 2.0]
+        @test !DerivativeCovers.cover_slots!(
+            rho, DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
+        )
+        @test rho == [1.0, 2.0]
+        # The allocating form answers the same question with `nothing`.
+        @test DerivativeCovers.cover_slots(
+            DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
+        ) === nothing
+    end
+
 end

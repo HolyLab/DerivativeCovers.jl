@@ -125,7 +125,7 @@ function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups = n
 end
 
 """
-    cover_nls([mode], r, x0; ngroups=nothing, check=true, rule=ValueSplit())
+    cover_nls([mode], r, x0; ngroups=nothing, check=true, scales=nothing, ratio=nothing)
 
 Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
@@ -141,8 +141,9 @@ residual a channel of its own (`G = m`), the tightest pair of covers available. 
 integer spreads the residuals cyclically over `G` channels and sums their sensitivities within a
 channel before the quadrature merge; both covers remain valid and can only loosen.
 
-`rule` selects the [`SplitRule`](@ref) for the residual-curvature channel. The residual channels
-carry unit atoms, which admit no split, so neither `h_gn` nor `Utilde` depends on it. `check=true`
+`scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and reach only the
+residual-curvature channel: the residual channels carry unit atoms, which admit no split, so
+neither `h_gn` nor `Utilde` depends on them. `check=true`
 verifies the local covering conditions, and under [`WithDiagnostics`](@ref) also verifies `h_gn`
 against `Utilde`.
 
@@ -169,17 +170,17 @@ true
 """
 function cover_nls(
         ::CoverOnly, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        scales = nothing, ratio = nothing
     )
-    c = _nls_channels(r, x0, ngroups, check, rule)
+    c = _nls_channels(r, x0, ngroups, check, scales, ratio)
     return NLSCover(c.grad, c.h, c.h_gn, length(c.residx))
 end
 
 function cover_nls(
         ::WithDiagnostics, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
-        rule::SplitRule = ValueSplit()
+        scales = nothing, ratio = nothing
     )
-    c = _nls_channels(r, x0, ngroups, check, rule)
+    c = _nls_channels(r, x0, ngroups, check, scales, ratio)
     Utilde = jacobian_surrogate(c.t, c.residx)
     check && _check_gn_channels(c.h_gn, Utilde, c.rgroups, c.gres)
     return NLSDiagnostics(c.grad, c.h, c.h_gn, Utilde, length(c.residx))
@@ -189,13 +190,13 @@ cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwar
 
 # One grouped reverse sweep supplies both covers: the residual channels `1:gres` merge to `h_gn`,
 # and all the channels together merge to `h`.
-function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, rule::SplitRule)
+function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, ratio)
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
     n = t.ninputs
     groups = nls_partition(nnodes(t), sqidx; ngroups)
     gres = maximum(groups) - 1
     vbar = adjoints(t, outidx)
-    rhos, _ = local_covers(t, vbar; check, rule)
+    rhos, _ = local_covers(t, vbar; check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
     h = [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n]
     h_gn = [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n]
