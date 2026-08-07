@@ -14,28 +14,10 @@
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Printf
 using DerivativeCovers: cover_ratio, jacobian_minimax, declare_submap, submap,
-    compose_jacobian_cover, compose_hessian_cover
+    compose_jacobian_cover, compose_hessian_cover, value
 
-"""
-    softmax(x)
-
-`exp.(x) ./ sum(exp.(x))`, with the max detached from the tape. Subtracting a constant from every
-entry leaves softmax unchanged, so the detachment is exact.
-"""
-function softmax(x::AbstractVector)
-    m = maximum(DerivativeCovers.value, x)
-    e = exp.(x .- m)
-    return e ./ sum(e)
-end
-
-"`(x .- mean(x)) ./ sqrt(var(x))` with the biased variance."
-function layernorm(x::AbstractVector)
-    n = length(x)
-    mu = sum(x) / n
-    d = x .- mu
-    s2 = sum(abs2, d) / n
-    return d ./ sqrt(s2)
-end
+# Use the same `softmax` and `layernorm` definitions as the tests.
+include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
 
 tanhlayernorm(x::AbstractVector) = tanh.(layernorm(x))
 

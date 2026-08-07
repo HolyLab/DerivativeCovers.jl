@@ -16,33 +16,8 @@
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Statistics, Printf
 using DerivativeCovers: value, cover_ratio, jacobian_surrogate, submap
 
-"""
-    softmax(x)
-
-`exp.(x) ./ sum(exp.(x))`, with the max detached from the tape. Subtracting a constant from every
-entry leaves softmax unchanged, so the detachment is exact and keeps the recorded graph identical
-to the unshifted form.
-"""
-function softmax(x::AbstractVector)
-    m = maximum(value, x)
-    e = exp.(x .- m)
-    return e ./ sum(e)
-end
-
-"""
-    layernorm(x)
-
-`(x .- mean(x)) ./ sqrt(var(x))` with the biased variance. The mean and variance carry real
-derivatives and are recorded, so unlike `softmax`'s max they contribute path cancellation that an
-absolute-value sweep bounds term by term.
-"""
-function layernorm(x::AbstractVector)
-    n = length(x)
-    mu = sum(x) / n
-    d = x .- mu
-    s2 = sum(abs2, d) / n
-    return d ./ sqrt(s2)
-end
+# Use the same `softmax` and `layernorm` definitions as the tests.
+include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
 
 tanhlayernorm(x::AbstractVector) = tanh.(layernorm(x))
 
