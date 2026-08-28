@@ -6,7 +6,7 @@
 """
     gramcover(a, b, t::Tape, outidxs) -> s
     gramcover(a, b, t::Tape, outidxs, w::AbstractVector) -> s
-    gramcover(a, b, t::Tape, outidxs, W::AbstractMatrix) -> s
+    gramcover(a, b, t::Tape, outidxs, W::AbstractMatrix; degenerate=:error) -> s
 
 Symmetric cover of the Gram matrix `G = J'*W*J` of the Jacobian `J` of the tape
 outputs `outidxs`, read off an asymmetric cover `(a, b)` of `J` without forming
@@ -22,24 +22,28 @@ takes the support components from [`support_components`](@ref)`(t, outidxs)`, wh
 `MatrixCovers.gramcover`. See that function for the bound, its gauge invariance,
 and the roundoff guarantee. `(a, b)` is assumed to cover `J`; verify with
 [`jacobian_ratio`](@ref) if that is in doubt.
+
+Keyword arguments pass through to `MatrixCovers.gramcover`. For matrix `W`,
+`degenerate=:uniform` permits a gauge-dependent cover when the default
+`degenerate=:error` would throw an `ArgumentError`.
 """
 gramcover(
     a::AbstractVector, b::AbstractVector, t::Tape,
-    outidxs::AbstractVector{<:Integer}, args...
+    outidxs::AbstractVector{<:Integer}, args...; kwargs...
 ) =
-    gramcover(a, b, support_components(t, outidxs), args...)
+    gramcover(a, b, support_components(t, outidxs), args...; kwargs...)
 
 """
     gramcover!(s, a, b, t::Tape, outidxs) -> s
     gramcover!(s, a, b, t::Tape, outidxs, w::AbstractVector) -> s
-    gramcover!(s, a, b, t::Tape, outidxs, W::AbstractMatrix) -> s
+    gramcover!(s, a, b, t::Tape, outidxs, W::AbstractMatrix; degenerate=:error) -> s
 
 Write [`gramcover`](@ref)'s Gram-matrix cover of the tape outputs `outidxs` into
 `s` and return it. `s` must be indexed like the inputs (`eachindex(s) ==
-1:t.ninputs`).
+1:t.ninputs`). Keyword arguments pass through as in [`gramcover`](@ref).
 """
 gramcover!(
     s::AbstractVector, a::AbstractVector, b::AbstractVector, t::Tape,
-    outidxs::AbstractVector{<:Integer}, args...
+    outidxs::AbstractVector{<:Integer}, args...; kwargs...
 ) =
-    gramcover!(s, a, b, support_components(t, outidxs), args...)
+    gramcover!(s, a, b, support_components(t, outidxs), args...; kwargs...)

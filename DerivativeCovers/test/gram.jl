@@ -58,10 +58,33 @@
         ssep = gramcover(a, b, t, outidxs, Wsep)
         smix = gramcover(a, b, t, outidxs, Wmix)
         @test ssep ≈ gramcover(a, b, t, outidxs)             # identity W reproduces the J'J cover
-        @test all(smix .>= ssep .* (1 - 1.0e-12))              # merging can only enlarge
-        @test any(smix .> ssep)
+        # Cross-component constraints cannot shrink a scale but need not enlarge one.
+        @test all(smix .>= ssep .* (1 - 1.0e-12))
         G = J' * Wmix * J
         @test all(abs(G[j, k]) <= smix[j] * smix[k] * GATE for j in axes(G, 1), k in axes(G, 2))
+
+        # Strong coupling can force a scale to grow.
+        Wgrow = [1.0 0.0 100.0; 0.0 1.0 0.0; 100.0 0.0 1.0]
+        Ggrow = J' * Wgrow * J
+        @test any(abs(Ggrow[j, k]) > ssep[j] * ssep[k] for j in axes(Ggrow, 1), k in axes(Ggrow, 2))
+        sgrow = gramcover(a, b, t, outidxs, Wgrow)
+        @test any(sgrow .> ssep)
+        @test all(
+            abs(Ggrow[j, k]) <= sgrow[j] * sgrow[k] * GATE
+                for j in axes(Ggrow, 1), k in axes(Ggrow, 2)
+        )
+    end
+
+    @testset "the degenerate keyword reaches MatrixCovers" begin
+        # A loopless bipartite support graph has no gauge-invariant cover.
+        Wdeg = [0.0 0.0 1.0; 0.0 0.0 0.0; 1.0 0.0 0.0]
+        @test_throws "no gauge-invariant cover exists" gramcover(a, b, t, outidxs, Wdeg)
+        s = gramcover(a, b, t, outidxs, Wdeg; degenerate = :uniform)
+        @test s == gramcover(a, b, U, Wdeg; degenerate = :uniform)
+        sm = fill(NaN, t.ninputs)
+        @test_throws "no gauge-invariant cover exists" gramcover!(sm, a, b, t, outidxs, Wdeg)
+        @test gramcover!(sm, a, b, t, outidxs, Wdeg; degenerate = :uniform) === sm
+        @test sm == s
     end
 
     @testset "mutating form writes in place" begin
