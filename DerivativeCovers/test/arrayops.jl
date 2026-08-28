@@ -414,6 +414,31 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
+        # Sparse operands record the same tape as their dense forms.
+        @testset "sparse $name" for (name, f, fd, z0) in
+            [
+                (
+                    "dot, sparse constant left",
+                    z -> abs2(dot(sparsevec([1, 3], c[1:2], 3), z)),
+                    z -> abs2(dot([c[1], 0.0, c[2]], z)), x0,
+                ),
+                (
+                    "dot, sparse constant right",
+                    z -> abs2(dot(z, sparsevec([1, 3], c[1:2], 3))),
+                    z -> abs2(dot(z, [c[1], 0.0, c[2]])), x0,
+                ),
+                (
+                    "Diagonal variable, sparse constant vector",
+                    v -> sum(abs2, Diagonal(v) * sparsevec([1, 3], c[1:2], 3)),
+                    v -> sum(abs2, Diagonal(v) * [c[1], 0.0, c[2]]), x0,
+                ),
+            ]
+            res = cover_hessian(WithDiagnostics(), f, z0)
+            @test res.grad ≈ ForwardDiff.gradient(fd, z0)
+            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
+        end
+
         # A container that reduces its vector `dot` to a scalar one reaches the scalar method.
         @testset "scalar dot" begin
             t = Tape(x0)

@@ -307,6 +307,25 @@ end
 *(W::Diagonal{<:CoverVar, <:StaticVector}, x::StaticVector{<:Any, <:Real}) = diagvecnodes(W, x)
 *(W::Diagonal{<:Real, <:StaticVector}, x::StaticVector{<:Any, <:CoverVar}) = diagvecnodes(W, x)
 
+# Resolve ties with SparseArrays methods that specialize on the container rather than the
+# element type. Recording a sparse operand is equivalent to recording its dense form.
+const SparseCoverVec = SparseArrays.SparseVectorUnion{<:CoverVar}
+const SparseRealVec = SparseArrays.SparseVectorUnion{<:Real}
+
+dot(ws::AbstractVector{<:CoverVar}, xs::SparseCoverVec) = dot(ws, Vector(xs))
+dot(ws::AbstractVector{<:CoverVar}, xs::SparseRealVec) = dot(ws, Vector(xs))
+dot(ws::AbstractVector{<:Real}, xs::SparseCoverVec) = dot(ws, Vector(xs))
+dot(ws::SparseCoverVec, xs::AbstractVector{<:CoverVar}) = dot(Vector(ws), xs)
+dot(ws::SparseCoverVec, xs::AbstractVector{<:Real}) = dot(Vector(ws), xs)
+dot(ws::SparseRealVec, xs::AbstractVector{<:CoverVar}) = dot(Vector(ws), xs)
+dot(ws::SparseCoverVec, xs::SparseCoverVec) = dot(Vector(ws), Vector(xs))
+dot(ws::SparseCoverVec, xs::SparseRealVec) = dot(Vector(ws), Vector(xs))
+dot(ws::SparseRealVec, xs::SparseCoverVec) = dot(Vector(ws), Vector(xs))
+
+*(W::Diagonal{<:CoverVar}, x::AbstractSparseVector{<:CoverVar}) = diagvecnodes(W, Vector(x))
+*(W::Diagonal{<:CoverVar}, x::AbstractSparseVector{<:Real}) = diagvecnodes(W, Vector(x))
+*(W::Diagonal{<:Real}, x::AbstractSparseVector{<:CoverVar}) = diagvecnodes(W, Vector(x))
+
 # Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
 # per output row. `mul!` is the only route to it. A `*` method of its own would tie with
 # LinearAlgebra's algebra of lazily wrapped vectors, which are `AbstractMatrix`es too, and
@@ -362,6 +381,20 @@ recordmatmat!(Y, tA, tB, W, X, alpha, beta) =
         Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         alpha::Number, beta::Number
     ) = recordmatmat!(Y, tA, tB, W, X, alpha, beta)
+
+    # Preserve the recording rule when SparseArrays specializes on a sparse `x`.
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::SparseArrays.AbstractSparseMatrixCSC,
+        x::AbstractSparseVector, alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::LinearAlgebra.UpperOrLowerTriangular,
+        x::AbstractSparseVector, alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::StridedMatrix, x::AbstractSparseVector,
+        alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
 else
     LinearAlgebra.generic_matvecmul!(
         y::AbstractVector{<:CoverVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
@@ -372,6 +405,20 @@ else
         Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         add::LinearAlgebra.MulAddMul
     ) = recordmatmat!(Y, tA, tB, W, X, add.alpha, add.beta)
+
+    # Preserve the recording rule when SparseArrays specializes on a sparse `x`.
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::SparseArrays.AbstractSparseMatrixCSC,
+        x::AbstractSparseVector, add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::LinearAlgebra.UpperOrLowerTriangular,
+        x::AbstractSparseVector, add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::StridedMatrix, x::AbstractSparseVector,
+        add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
 end
 
 # Record a sum as one linear node instead of n-1 addition nodes.
