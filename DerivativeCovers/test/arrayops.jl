@@ -439,6 +439,19 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
+        # A row of a sparse matrix reaches `dot` as a view.
+        @testset "sparse row views" begin
+            t = Tape(x0)
+            z = [TVar(t, i) for i in 1:3]
+            # A constant entry sends `dot` down the staging path, and this exercises the partitioning buffers
+            zc = [z[1], zero(eltype(z)), z[3]]
+            Msp = sparse(M)
+            Vsp = sparse([1, 2, 3], [1, 2, 3], z, 3, 3)
+            @test value(dot(view(Msp, 1, :), zc)) ≈ M[1, 1] * x0[1] + M[1, 3] * x0[3]
+            @test value(dot(view(Vsp, 1, :), zc)) ≈ x0[1]^2
+            @test map(value, Msp * zc) ≈ M * [x0[1], 0.0, x0[3]]
+        end
+
         # A container that reduces its vector `dot` to a scalar one reaches the scalar method.
         @testset "scalar dot" begin
             t = Tape(x0)

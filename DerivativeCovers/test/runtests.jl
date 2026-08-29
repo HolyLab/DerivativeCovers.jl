@@ -30,7 +30,7 @@ using ForwardDiff
 using LinearAlgebra
 using OffsetArrays
 using Random
-using SparseArrays: sparsevec
+using SparseArrays: sparse, sparsevec
 using StaticArrays
 using Test
 
