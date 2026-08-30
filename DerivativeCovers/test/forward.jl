@@ -106,6 +106,17 @@ const FORWARD_SPLITS = (
         @test cover_ratio(ForwardDiff.hessian(deep, x0), fc.h_quad) <= GATE
     end
 
+    @testset "inputs share the context's zero cover channel — $name" for
+        (name, f, x0) in FORWARD_FIXTURES
+        # Propagation must leave the shared input channel unchanged.
+        captured = Ref{Any}(nothing)
+        forward_cover(z -> (captured[] = z; f(z)), x0)
+        xs = captured[]
+        ctx = xs[1].ctx
+        @test all(x -> x.G === ctx.zerochannel, xs)
+        @test iszero(ctx.zerochannel)
+    end
+
     @testset "malformed programs are rejected" begin
         @test_throws "does not depend on the inputs" forward_cover(x -> zero(eltype(x)), [1.0])
         @test_throws "covers a scalar-valued program" forward_cover(x -> [x[1], x[2]], [1.0, 2.0])

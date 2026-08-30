@@ -33,7 +33,8 @@ assembling its cover.
 
 `S` is the channel storage, one entry per input; [`forward_cover`](@ref) derives it from the point
 it is given, so a `Vector` input propagates in `Vector`s and a `StaticVector` input in
-`StaticVector`s. `zerochannel` is a zero of that storage, from which a node seeds a fresh channel;
+`StaticVector`s. `zerochannel` is a zero of that storage, shared by the input variables and used
+to seed fresh channels;
 `scratch` is the atom accumulator, written in place when `S` is mutable and left alone when it is
 not; and `rho` holds the slot weights of the elemental being covered.
 
@@ -175,6 +176,9 @@ constantchannel(::Type{S}) where {S <: Array} = S(undef, 0)
 
 # Channel accumulation. Each returns the accumulator, which the caller must use: only writable
 # storage is updated in place, and immutable storage comes back as a new value.
+#
+# Nodes read but never write their parents' channels, allowing input variables to share
+# `zerochannel`. Accumulation targets are fresh channels, broadcast results, or `scratch`.
 add_scaled!(acc, c, v) = add_scaled!(channelkind(acc), acc, c, v)
 add_scaled!(::ImmutableChannels, acc, c, v) = acc .+ c .* v
 function add_scaled!(::MutableChannels, acc, c, v)
@@ -208,7 +212,8 @@ end
 # to the point, which is where the cost of the propagation actually lies.
 function input_vars(::Type{FVar{T, S}}, ctx, x0, w) where {T, S}
     sigma(a) = w === nothing ? one(T) : convert(T, w[a])
-    var(a) = FVar{T, S}(x0[a], sigma(a), ctx, channel_basis(x0, T, a), channel_zero(x0, T))
+    # Parent channels are read-only, so inputs can share `ctx.zerochannel`.
+    var(a) = FVar{T, S}(x0[a], sigma(a), ctx, channel_basis(x0, T, a), ctx.zerochannel)
     # `Base.OneTo`, not `eachindex(x0)`: a static point indexes over `SOneTo`, and a comprehension
     # over that rebuilds the static container this is here to avoid. The caller has already
     # declared one-based indexing.
