@@ -23,6 +23,7 @@ module DerivativeCovers
 
 using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
+using SparseArrays: SparseArrays, AbstractSparseVector
 using StaticArrays: StaticMatrix, StaticVector, similar_type
 using MatrixCovers: SupportComponents
 import MatrixCovers: support_components, gramcover, gramcover!

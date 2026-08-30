@@ -414,6 +414,104 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
+        # A sparse vector carrying variables in its stored entries, and the dense vector it
+        # stands for. `zero(eltype(z))` keeps both forms usable for the taped and the
+        # ForwardDiff reference call.
+        spvar(z) = sparsevec([1, 3], [z[1], z[3]], 3)
+        denvar(z) = [z[1], zero(eltype(z)), z[3]]
+
+        # Sparse operands record the same tape as their dense forms.
+        @testset "sparse $name" for (name, f, fd, z0) in
+            [
+                (
+                    "dot, sparse constant left",
+                    z -> abs2(dot(sparsevec([1, 3], c[1:2], 3), z)),
+                    z -> abs2(dot([c[1], 0.0, c[2]], z)), x0,
+                ),
+                (
+                    "dot, sparse constant right",
+                    z -> abs2(dot(z, sparsevec([1, 3], c[1:2], 3))),
+                    z -> abs2(dot(z, [c[1], 0.0, c[2]])), x0,
+                ),
+                (
+                    "Diagonal variable, sparse constant vector",
+                    v -> sum(abs2, Diagonal(v) * sparsevec([1, 3], c[1:2], 3)),
+                    v -> sum(abs2, Diagonal(v) * [c[1], 0.0, c[2]]), x0,
+                ),
+                (
+                    "dot, sparse variable right", z -> abs2(dot(z, spvar(z))),
+                    z -> abs2(dot(z, denvar(z))), x0,
+                ),
+                (
+                    "dot, sparse variable left", z -> abs2(dot(spvar(z), z)),
+                    z -> abs2(dot(denvar(z), z)), x0,
+                ),
+                (
+                    "dot, sparse variable and dense constant left", z -> abs2(dot(c, spvar(z))),
+                    z -> abs2(dot(c, denvar(z))), x0,
+                ),
+                (
+                    "dot, sparse variable and dense constant right", z -> abs2(dot(spvar(z), c)),
+                    z -> abs2(dot(denvar(z), c)), x0,
+                ),
+                (
+                    "dot, sparse variable on both sides", z -> abs2(dot(spvar(z), spvar(z))),
+                    z -> abs2(dot(denvar(z), denvar(z))), x0,
+                ),
+                (
+                    "dot, sparse variable and sparse constant right",
+                    z -> abs2(dot(spvar(z), sparsevec([1, 3], c[1:2], 3))),
+                    z -> abs2(dot(denvar(z), [c[1], 0.0, c[2]])), x0,
+                ),
+                (
+                    "dot, sparse variable and sparse constant left",
+                    z -> abs2(dot(sparsevec([1, 3], c[1:2], 3), spvar(z))),
+                    z -> abs2(dot([c[1], 0.0, c[2]], denvar(z))), x0,
+                ),
+                (
+                    "Diagonal variable, sparse variable vector",
+                    z -> sum(abs2, Diagonal(z) * spvar(z)),
+                    z -> sum(abs2, Diagonal(z) * denvar(z)), x0,
+                ),
+                (
+                    "Diagonal constant, sparse variable vector",
+                    z -> sum(abs2, Diagonal(c) * spvar(z)),
+                    z -> sum(abs2, Diagonal(c) * denvar(z)), x0,
+                ),
+                (
+                    "sparse matrix, sparse variable vector",
+                    z -> sum(abs2, sparse(M) * spvar(z)),
+                    z -> sum(abs2, M * denvar(z)), x0,
+                ),
+                (
+                    "dense matrix, sparse variable vector", z -> sum(abs2, M * spvar(z)),
+                    z -> sum(abs2, M * denvar(z)), x0,
+                ),
+                (
+                    "triangular matrix, sparse variable vector",
+                    z -> sum(abs2, UpperTriangular(M) * spvar(z)),
+                    z -> sum(abs2, UpperTriangular(M) * denvar(z)), x0,
+                ),
+            ]
+            res = cover_hessian(WithDiagnostics(), f, z0)
+            @test res.grad ≈ ForwardDiff.gradient(fd, z0)
+            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
+        end
+
+        # A row of a sparse matrix reaches `dot` as a view.
+        @testset "sparse row views" begin
+            t = Tape(x0)
+            z = [TVar(t, i) for i in 1:3]
+            # A constant entry sends `dot` down the staging path, and this exercises the partitioning buffers
+            zc = [z[1], zero(eltype(z)), z[3]]
+            Msp = sparse(M)
+            Vsp = sparse([1, 2, 3], [1, 2, 3], z, 3, 3)
+            @test value(dot(view(Msp, 1, :), zc)) ≈ M[1, 1] * x0[1] + M[1, 3] * x0[3]
+            @test value(dot(view(Vsp, 1, :), zc)) ≈ x0[1]^2
+            @test map(value, Msp * zc) ≈ M * [x0[1], 0.0, x0[3]]
+        end
+
         # A container that reduces its vector `dot` to a scalar one reaches the scalar method.
         @testset "scalar dot" begin
             t = Tape(x0)

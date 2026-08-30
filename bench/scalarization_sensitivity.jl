@@ -32,11 +32,8 @@ function quadform_scalar(A)
     end
 end
 
-function softmax(x::AbstractVector)
-    m = maximum(value, x)
-    e = exp.(x .- m)
-    return e ./ sum(e)
-end
+# Use the same `softmax` and `layernorm` definitions as the tests.
+include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
 
 "Head `dot(c0, softmax(z))`."
 softmax_prim(c0) = z -> dot(c0, softmax(z))

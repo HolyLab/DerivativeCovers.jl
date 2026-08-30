@@ -30,6 +30,7 @@ using ForwardDiff
 using LinearAlgebra
 using OffsetArrays
 using Random
+using SparseArrays: sparse, sparsevec
 using StaticArrays
 using Test
 
@@ -72,7 +73,7 @@ include("genericaxes.jl")
         # `generic_matvecmul!` and `generic_matmatmul!` are where a package supplies its own
         # product rules, and `wrap` and `MulAddMul` appear in their signatures. They are slated to
         # become public; until the release that declares them, every version this package supports
-        # needs them excused here.
+        # needs them excused here. The SparseArrays types below resolve product-method ties.
         test_explicit_imports(
             DerivativeCovers;
             all_explicit_imports_are_public = public_ok,
@@ -80,6 +81,7 @@ include("genericaxes.jl")
                 (;
                     ignore = (
                         :broadcastable, :generic_matvecmul!, :generic_matmatmul!, :wrap, :MulAddMul,
+                        :SparseVectorUnion, :AbstractSparseMatrixCSC, :UpperOrLowerTriangular,
                     ),
                 ) : false
         )

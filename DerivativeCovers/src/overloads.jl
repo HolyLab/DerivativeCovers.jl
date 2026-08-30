@@ -194,16 +194,19 @@ function dot(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:CoverVar})
     return _partitioned_dot(ws, xs)
 end
 
+# Create a growable buffer that can hold objects of eltype(v)
+# (`similar` does not ensure the buffer can be grown.)
+staging(v::AbstractVector) = Vector{eltype(v)}()
+
 # Partition a mixed dot product into a bilinear node, a linear node, and a constant offset. This
-# preserves the scalarized atom set with at most three nodes. The staging vectors take their
-# element types from the operands, so the coefficients reach the recorders in the operands' own
-# precision; `offset` accumulates as a constant CoverVar, which folds rather than recording a node.
+# preserves the scalarized atom set with at most three nodes. `offset` accumulates as a constant
+# CoverVar, which folds rather than recording a node.
 function _partitioned_dot(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:CoverVar})
     idxs = eachindex(ws, xs)
     isempty(idxs) && throw(ArgumentError("cannot record an empty inner product"))
-    wpair, xpair = similar(ws, 0), similar(xs, 0)     # both sides recording
-    wconst, wrest = similar(ws, 0), similar(xs, 0)    # ws[j] constant, xs[j] recording
-    xconst, xrest = similar(xs, 0), similar(ws, 0)    # xs[j] constant, ws[j] recording
+    wpair, xpair = staging(ws), staging(xs)     # both sides recording
+    wconst, wrest = staging(ws), staging(xs)    # ws[j] constant, xs[j] recording
+    xconst, xrest = staging(xs), staging(ws)    # xs[j] constant, ws[j] recording
     offset = zero(eltype(ws))
     for j in idxs
         w, x = ws[j], xs[j]
@@ -217,7 +220,7 @@ function _partitioned_dot(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:C
             push!(wpair, w); push!(xpair, x)
         end
     end
-    parts = similar(ws, 0)
+    parts = staging(ws)
     isempty(wpair) || push!(parts, dotnode(wpair, xpair))
     isempty(wrest) || push!(parts, linearnode(map(value, wconst), wrest))
     isempty(xrest) || push!(parts, linearnode(map(value, xconst), xrest))
@@ -233,7 +236,7 @@ dot(ws::AbstractVector{<:CoverVar}, x::AbstractVector{<:Real}) = _linear_dot(x, 
 function _linear_dot(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:CoverVar})
     any(isconstant, xs) || return linearnode(coeffs, xs)
     idxs = eachindex(coeffs, xs)
-    rcoef, rest = similar(coeffs, 0), similar(xs, 0)
+    rcoef, rest = staging(coeffs), staging(xs)
     offset = zero(eltype(xs))
     for j in idxs
         x = xs[j]
@@ -307,6 +310,25 @@ end
 *(W::Diagonal{<:CoverVar, <:StaticVector}, x::StaticVector{<:Any, <:Real}) = diagvecnodes(W, x)
 *(W::Diagonal{<:Real, <:StaticVector}, x::StaticVector{<:Any, <:CoverVar}) = diagvecnodes(W, x)
 
+# Resolve ties with SparseArrays methods that specialize on the container rather than the
+# element type. Recording a sparse operand is equivalent to recording its dense form.
+const SparseCoverVec = SparseArrays.SparseVectorUnion{<:CoverVar}
+const SparseRealVec = SparseArrays.SparseVectorUnion{<:Real}
+
+dot(ws::AbstractVector{<:CoverVar}, xs::SparseCoverVec) = dot(ws, Vector(xs))
+dot(ws::AbstractVector{<:CoverVar}, xs::SparseRealVec) = dot(ws, Vector(xs))
+dot(ws::AbstractVector{<:Real}, xs::SparseCoverVec) = dot(ws, Vector(xs))
+dot(ws::SparseCoverVec, xs::AbstractVector{<:CoverVar}) = dot(Vector(ws), xs)
+dot(ws::SparseCoverVec, xs::AbstractVector{<:Real}) = dot(Vector(ws), xs)
+dot(ws::SparseRealVec, xs::AbstractVector{<:CoverVar}) = dot(Vector(ws), xs)
+dot(ws::SparseCoverVec, xs::SparseCoverVec) = dot(Vector(ws), Vector(xs))
+dot(ws::SparseCoverVec, xs::SparseRealVec) = dot(Vector(ws), Vector(xs))
+dot(ws::SparseRealVec, xs::SparseCoverVec) = dot(Vector(ws), Vector(xs))
+
+*(W::Diagonal{<:CoverVar}, x::AbstractSparseVector{<:CoverVar}) = diagvecnodes(W, Vector(x))
+*(W::Diagonal{<:CoverVar}, x::AbstractSparseVector{<:Real}) = diagvecnodes(W, Vector(x))
+*(W::Diagonal{<:Real}, x::AbstractSparseVector{<:CoverVar}) = diagvecnodes(W, Vector(x))
+
 # Entry-by-entry matrix-matrix product: one node per output entry, as `matvecnodes` records one
 # per output row. `mul!` is the only route to it. A `*` method of its own would tie with
 # LinearAlgebra's algebra of lazily wrapped vectors, which are `AbstractMatrix`es too, and
@@ -362,6 +384,20 @@ recordmatmat!(Y, tA, tB, W, X, alpha, beta) =
         Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         alpha::Number, beta::Number
     ) = recordmatmat!(Y, tA, tB, W, X, alpha, beta)
+
+    # Preserve the recording rule when SparseArrays specializes on a sparse `x`.
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::SparseArrays.AbstractSparseMatrixCSC,
+        x::AbstractSparseVector, alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::LinearAlgebra.UpperOrLowerTriangular,
+        x::AbstractSparseVector, alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::StridedMatrix, x::AbstractSparseVector,
+        alpha::Number, beta::Number
+    ) = recordmatvec!(y, tA, W, x, alpha, beta)
 else
     LinearAlgebra.generic_matvecmul!(
         y::AbstractVector{<:CoverVar}, tA, W::AbstractVecOrMat, x::AbstractVector,
@@ -372,6 +408,20 @@ else
         Y::AbstractMatrix{<:CoverVar}, tA, tB, W::AbstractVecOrMat, X::AbstractVecOrMat,
         add::LinearAlgebra.MulAddMul
     ) = recordmatmat!(Y, tA, tB, W, X, add.alpha, add.beta)
+
+    # Preserve the recording rule when SparseArrays specializes on a sparse `x`.
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::SparseArrays.AbstractSparseMatrixCSC,
+        x::AbstractSparseVector, add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::LinearAlgebra.UpperOrLowerTriangular,
+        x::AbstractSparseVector, add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
+    LinearAlgebra.generic_matvecmul!(
+        y::AbstractVector{<:CoverVar}, tA, W::StridedMatrix, x::AbstractSparseVector,
+        add::LinearAlgebra.MulAddMul
+    ) = recordmatvec!(y, tA, W, x, add.alpha, add.beta)
 end
 
 # Record a sum as one linear node instead of n-1 addition nodes.

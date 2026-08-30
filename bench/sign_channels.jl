@@ -22,7 +22,7 @@
 using DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra, Random, Printf,
     Statistics
 using DerivativeCovers: cover_ratio, tape_function, nnodes, natoms, adjoints, abs_reverse,
-    atom_slots
+    atom_slots, value
 
 "Geometric mean and maximum of `num ./ den` over the entries where `den` is positive."
 function ratio_stats(num, den)
@@ -232,23 +232,8 @@ function family_fixtures(n; seed = 3)
     end
 end
 
-"""
-    softmax(x)
-
-`exp.(x) ./ sum(exp.(x))`, with the max detached from the tape. Subtracting a constant from every
-entry leaves softmax unchanged, so the detachment is exact.
-"""
-function softmax(x::AbstractVector)
-    e = exp.(x .- maximum(DerivativeCovers.value, x))
-    return e ./ sum(e)
-end
-
-"`(x .- mean(x)) ./ sqrt(var(x))` with the biased variance."
-function layernorm(x::AbstractVector)
-    n = length(x)
-    d = x .- sum(x) / n
-    return d ./ sqrt(sum(abs2, d) / n)
-end
+# Use the same `softmax` and `layernorm` definitions as the tests.
+include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
 
 "Array-op heads, the recording style the other scripts measure."
 function array_fixtures(rng, n)
