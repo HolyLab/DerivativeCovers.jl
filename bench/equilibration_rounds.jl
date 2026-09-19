@@ -26,7 +26,7 @@ of `jacobian_ratio`, and the quantity [`jacobian_minimax`](@ref) minimizes.
 """
 excess(U, a, b) = maximum(a[k] * b[j] / U[k, j] for k in axes(U, 1), j in axes(U, 2) if U[k, j] > 0)
 
-"One b-step of `merge` from `a = ones`: the unbalanced pair `cover_jacobian` returns."
+"One b-step of `merge` from `a = ones`: the uniform-weight pair, before any balancing."
 bstep_from_ones(U, ::SumMerge) = vec(sum(U; dims = 1))
 bstep_from_ones(U, ::QuadMerge) = sqrt.(vec(sum(abs2, U; dims = 1)))
 bstep_from_ones(U, ::MaxMerge) = vec(maximum(U; dims = 1))
@@ -49,8 +49,11 @@ so it stands as a guard rather than an expected outcome.
 The failures carry `msg`, truncated at the first `;` to drop the remedy hint.
 """
 function attempt(U, merge::MergeRule, arule::Symbol; kwargs...)
+    # The statuses below are outcomes of a run to convergence under uniform targets from the equal
+    # start, so this names all three rather than taking the entry point's defaults.
+    uniform = arule === :marginal ? (; targets = :uniform) : (;)
     return try
-        r = balance_cover(U; merge, arule, kwargs...)
+        r = balance_cover(U; merge, arule, start = :equal, rounds = nothing, uniform..., kwargs...)
         (; status = :converged, r.iters, r.delta, excess = excess(U, r.a, r.b))
     catch e
         e isa ErrorException && return (;

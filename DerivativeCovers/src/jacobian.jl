@@ -28,47 +28,81 @@ end
     JacobianCover{T}
 
 Result of [`cover_jacobian`](@ref), in the element type `T` of the [`Tape`](@ref) it was computed
-from. Each pair `(a, b)` satisfies `a[k] * b[j] >= abs(J[k,j])`.
+from: `a[k] * b_sum[j] >= abs(J[k,j])`.
 
-- `a`: output weights; `ones(m)` by default.
-- `b_sum`: sum merge, computed in one `O(L)` reverse sweep.
-- `b_quad`: the quadrature merge `b_j = √(∑_k (Ũ_kj/a_k)²)`.
-- `b_max`: smallest valid `b` for the fixed `a` and the surrogate `Utilde`.
-- `Utilde`: `m × n` absolute-sensitivity surrogate satisfying `Utilde >= abs.(J)`.
+- `a`: output weights.
+- `b_sum`: input weights from the sum merge, computed in one `O(L)` reverse sweep.
+- `roots`, `nties`: the root data of the tape-potential start (see [`tape_potentials`](@ref)), or
+  `nothing` when another start or an explicit `a` was used.
 - `m`, `n`: numbers of outputs and inputs.
-
-The merges satisfy `b_max <= b_quad <= b_sum` coordinatewise.
 """
 struct JacobianCover{T}
     a::Vector{T}
     b_sum::Vector{T}
-    b_quad::Vector{T}
-    b_max::Vector{T}
-    Utilde::Matrix{T}
+    roots::Union{Nothing, Vector{Int}}
+    nties::Union{Nothing, Vector{Int}}
     m::Int
     n::Int
 end
 
 """
-    cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; a=nothing, check=true) -> JacobianCover
-    cover_jacobian(r, x0::AbstractVector; a=nothing, check=true) -> JacobianCover
+    JacobianDiagnostics{T}
 
-Compute asymmetric rank-1 covers of a vector-valued function's Jacobian.
+The extended result returned by `cover_jacobian(WithDiagnostics(), ...)`, in the element type `T`
+of the [`Tape`](@ref) it was computed from. It carries the fields of [`JacobianCover`](@ref)
+together with
 
-Pass either a tape and output nodes, or a function and evaluation point. The result contains sum,
-quadrature, and max merges of the absolute sensitivities. For each returned `b`,
-`a[k] * b[j] >= abs(J[k,j])`.
+- `b_quad`: the quadrature merge `b_j = √(∑_k (Ũ_kj/a_k)²)`.
+- `b_max`: the smallest valid `b` for this `a`, `b_j = max_k Ũ_kj/a_k`.
+- `Utilde`: `m × n` absolute-sensitivity surrogate satisfying `Utilde >= abs.(J)`.
 
-`a` must contain one strictly positive weight per output; the default is `ones(m)`. Changing `a`
-redistributes scale between the output and input factors without affecting validity.
-`check=true` verifies the max merge against the absolute-sensitivity surrogate.
+The merges satisfy `b_max <= b_quad <= b_sum` coordinatewise. Forming `Utilde` takes an
+`m`-channel reverse sweep, `O(m * L)` time and `O(m * n)` memory.
+"""
+struct JacobianDiagnostics{T}
+    a::Vector{T}
+    b_sum::Vector{T}
+    b_quad::Vector{T}
+    b_max::Vector{T}
+    Utilde::Matrix{T}
+    roots::Union{Nothing, Vector{Int}}
+    nties::Union{Nothing, Vector{Int}}
+    m::Int
+    n::Int
+end
+
+"""
+    cover_jacobian([mode,] t::Tape, outidxs; start=:covariant, rounds=4, a=nothing, check=true)
+    cover_jacobian([mode,] r, x0::AbstractVector; ...)
+
+Asymmetric rank-1 cover of a vector-valued function's Jacobian: weights with
+`a[k] * b[j] >= abs(J[k,j])`. Pass either a tape and its output nodes, or a function and an
+evaluation point.
+
+`a` is chosen by the balancing construction: `start` is `:covariant`, whose products on the
+support transform exactly under a rescaling of the program's inputs, outputs and intermediates, or
+`:equal`, which is permutation equivariant instead; `rounds` alternation rounds then refine it,
+and `rounds = nothing` runs [`balance_cover`](@ref)'s alternation to convergence instead.
+Passing `a` yourself fixes the weights and rules out `start` and `rounds`. `a` must be strictly
+positive on every output some input reaches and may be zero on the others, which then contribute
+to no merge.
+
+# Modes
+
+- `CoverOnly()` (the default) returns a [`JacobianCover`](@ref) from `O(L)` sweeps, never forming
+  the surrogate. Checking a pair against the surrogate is what the other mode is for, so `check`
+  has no effect here; a factor that vanishes on a row or column the program actually uses is an
+  error either way.
+- `WithDiagnostics()` returns a [`JacobianDiagnostics`](@ref): the same `a` and `b_sum`, plus the
+  surrogate and the two tighter merges, at `O(m * L)`. `check` then verifies `b_max` against the
+  surrogate.
 
 # Examples
 
 ```jldoctest
 julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
 
-julia> jc = cover_jacobian(r, [0.5, 2.0, -1.0]);
+julia> jc = cover_jacobian(WithDiagnostics(), r, [0.5, 2.0, -1.0]; a = ones(3));
 
 julia> round.(jc.b_max; digits=4)
 3-element Vector{Float64}:
@@ -81,49 +115,90 @@ true
 ```
 """
 function cover_jacobian(
-        t::Tape{T}, outidxs::AbstractVector{<:Integer}; a = nothing, check::Bool = true
+        ::CoverOnly, t::Tape{T}, outidxs::AbstractVector{<:Integer};
+        start = nothing, rounds = missing, a = nothing, check::Bool = true
+    ) where {T}
+    # `_jacobian_weights` rejects a factor that vanishes on a live row or column whatever `check`
+    # says, because such a pair is not a cover; `check` has nothing further the sweeps can see.
+    w = _jacobian_weights(t, outidxs, start, rounds, a, _live_info(t, outidxs))
+    return JacobianCover(w.a, w.b, w.roots, w.nties, length(outidxs), t.ninputs)
+end
+
+function cover_jacobian(
+        ::WithDiagnostics, t::Tape{T}, outidxs::AbstractVector{<:Integer};
+        start = nothing, rounds = missing, a = nothing, check::Bool = true
     ) where {T}
     m, n = length(outidxs), t.ninputs
-    a === nothing && (a = ones(T, m))
-    # Result fields use output positions 1:m, independent of the axes of outidxs.
-    Base.require_one_based_indexing(a)
-    length(a) == m ||
-        throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
-    all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
-    # The tape's element type is the cover's, so the weights join it.
-    a = collect(T, a)
-
+    li = _live_info(t, outidxs)
+    w = _jacobian_weights(t, outidxs, start, rounds, a, li)
     Utilde = jacobian_surrogate(t, outidxs)
-    scaled = Utilde ./ a                      # scaled[k, j] = Ũ_kj / a_k
-    b_sum = vec(sum(scaled; dims = 1))
+    _check_surrogate_support(t, outidxs, Utilde, li)
+    # scaled[k, j] = Ũ_kj / a_k, and zero on a dead output, whose row is zero anyway.
+    scaled = [w.a[k] > 0 ? Utilde[k, j] / w.a[k] : zero(T) for k in 1:m, j in 1:n]
     b_quad = sqrt.(vec(sum(abs2, scaled; dims = 1)))
     b_max = vec(maximum(scaled; dims = 1))
 
     if check
-        rtol = eps(float(real(eltype(Utilde))))^(2 // 3)
-        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (a .* b_max'))
+        rtol = eps(float(real(T)))^(2 // 3)
+        s, idx = worst_severity(Utilde .* (1 - rtol) ./ (w.a .* b_max'))
         if s > 1
             k, j = Tuple(idx)
             error(
                 "b_max does not cover the surrogate at output $k, input $j: " *
-                    "a*b = $(a[k] * b_max[j]) < Ũ = $(Utilde[k, j])"
+                    "a*b = $(w.a[k] * b_max[j]) < Ũ = $(Utilde[k, j])"
             )
         end
     end
-
-    return JacobianCover(a, b_sum, b_quad, b_max, Utilde, m, n)
+    return JacobianDiagnostics(w.a, w.b, b_quad, b_max, Utilde, w.roots, w.nties, m, n)
 end
 
-function cover_jacobian(r, x0::AbstractVector; a = nothing, check::Bool = true)
+function cover_jacobian(mode::CoverMode, r, x0::AbstractVector; kwargs...)
     t, outidxs = tape_function(r, x0)
     outidxs isa AbstractVector ||
         throw(ArgumentError("cover_jacobian needs a vector-valued program; got a scalar output"))
-    return cover_jacobian(t, outidxs; a, check)
+    return cover_jacobian(mode, t, outidxs; kwargs...)
+end
+
+cover_jacobian(t::Tape, outidxs::AbstractVector{<:Integer}; kwargs...) =
+    cover_jacobian(CoverOnly(), t, outidxs; kwargs...)
+cover_jacobian(r, x0::AbstractVector; kwargs...) =
+    cover_jacobian(CoverOnly(), r, x0; kwargs...)
+
+# Output weights and their sum merge, without forming the surrogate. Explicit weights replace the
+# balancing construction outright, so naming a start or a round count alongside them asks for two
+# incompatible things.
+function _jacobian_weights(t::Tape, outidxs, start, rounds, a, li::LiveInfo)
+    aw, b, roots, nties = _jacobian_a(t, outidxs, start, rounds, a, li)
+    b === nothing && (b = _sum_merge_b(t, outidxs, aw, li))
+    _check_cover_factors(aw, b, li)
+    return (; a = aw, b, roots, nties)
+end
+
+# The output weights alone, together with whatever the balancing construction already computed
+# alongside them. Every entry point that needs weights goes through here, so they all read the same
+# keywords the same way.
+function _jacobian_a(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where {T}
+    if a === nothing
+        bal = _balance_tape(t, outidxs, li; start, rounds, check = false)
+        return bal.a, bal.b, bal.roots, bal.nties
+    end
+    start === nothing && rounds === missing ||
+        throw(ArgumentError("a fixes the output weights, so start and rounds do not apply to it"))
+    m = length(outidxs)
+    # Weights use output positions 1:m, independent of the axes of outidxs.
+    Base.require_one_based_indexing(a)
+    length(a) == m ||
+        throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
+    # The tape's element type is the cover's, so the weights join it.
+    aw = collect(T, a)
+    _check_output_weights(aw, .!li.liverow)
+    return aw, nothing, nothing, nothing
 end
 
 """
-    cover_jacobian_hybrid(t::Tape, outidxs, groups::AbstractVector{<:Integer}; a=nothing, check=true) -> b
-    cover_jacobian_hybrid(t::Tape, outidxs, ngroups::Integer; a=nothing, check=true) -> b
+    cover_jacobian_hybrid(t::Tape, outidxs, groups::AbstractVector{<:Integer}; kwargs...) -> (; a, b)
+    cover_jacobian_hybrid(t::Tape, outidxs, ngroups::Integer; kwargs...) -> (; a, b)
+    cover_jacobian_hybrid(r, x0::AbstractVector, groups | ngroups; kwargs...) -> (; a, b)
 
 Compute a Jacobian cover by grouping outputs.
 
@@ -134,8 +209,15 @@ cyclically.
 Every grouping is valid. One group reproduces `b_sum`; one group per output reproduces `b_max`.
 The cost is `O(G * L)` for `G = maximum(groups)`, without forming the full surrogate.
 
-`a` supplies the output weights and defaults to `ones(m)`. `check=true` verifies the result
-against the surrogate.
+The output weights are [`cover_jacobian`](@ref)'s, chosen by the same keywords:
+
+  - `start`: `:covariant` (the default) or `:equal`.
+  - `rounds`: alternation rounds refining them, `4` by default.
+  - `a`: fixed weights of your own instead, strictly positive on every output some input reaches
+    and optionally zero on the others. It rules out `start` and `rounds`.
+  - `check = true`: verify the returned `b` against the surrogate, at `O(m * L)`.
+
+Returns the weights used and the grouped merge for them: `a[k] * b[j] >= abs(J[k,j])`.
 
 # Examples
 
@@ -146,13 +228,13 @@ julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
 
 julia> t, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
 
-julia> round.(cover_jacobian_hybrid(t, outidxs, 1); digits=4)   # one group: b_sum
+julia> round.(cover_jacobian_hybrid(t, outidxs, 1; a = ones(3)).b; digits=4)   # one group: b_sum
 3-element Vector{Float64}:
  3.6487
  1.5
  3.0
 
-julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per group: b_max
+julia> round.(cover_jacobian_hybrid(t, outidxs, 3; a = ones(3)).b; digits=4)   # per output: b_max
 3-element Vector{Float64}:
  2.0
  1.0
@@ -161,28 +243,27 @@ julia> round.(cover_jacobian_hybrid(t, outidxs, 3); digits=4)   # one output per
 """
 function cover_jacobian_hybrid(
         t::Tape{T}, outidxs::AbstractVector{<:Integer},
-        groups::AbstractVector{<:Integer}; a = nothing, check::Bool = true
+        groups::AbstractVector{<:Integer}; start = nothing, rounds = missing,
+        a = nothing, check::Bool = true
     ) where {T}
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
-    # groups and a use output positions 1:m, independent of the axes of outidxs.
+    # groups uses output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(groups)
     length(groups) == m ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $m (one per output)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
-    a === nothing && (a = ones(T, m))
-    Base.require_one_based_indexing(a)
-    length(a) == m ||
-        throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
-    all(>(0), a) || throw(ArgumentError("output weights a must be strictly positive"))
-    a = collect(T, a)
+    li = _live_info(t, outidxs)
+    a = first(_jacobian_a(t, outidxs, start, rounds, a, li))
 
     G = maximum(groups)
     Theta = zeros(T, G, N)
     for (k, o) in enumerate(outidxs)
-        Theta[groups[k], o] += 1 / a[k]
+        # A dead output seeds nothing: its sensitivities are zero whatever weight it carries.
+        a[k] > 0 && (Theta[groups[k], o] += 1 / a[k])
     end
     Abar = abs_reverse(t, Theta)              # G × N, group column-sums of Ũ/a at the inputs
     b = [maximum(view(Abar, :, j)) for j in 1:n]
+    _check_cover_factors(a, b, li)
 
     if check
         Utilde = jacobian_surrogate(t, outidxs)
@@ -196,17 +277,85 @@ function cover_jacobian_hybrid(
             )
         end
     end
-    return b
+    return (; a, b)
 end
 
 function cover_jacobian_hybrid(
-        t::Tape, outidxs::AbstractVector{<:Integer}, ngroups::Integer;
-        a = nothing, check::Bool = true
+        t::Tape, outidxs::AbstractVector{<:Integer}, ngroups::Integer; kwargs...
     )
     ngroups >= 1 || throw(ArgumentError("ngroups must be positive, got $ngroups"))
     m = length(outidxs)
     groups = [1 + (k - 1) % ngroups for k in 1:m]
-    return cover_jacobian_hybrid(t, outidxs, groups; a, check)
+    return cover_jacobian_hybrid(t, outidxs, groups; kwargs...)
+end
+
+function cover_jacobian_hybrid(r, x0::AbstractVector, groups; kwargs...)
+    t, outidxs = tape_function(r, x0)
+    outidxs isa AbstractVector ||
+        throw(ArgumentError("cover_jacobian_hybrid needs a vector-valued program; got a scalar output"))
+    return cover_jacobian_hybrid(t, outidxs, groups; kwargs...)
+end
+
+# A returned pair must cover every structurally live entry, so neither factor may vanish there.
+# Only underflow can put a zero on a live row or column, and a cover with one is not a cover, so
+# this runs on every path rather than only under `check`. `O(m + n)`.
+function _check_cover_factors(a, b, li::LiveInfo)
+    for k in eachindex(a)
+        (isfinite(a[k]) && (a[k] > 0 || !li.liverow[k])) || throw(
+            ArgumentError(
+                "output weight a[$k] is $(a[k]) on an output that inputs reach: the products " *
+                    "along those paths underflowed, so no input factor can cover its row"
+            )
+        )
+    end
+    for j in eachindex(b)
+        (isfinite(b[j]) && (b[j] > 0 || !li.livecol[j])) || throw(
+            ArgumentError(
+                "input weight b[$j] is $(b[j]) on an input that reaches an output: the products " *
+                    "along those paths underflowed, so no output factor can cover its column"
+            )
+        )
+    end
+    return nothing
+end
+
+# Output weights are finite and strictly positive wherever an input reaches the output. A zero
+# weight is admitted only on a dead output, where it covers that row exactly; anything else —
+# negative, NaN, infinite, or zero on a live output — cannot cover and is an error.
+function _check_output_weights(a, deadrow)
+    for k in eachindex(a, deadrow)
+        isfinite(a[k]) ||
+            throw(ArgumentError("output weights a must be finite; a[$k] = $(a[k])"))
+        a[k] > 0 || deadrow[k] && a[k] == 0 || throw(
+            ArgumentError(
+                "output weights a must be strictly positive on every output an input reaches, " *
+                    "and may be zero only on the others; a[$k] = $(a[k])"
+            )
+        )
+    end
+    return a
+end
+
+# The surrogate's zeros must agree with the tape's structural pattern. They can disagree only by
+# underflow: every local derivative on some input-to-output path is nonzero, yet their product is
+# too small to represent. That is a floating-point event the caller needs to know about, not a
+# structurally dead entry to be covered vacuously. Entrywise, from `cld(n, 64)` integer passes and
+# `m * cld(n, 64)` words — small beside the `m * n` surrogate already in hand.
+function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo)
+    P = _structural_pattern(t, outidxs, li)
+    n = t.ninputs
+    for j in 1:n, k in 1:length(outidxs)
+        blk, bit = cld(j, 64), (j - 1) % 64
+        (P[k, blk] >> bit) & UInt64(1) == 1 || continue
+        iszero(Utilde[k, j]) && throw(
+            ArgumentError(
+                "output $k reaches input $j along nonzero local derivatives, but the surrogate " *
+                    "entry underflowed to zero: the products along those paths are below the " *
+                    "smallest representable $(eltype(Utilde))"
+            )
+        )
+    end
+    return Utilde
 end
 
 """
@@ -222,11 +371,16 @@ traversal.
 function abs_forward(t::Tape, theta::AbstractVector)
     length(theta) == nnodes(t) ||
         throw(DimensionMismatch("theta has length $(length(theta)), expected $(nnodes(t)) (one per node)"))
+    return _forward_sweep(_absslot, t, theta)
+end
+
+# Forward sweep with a pluggable per-slot weight, the transpose of [`_reverse_sweep`](@ref).
+function _forward_sweep(w::F, t::Tape, theta::AbstractVector) where {F}
     s = collect(float.(theta))
     for k in (t.ninputs + 1):nnodes(t)
         acc = s[k]
         for (i, p) in enumerate(t.parents[k])
-            a = abs(t.ds[k][i])
+            a = w(t.ds[k][i], k, i, p)
             a == 0 && continue
             acc += a * s[p]
         end
@@ -250,34 +404,30 @@ marginal `∑_j Ũ_kj` lacks the second property, and the value rule `a_k = |r_k
 wherever residuals vanish.
 
 The tape method costs one `O(L)` [`abs_forward`](@ref) sweep seeded `1/b_j` at the inputs, never
-forming `Ũ`. A zero `b_j` is accepted only for a dead input (one no output depends on): it
-contributes nothing to any marginal. A zero `b_j` on a live input is an error — no output
+forming `Ũ`. A zero `b_j` is accepted only for an input no output depends on: it contributes
+nothing to any marginal. A zero `b_j` on an input that does reach an output is an error — no output
 weighting can restore validity there.
 """
-function marginal_weights(t::Tape{T}, outidxs::AbstractVector{<:Integer}, b::AbstractVector) where {T}
+marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector) =
+    _marginal_weights(t, outidxs, b, _live_info(t, outidxs))
+
+# The balancing loop already holds the structural liveness, so it passes it in rather than paying
+# for a reachability sweep in every round that has a zero `b`.
+function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo) where {T}
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
-    N = nnodes(t)
-    theta = zeros(T, N)
-    anydead = false
+    theta = zeros(T, nnodes(t))
     for j in 1:t.ninputs
         if b[j] > 0
             theta[j] = 1 / b[j]
         else
-            anydead = true
-        end
-    end
-    if anydead
-        # A zero input weight is valid only for an input that reaches no output.
-        ind = zeros(T, N)
-        for j in 1:t.ninputs
-            b[j] == 0 && (ind[j] = 1)
-        end
-        reach = abs_forward(t, ind)
-        for k in outidxs
-            reach[k] == 0 ||
-                throw(ArgumentError("b is zero on an input that reaches output node $k; no output weighting can cover it"))
+            # A zero input weight is valid only for an input that reaches no output.
+            li.livecol[j] && throw(
+                ArgumentError(
+                    "b is zero on input $j, which reaches an output; no output weighting can cover it"
+                )
+            )
         end
     end
     s = abs_forward(t, theta)
@@ -341,126 +491,147 @@ struct QuadMerge <: MergeRule end
     MaxMerge <: MergeRule
 
 `b_j = max_k Ũ_kj/a_k`, the exact minimal `b` for the given `a`. Non-smooth, so its marginal
-alternation can settle into a limit cycle; see [`balance_cover`](@ref).
+alternation can settle into a *limit cycle*: the weights keep changing by a fixed amount every
+round, which no larger budget reduces. [`balance_cover`](@ref) reports that as a stall.
 """
 struct MaxMerge <: MergeRule end
 
 """
-    balance_cover(t::Tape, outidxs; merge=SumMerge(), arule=:marginal, a0=nothing,
-                  maxiter=nothing, rtol=eps(eltype(t.vals))^(2//3), check=true)
+    balance_cover(t::Tape, outidxs; kwargs...) -> (; a, b, iters, delta, roots, nties)
     balance_cover(r, x0::AbstractVector; kwargs...)
-    balance_cover(Utilde::AbstractMatrix; merge=SumMerge(), arule=:marginal, a0=nothing,
-                  maxiter=nothing, rtol=eps(eltype(Utilde))^(2//3), check=true)
+    balance_cover(Utilde::AbstractMatrix; kwargs...)
 
-Balanced asymmetric cover `(a, b)`: choose the output weights `a` by alternation, then pair them
-with the [`MergeRule`](@ref) b-step ([`SumMerge`](@ref), [`QuadMerge`](@ref) or
-[`MaxMerge`](@ref)). Returns `(; a, b, iters, delta)` — the pair (whose `b` is the chosen
-merge for the returned `a`, so it is a valid cover of the surrogate for any `arule`), the number
-of alternation rounds, and the final gauge-invariant change bound
-`delta = max_{kj} |log((a_k b_j)_new / (a_k b_j)_old)|`. Throws when `delta ≤ rtol` is not reached
-within `maxiter` rounds. Both a-rules are covariant: an output rescaling `r → diag(c)*r` maps the
-fixed points by `a → diag(c)*a` (start `a0` transformed alongside), an input rescaling leaves them
-untouched, and the remaining freedom is the gauge `(a, b) → (γa, γ⁻¹b)`.
+Output and input weights covering the absolute-sensitivity surrogate: `a[k] * b[j] >= Ũ_kj`, and
+so `>= abs(J_kj)`.
 
-The two strategy axes are spelled differently. `merge` is a [`MergeRule`](@ref) type: its members
-are the `p = 1, 2, ∞` points of one continuum, so the b-step loop specializes on the choice and a
-parameterized member would fit the existing hook. `arule` is a `Symbol`: `:marginal` and
-`:geomean` are a closed pair of distinct algorithms that carry no data and admit no obvious third
-member.
+By default the weights come from a scale-covariant start, `rounds` rounds of a marginal
+alternation toward row and column targets the sparsity pattern makes realizable, and a final
+[`MergeRule`](@ref) b-step for the `a` those rounds reached. The b-step is what makes the pair a
+cover, so the result covers whatever the rounds did or did not settle. The accompanying manuscript
+derives the weighting rules and their convergence; the keywords below say what each one does
+without it.
 
-`maxiter = nothing` (the default) selects a per-rule budget: `1000` rounds for the marginal
-alternation, `10000` for the slower `:geomean` fit; pass an explicit count to override.
+# Keywords
 
-- `arule = :marginal` alternates `a = ` [`marginal_weights`](@ref)`(…, b)` with the `merge`
-  b-step. Every iterate is a valid cover — each half-step is valid for any positive other side —
-  so the alternation trades only tightness, never validity. With [`SumMerge`](@ref) this is exactly
-  Sinkhorn matrix scaling of `Ũ` (the b-step normalizes the columns of `R_kj = Ũ_kj/(a_k b_j)`,
-  the a-step its rows), and it inherits Sinkhorn's convergence condition: the sparsity pattern of
-  `Ũ` must have **total support** (every nonzero entry on some positive diagonal). Dense patterns
-  qualify; a pattern with a nonzero entry on no positive diagonal (e.g. triangular) makes the
-  iteration **drift**: `a` and `b` separate without bound in opposite directions. Every iterate
-  still covers, and covers tightly, but its excess grows with the round count, so a longer run
-  returns a *worse* cover — and left to run the weights leave the floating-point range altogether.
-  Drift is detected from the growth of the log-spread within each side, sampled at doubling round
-  counts, and reported before either happens. The [`MaxMerge`](@ref) b-step is
-  non-smooth and can instead settle into a **limit cycle**: the per-round product change plateaus
-  at a positive constant that no larger `maxiter` reduces (independent of total support). This is
-  reported as a stall, distinct from the drift error; `arule = :geomean` is the convergent
-  alternative in both cases.
-- `arule = :geomean` sets `a_k` to the geometric mean of `Ũ_kj/b_j` over the nonzero entries of
-  row `k`, alternating with the same rule on the b-side. In log space this is coordinate descent
-  on the additive two-way fit `log Ũ_kj ≈ log a_k + log b_j` (row and column effects), so it
-  converges for **every** sparsity pattern; the intermediate iterates undershoot validity, which
-  the final `merge` b-step restores. Convergence is linear and can be slow on ill-conditioned
-  supports (chains, wide bands): some sparse patterns need `10^4`–`10^5` rounds, so raise
-  `maxiter` when the non-convergence error reports a delta still well above `rtol`.
+  - `start = :covariant`: products on the support then transform exactly under a rescaling of the
+    inputs and outputs — and, on the tape path, the intermediates — at every round count.
+    `start = :equal` starts at `a = 1` instead, which is permutation equivariant at every round
+    count but covariant only in the limit. Both reach the same fixed point.
+  - `a0`: starting weights of your own, positive on every live output and zero on the others.
+    Combining it with an explicit `start` is an error.
+  - `targets`: `:flow` (tape default; `O(L)`; maximizes a flow-weighted mean log-tightness,
+    typically within a few percent of `:support` in geometric mean), `:support` (matrix default;
+    maximizes the geometric-mean tightness of the sum-merge cover; on a tape it costs
+    `cld(n, 64) + cld(m, 64)` bit passes), an explicit `(r, c)`, or `:uniform` for unit row and
+    column sums. `:uniform` needs the pattern to have *total support* — every nonzero entry on some
+    positive diagonal — and without it the weights *drift*, separating without bound while every
+    iterate still covers, so a longer run returns a looser cover. Applies to `arule = :marginal`
+    only, and `:flow` needs a tape.
+  - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `nothing`
+    runs to `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming
+    `maxiter` or `rtol` and no `rounds` asks for that too.
+  - `maxiter`, `rtol`: bound and tolerance of a `rounds = nothing` run. `maxiter = nothing` picks
+    `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
+    with a `rounds` count is an error.
+  - `merge`: the final b-step, [`SumMerge`](@ref) (default), [`QuadMerge`](@ref) or
+    [`MaxMerge`](@ref).
+  - `arule`: `:marginal` (default) alternates [`marginal_weights`](@ref) with the b-step;
+    `:geomean` fits `log Ũ_kj ≈ log a_k + log b_j` instead and prescribes no `targets`.
+  - `root`, `cgiters`: passed to [`tape_potentials`](@ref) for the tape-potential start. Naming
+    them on a call that does not reach that start is an error.
+  - `check = true`: verify the returned pair against the surrogate.
 
-For `m ≠ n` the marginal alternation's two normalizations disagree by the factor `m/n`, a pure
-gauge drift that is geometric in the round count; each round therefore renormalizes by the power
-of two nearest `a`'s geometric mean, which is exact in floating point and leaves every product
-`a_k b_j` bit-identical.
+# Returns
 
-The tape form with `merge = SumMerge(), arule = :marginal` (the default) runs both steps as `O(L)`
-sweeps ([`abs_forward`](@ref) seeded `1/b_j` at the inputs, [`abs_reverse`](@ref) seeded `1/a_k`
-at the output nodes) without ever forming `Ũ`; this is the matrix-free path. Every other combination
-needs per-output separation, so the tape form forms the surrogate once (`O(mL)`, diagnostic tier)
-and balances it explicitly. The matrix form accepts any nonnegative magnitude matrix (a surrogate
-`Ũ`, or `abs.(J)`).
+`a` and `b` by output position and input, `iters` rounds run, `delta` the quantity the convergence
+test applies to (the gauge-invariant product change `max_kj |log((a_k b_j)_new/(a_k b_j)_old)|`,
+or the relative row-marginal residual `max_k |∑_j Ũ_kj/(a_k b_j r_k) - 1|` for non-uniform
+targets), and `roots`, `nties` from [`tape_potentials`](@ref) when the tape-potential start was
+used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`.
 
-`check` verifies the returned pair covers the surrogate. The tape form must form `Ũ` to do so,
-so checking adds `O(mL)` to the `O(L)` matrix-free path; the matrix form already holds
-`Utilde` and checks against it for the cost of one pass over its entries.
+# Cost
 
-A zero row of `Ũ` (an output insensitive to every input) gets `a_k = 0`; a zero column (a dead
-input) gets `b_j = 0`; both are exact and minimal.
+The tape form with `merge = SumMerge(), arule = :marginal` runs as `O(L)` sweeps per round and
+never forms `Ũ`. Every other combination, and `check = true`, forms it at `O(m*L)`.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> bal = DerivativeCovers.balance_cover(r, [0.5, 2.0, -1.0]);
+
+julia> jc = cover_jacobian(WithDiagnostics(), r, [0.5, 2.0, -1.0]; a = bal.a);
+
+julia> bal.iters, all(jc.b_max .<= bal.b)
+(4, true)
+```
 """
 function balance_cover(
         t::Tape{T}, outidxs::AbstractVector{<:Integer}; merge::MergeRule = SumMerge(),
-        arule::Symbol = :marginal, a0 = nothing, maxiter::Union{Nothing, Integer} = nothing,
-        rtol::Real = eps(float(real(T)))^(2 // 3), check::Bool = true
+        arule::Symbol = :marginal, targets = nothing, start = nothing, a0 = nothing,
+        root = nothing, cgiters::Integer = 0,
+        maxiter::Union{Nothing, Integer} = nothing, rounds = missing,
+        rtol::Union{Nothing, Real} = nothing, check::Bool = true
     ) where {T}
-    m, N = length(outidxs), nnodes(t)
-    maxiter = _resolve_maxiter(maxiter, arule)
-    if !(merge isa SumMerge) || arule !== :marginal
-        # Other strategies need separate output channels; materialize the surrogate once.
-        return balance_cover(jacobian_surrogate(t, outidxs); merge, arule, a0, maxiter, rtol, check)
-    end
-    a = _balance_start(a0, m, T)
+    return _balance_tape(
+        t, outidxs, _live_info(t, outidxs);
+        merge, arule, targets, start, a0, root, cgiters, maxiter, rounds, rtol, check
+    )
+end
 
-    bstep = a -> begin
-        theta = zeros(T, N)
-        anydead = false
-        for (k, o) in enumerate(outidxs)
-            if a[k] > 0
-                theta[o] += 1 / a[k]
-            else
-                anydead = true
-            end
-        end
-        if anydead
-            # A zero output weight is valid only for an output with no live input path.
-            ind = zeros(T, N)
-            for (k, o) in enumerate(outidxs)
-                a[k] == 0 && (ind[o] = 1)
-            end
-            reach = abs_reverse(t, ind)
-            for j in 1:t.ninputs
-                reach[j] == 0 ||
-                    throw(ArgumentError("a is zero on an output that input $j reaches; no input cover can cover it"))
-            end
-        end
-        abs_reverse(t, theta)[1:t.ninputs]
+# Everything the tape path needs, with structural liveness supplied by the caller so one public
+# call computes it once. Targets, budget and start are resolved here and nowhere else: the
+# materialized branch hands `_balance_matrix` the resolved values and the structural pattern, so
+# nothing is re-derived from the numeric zeros of `Ũ`.
+function _balance_tape(
+        t::Tape{T}, outidxs::AbstractVector{<:Integer}, li::LiveInfo;
+        merge::MergeRule = SumMerge(), arule::Symbol = :marginal, targets = nothing,
+        start = nothing, a0 = nothing, root = nothing, cgiters::Integer = 0,
+        maxiter::Union{Nothing, Integer} = nothing, rounds = missing,
+        rtol::Union{Nothing, Real} = nothing, check::Bool = true
+    ) where {T}
+    m = length(outidxs)
+    maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, T)
+    tgt = _tape_targets(targets, arule, t, outidxs, m, T, li)
+    matrixpath = !(merge isa SumMerge) || arule !== :marginal
+    _check_start(start, a0, root, cgiters, !matrixpath)
+    if matrixpath
+        # Other strategies need separate output channels; materialize the surrogate once. Its zeros
+        # must match the structural pattern entrywise before anything reads them.
+        Utilde = jacobian_surrogate(t, outidxs)
+        _check_surrogate_support(t, outidxs, Utilde, li)
+        return _balance_matrix(
+            Utilde, tgt, li.liverow, li.livecol, merge, arule, start, a0,
+            maxiter, rounds, rtol, check, :flow
+        )
     end
-    astep = b -> marginal_weights(t, outidxs, b)
 
-    a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(SumMerge()))
+    roots, nties = nothing, nothing
+    if a0 === nothing && something(start, :covariant) === :covariant
+        a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
+    end
+    a = _balance_start(a0, m, T, li.liverow)
+
+    rawbstep = a -> _sum_merge_b(t, outidxs, a, li)
+    anumstep = b -> _marginal_weights(t, outidxs, b, li)
+    if tgt === nothing
+        a, b, iters, delta =
+            _balance(rawbstep, anumstep, a, maxiter, rtol, _marginal_hint(SumMerge(), :flow); rounds)
+    else
+        a, iters, delta = _balance_targets(anumstep, rawbstep, a, tgt..., maxiter, rtol, rounds)
+        # The normalized iterate is not a cover; the plain sum merge for this `a` is.
+        b = rawbstep(a)
+    end
+    _check_cover_factors(a, b, li)
     if check
         Utilde = jacobian_surrogate(t, outidxs)
-        r = jacobian_ratio(Utilde, a, b)
-        r <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the surrogate: worst ratio $r")
+        _check_surrogate_support(t, outidxs, Utilde, li)
+        rworst = jacobian_ratio(Utilde, a, b)
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
+            error("balanced pair does not cover the surrogate: worst ratio $rworst")
     end
-    return (; a, b, iters, delta)
+    return (; a, b, iters, delta, roots, nties)
 end
 
 function balance_cover(r, x0::AbstractVector; kwargs...)
@@ -472,32 +643,94 @@ end
 
 function balance_cover(
         Utilde::AbstractMatrix; merge::MergeRule = SumMerge(), arule::Symbol = :marginal,
-        a0 = nothing, maxiter::Union{Nothing, Integer} = nothing,
-        rtol::Real = eps(float(real(eltype(Utilde))))^(2 // 3), check::Bool = true
+        targets = nothing, start = nothing, a0 = nothing, root = nothing,
+        cgiters::Integer = 0, maxiter::Union{Nothing, Integer} = nothing,
+        rounds = missing, rtol::Union{Nothing, Real} = nothing, check::Bool = true
     )
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
-    maxiter = _resolve_maxiter(maxiter, arule)
+    T = float(real(eltype(Utilde)))
+    maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, T)
     m, n = size(Utilde)
-    a = _balance_start(a0, m, float(real(eltype(Utilde))))
+    tgt = _matrix_targets(targets, arule, Utilde, m, n, T)
+    _check_start(start, a0, root, cgiters, false)
+    liverow = BitVector(any(!iszero, view(Utilde, k, :)) for k in 1:m)
+    livecol = BitVector(any(!iszero, view(Utilde, :, j)) for j in 1:n)
+    return _balance_matrix(
+        Utilde, tgt, liverow, livecol, merge, arule, start, a0,
+        maxiter, rounds, rtol, check, :support
+    )
+end
+
+# The balancing itself, on a materialized magnitude matrix. `liverow`/`livecol` say which rows and
+# columns must end up with a positive factor, and `suggest` names the `targets` value the call form
+# that got here accepts.
+function _balance_matrix(
+        Utilde, tgt, liverow, livecol, merge::MergeRule, arule::Symbol, start, a0,
+        maxiter, rounds, rtol, check::Bool, suggest::Symbol
+    )
+    T = float(real(eltype(Utilde)))
+    m = size(Utilde, 1)
+    if a0 === nothing && something(start, :covariant) === :covariant
+        a0 = _surrogate_start(Utilde, T)
+    end
+    a = _balance_start(a0, m, T, liverow)
     bstep = a -> _merge_bstep(Utilde, a, merge)
 
-    if arule === :marginal
+    if arule === :marginal && tgt !== nothing
+        rtgt, ctgt = tgt
+        anumstep = b -> marginal_weights(Utilde, b)
+        bnumstep = a -> _merge_bstep(Utilde, a, SumMerge())
+        a, iters, delta =
+            _balance_targets(anumstep, bnumstep, a, rtgt, ctgt, maxiter, rtol, rounds)
+        # The normalized iterate is not a cover; the `merge` b-step for this `a` is.
+        b = bstep(a)
+    elseif arule === :marginal
         astep = b -> marginal_weights(Utilde, b)
-        a, b, iters, delta = _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(merge))
+        a, b, iters, delta =
+            _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(merge, suggest); rounds)
     elseif arule === :geomean
-        a, iters, delta = _geomean_fit(Utilde, a, maxiter, rtol)
+        a, iters, delta = _geomean_fit(Utilde, a, maxiter, rtol, rounds)
         b = bstep(a)
     else
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
-    if check
-        r = jacobian_ratio(Utilde, a, b)
-        r <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the matrix: worst ratio $r")
+    for k in eachindex(a)
+        (isfinite(a[k]) && (a[k] > 0 || !liverow[k])) ||
+            throw(ArgumentError("output weight a[$k] is $(a[k]) on a row with nonzero entries"))
     end
-    return (; a, b, iters, delta)
+    for j in eachindex(b)
+        (isfinite(b[j]) && (b[j] > 0 || !livecol[j])) ||
+            throw(ArgumentError("input weight b[$j] is $(b[j]) on a column with nonzero entries"))
+    end
+    if check
+        rworst = jacobian_ratio(Utilde, a, b)
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
+            error("balanced pair does not cover the matrix: worst ratio $rworst")
+    end
+    # The tape-potential start is the only one with a root, so the other paths report none.
+    return (; a, b, iters, delta, roots = nothing, nties = nothing)
+end
+
+# `b_j = ∑_k Ũ_kj/a_k` from one reverse sweep seeded `1/a_k` at the output nodes, never forming
+# the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
+# rather than a silently dropped row.
+function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
+    theta = zeros(T, nnodes(t))
+    for (k, o) in enumerate(outidxs)
+        if a[k] > 0
+            theta[o] += 1 / a[k]
+        else
+            li.liverow[k] && throw(
+                ArgumentError(
+                    "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
+                        "cover can cover its row"
+                )
+            )
+        end
+    end
+    return abs_reverse(t, theta)[1:t.ninputs]
 end
 
 # Merge-specific accumulation methods keep branches out of the inner loop.
@@ -525,14 +758,194 @@ end
 _resolve_maxiter(maxiter, arule::Symbol) =
     maxiter === nothing ? (arule === :geomean ? 10_000 : 1_000) : maxiter
 
+# `rounds` is a fixed budget and `maxiter` bounds a run to convergence, so exactly one of them
+# governs a call. `rounds === missing` means the caller said nothing about it: tuning a convergence
+# run with `maxiter` or `rtol` then asks for one, and otherwise the default budget applies.
+function _resolve_budget(maxiter, rounds, rtol, arule::Symbol, ::Type{T}) where {T}
+    rtolv = rtol === nothing ? eps(float(real(T)))^(2 // 3) : rtol
+    rounds === missing &&
+        (rounds = (maxiter === nothing && rtol === nothing) ? _DEFAULT_ROUNDS : nothing)
+    rounds === nothing && return _resolve_maxiter(maxiter, arule), nothing, rtolv
+    for (name, v) in (("maxiter", maxiter), ("rtol", rtol))
+        v === nothing || throw(
+            ArgumentError(
+                "$name tunes a run to convergence and rounds is a fixed budget, so they cannot " *
+                    "be combined; got $name=$v with rounds=$rounds (pass rounds=nothing to converge)"
+            )
+        )
+    end
+    rounds >= 0 || throw(ArgumentError("rounds must be nonnegative, got $rounds"))
+    return 0, Int(rounds), rtolv
+end
+
+const _DEFAULT_ROUNDS = 4
+
 # Non-convergence hint for the marginal alternation, specific to how each merge can fail.
-_marginal_hint(::MergeRule) =
-    "; the marginal alternation requires the surrogate's sparsity pattern to have total support — arule=:geomean converges for every pattern"
-_marginal_hint(::MaxMerge) =
-    "; the max merge's marginal alternation can enter a limit cycle — arule=:geomean converges for every pattern"
+# `suggest` is the pattern-feasible `targets` value of the call form that produced the failure.
+_marginal_hint(::MergeRule, suggest::Symbol) =
+    "; the marginal alternation with uniform targets requires the surrogate's sparsity pattern to have total support — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+_marginal_hint(::MaxMerge, suggest::Symbol) =
+    "; the max merge's marginal alternation can enter a limit cycle — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+
+# `potentialstart` says whether this call form reaches the tape-potential start, the only one the
+# root keywords mean anything for.
+function _check_start(start, a0, root, cgiters::Integer, potentialstart::Bool)
+    start === nothing || start === :covariant || start === :equal ||
+        throw(ArgumentError("start must be :covariant or :equal; got $(repr(start))"))
+    a0 === nothing || start === nothing ||
+        throw(ArgumentError("a0 replaces the start, so it cannot be combined with start=$(repr(start))"))
+    if !(potentialstart && a0 === nothing && something(start, :covariant) === :covariant)
+        root === nothing && cgiters == 0 ||
+            throw(
+            ArgumentError(
+                "root and cgiters belong to the tape-potential start, which this call does not " *
+                    "reach: it needs the tape form with merge=SumMerge(), arule=:marginal, " *
+                    "start=:covariant and no a0"
+            )
+        )
+    end
+    cgiters >= 0 || throw(ArgumentError("cgiters must be nonnegative, got $cgiters"))
+    return nothing
+end
+
+# Output weights `exp(θ)` from the tape potentials, shifted by a constant per component before
+# exponentiating. The shift is a gauge change: it leaves every product `a_k b_j` within a component
+# untouched. Centering on the midrange of each component's output potentials puts the largest and
+# smallest weights the same distance from 1, which is the placement that survives the widest
+# spread; a spread too wide even for that has no representable start at all. Dead outputs get zero.
+function _potential_start(t::Tape{T}, outidxs, root, cgiters::Integer, li::LiveInfo) where {T}
+    pot, comp = _tape_potentials(t, outidxs, li; root, cgiters)
+    TL = float(real(T))
+    ncomp = length(pot.roots)
+    lo, hi = fill(TL(Inf), ncomp), fill(TL(-Inf), ncomp)
+    for o in outidxs
+        pot.live[o] || continue
+        c = comp[o]
+        lo[c] = min(lo[c], pot.theta[o])
+        hi[c] = max(hi[c], pot.theta[o])
+    end
+    a0 = Vector{TL}(undef, length(outidxs))
+    for (k, o) in enumerate(outidxs)
+        if !pot.live[o]
+            a0[k] = zero(TL)
+            continue
+        end
+        c = comp[o]
+        a0[k] = exp(pot.theta[o] - (hi[c] + lo[c]) / 2)
+        (isfinite(a0[k]) && a0[k] > 0) || throw(
+            ArgumentError(
+                "the tape-potential start has no representable form: component $c spans " *
+                    "$(hi[c] - lo[c]) in log-scale, wider than $(TL) can hold even centered. " *
+                    "Use start=:equal, or supply a0."
+            )
+        )
+    end
+    return a0, pot.roots, pot.nties
+end
+
+# Output weights from MatrixCovers' scale-covariant asymmetric start on the surrogate. That
+# function returns a full pair; only the a-side is a start here, and the b-step supplies the rest.
+# `feasible = :none` keeps it a start rather than inflating it into a cover, which the b-step would
+# discard anyway. Unsupported rows come back zero, which is the convention used here as well.
+function _surrogate_start(Utilde, ::Type{T}) where {T}
+    a0, b0 = initialize_cover(Utilde; strategy = :covariant, feasible = :none)
+    # That routine balances the two sides against each other, so both must be representable for
+    # the pair it returns to mean anything.
+    (all(isfinite, a0) && all(isfinite, b0)) || throw(
+        ArgumentError(
+            "the covariant start has no representable form on this matrix: its log-scales span " *
+                "more than $(T) can hold. Use start=:equal, or supply a0."
+        )
+    )
+    return collect(T, a0)
+end
+
+const _TARGET_HINT =
+    "; these targets are realizable on this pattern, so this is slow convergence rather than " *
+    "drift — raise maxiter, take a fixed `rounds` budget, or use arule=:geomean"
+
+# Divide a marginal by its target, leaving a dead row or column at zero.
+function _divide_targets(v, tgt)
+    out = similar(v)
+    for i in eachindex(v, tgt)
+        out[i] = tgt[i] > 0 ? v[i] / tgt[i] : zero(eltype(out))
+    end
+    return out
+end
+
+# Resolve `targets` for the tape form: `nothing` for `:uniform`, else the validated pair `(r, c)`.
+# The keyword's own `nothing` means "unspecified", which is `:flow` here and no targets at all for
+# the geometric-mean fit, which has none to prescribe.
+function _tape_targets(targets, arule::Symbol, t::Tape, outidxs, m::Int, ::Type{T}, li::LiveInfo) where {T}
+    arule === :marginal || return _reject_targets(targets, arule)
+    targets === nothing && (targets = :flow)
+    targets === :uniform && return nothing
+    if targets === :flow || targets === :support
+        r, c = targets === :flow ? _flow_targets(t, outidxs, li) : _support_counts(t, outidxs, li)
+        return (collect(T, r), collect(T, c))
+    end
+    targets isa Tuple{AbstractVector, AbstractVector} ||
+        throw(ArgumentError("targets must be :flow, :support, :uniform, or a tuple (r, c) of marginals; got $(repr(targets))"))
+    return _check_targets(targets[1], targets[2], li.liverow, li.livecol, T)
+end
+
+# Resolve `targets` for the matrix form. `:support` counts the nonzero entries of each row and
+# column — the marginals of the support indicator, which has the pattern of `Utilde`.
+function _matrix_targets(targets, arule::Symbol, U, m::Int, n::Int, ::Type{T}) where {T}
+    arule === :marginal || return _reject_targets(targets, arule)
+    targets === nothing && (targets = :support)
+    targets === :flow &&
+        throw(ArgumentError("targets=:flow needs a tape: it reads the slot graph, which a magnitude matrix does not carry. Use :support"))
+    targets === :uniform && return nothing
+    rcount, ccount = zeros(T, m), zeros(T, n)
+    for j in 1:n, k in 1:m
+        U[k, j] == 0 && continue
+        rcount[k] += 1
+        ccount[j] += 1
+    end
+    targets === :support && return (rcount, ccount)
+    targets isa Tuple{AbstractVector, AbstractVector} ||
+        throw(ArgumentError("targets must be :support, :uniform, or a tuple (r, c) of marginals; got $(repr(targets))"))
+    return _check_targets(targets[1], targets[2], rcount .> 0, ccount .> 0, T)
+end
+
+# Only the marginal alternation normalizes to prescribed marginals; the geometric-mean fit has no
+# targets, so naming any is a mistake rather than something to ignore.
+function _reject_targets(targets, arule::Symbol)
+    targets === nothing ||
+        throw(ArgumentError("targets applies to the marginal alternation; arule=$(repr(arule)) prescribes no marginals"))
+    return nothing
+end
+
+# Explicit targets must be realizable on the pattern they are used with: positive exactly where a
+# row or column carries an entry, and with equal totals (the whole-row-set instance of the
+# feasibility condition).
+function _check_targets(r, c, liverow, livecol, ::Type{T}) where {T}
+    Base.require_one_based_indexing(r, c)
+    length(r) == length(liverow) ||
+        throw(DimensionMismatch("target r has length $(length(r)), expected $(length(liverow)) (one per output)"))
+    length(c) == length(livecol) ||
+        throw(DimensionMismatch("target c has length $(length(c)), expected $(length(livecol)) (one per input)"))
+    for (name, v, live) in (("r", r, liverow), ("c", c, livecol))
+        for i in eachindex(v, live)
+            if live[i]
+                v[i] > 0 ||
+                    throw(ArgumentError("target $name[$i] = $(v[i]) is not positive on a live $(name == "r" ? "output" : "input")"))
+            else
+                v[i] == 0 ||
+                    throw(ArgumentError("target $name[$i] = $(v[i]) is nonzero on a dead $(name == "r" ? "output" : "input"); its weight stays zero, so its target must too"))
+            end
+        end
+    end
+    sr, sc = sum(r), sum(c)
+    # The totals are commensurate and dimensionless, so a relative comparison is the right one.
+    abs(sr - sc) <= sqrt(eps(T)) * max(sr, sc) ||
+        throw(ArgumentError("target totals must agree: sum(r) = $sr, sum(c) = $sc"))
+    return (collect(T, r), collect(T, c))
+end
 
 # Coordinate descent for log U_kj ≈ log a_k + log b_j over nonzero entries.
-function _geomean_fit(U, a, maxiter, rtol)
+function _geomean_fit(U, a, maxiter, rtol, rounds)
     m, n = size(U)
     gstep = (weights, dim) -> begin
         out = zeros(_ratio_type(U, a), size(U, dim))
@@ -549,7 +962,10 @@ function _geomean_fit(U, a, maxiter, rtol)
     b = gstep(a, 2)
     _regauge!(a, b)
     delta = Inf
-    for iters in 1:maxiter
+    # A fixed budget stops early: every iterate of this fit is as covariant as the start, so what
+    # the remaining rounds would buy is accuracy alone.
+    budget = rounds === nothing ? maxiter : rounds
+    for iters in 1:budget
         aprev, bprev = a, b
         a = gstep(b, 1)
         b = gstep(a, 2)
@@ -557,8 +973,9 @@ function _geomean_fit(U, a, maxiter, rtol)
         ulo, uhi = _logchange_extrema(a, aprev)
         wlo, whi = _logchange_extrema(b, bprev)
         delta = max(uhi + whi, -(ulo + wlo))
-        delta <= rtol && return a, iters, delta
+        rounds === nothing && delta <= rtol && return a, iters, delta
     end
+    rounds === nothing || return a, rounds, delta
     error(
         "balance_cover(arule=:geomean) did not converge in $maxiter rounds: product still " *
             "changing by delta = $delta > rtol = $rtol. The geometric-mean fit converges for every " *
@@ -567,18 +984,31 @@ function _geomean_fit(U, a, maxiter, rtol)
     )
 end
 
-function _balance_start(a0, m, ::Type{T}) where {T}
-    a0 === nothing && return ones(T, m)
+# `liverow` marks the outputs some input reaches. A dead output's weight is zero throughout, so
+# its start must be too; every live one must start positive.
+function _balance_start(a0, m, ::Type{T}, liverow) where {T}
+    if a0 === nothing
+        return T[liverow[k] ? one(T) : zero(T) for k in 1:m]
+    end
     length(a0) == m ||
         throw(DimensionMismatch("a0 has length $(length(a0)), expected $m (one per output)"))
-    all(>(0), a0) || throw(ArgumentError("starting weights a0 must be strictly positive"))
+    for k in eachindex(a0, liverow)
+        ok = isfinite(a0[k]) && (liverow[k] ? a0[k] > 0 : a0[k] == 0)
+        ok || throw(
+            ArgumentError(
+                "starting weights a0 must be strictly positive on every live output and zero " *
+                    "on the rest; a0[$k] = $(a0[k]) on a $(liverow[k] ? "live" : "dead") output"
+            )
+        )
+    end
     return collect(T, a0)
 end
 
 # Shared balancing loop. Renormalizing by a power of two preserves every product exactly in
 # floating point. Convergence is measured on products, making `delta` invariant to the gauge
 # transformation `(a, b) -> (γa, b/γ)`.
-function _balance(bstep, astep, a, maxiter, rtol, hint = "")
+function _balance(bstep, astep, a, maxiter, rtol, hint = ""; rounds = nothing)
+    rounds === nothing || return _balance_budget(bstep, astep, a, rounds)
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     b = bstep(a)
     _regauge!(a, b)
@@ -637,6 +1067,80 @@ function _balance(bstep, astep, a, maxiter, rtol, hint = "")
     error("balance_cover did not converge in $maxiter rounds: product still changing by delta = $delta > rtol = $rtol$hint")
 end
 
+# Alternation toward prescribed marginals. `anum(b)` returns `∑_j Ũ_kj/b_j` and `bnum(a)` returns
+# `∑_k Ũ_kj/a_k`; dividing them by `r` and `c` gives the two normalized steps.
+#
+# Convergence is measured on the relative row-marginal residual
+# `max_k |∑_j R_kj/r_k - 1|` with `R_kj = Ũ_kj/(a_k b_j)`, which is what the iteration is trying to
+# drive to zero. The product increment is not a substitute: on slowly converging supports it falls
+# below `rtol` while the marginals are still far off. The column residual carries no information —
+# the b-step sets `∑_k R_kj = c_j` exactly — and the row residual is read from `anum(b)`, the sweep
+# the next round's a-step needs, so testing it costs one extra `anum` over the whole run and
+# nothing per round.
+function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
+    b = _divide_targets(bnum(a), c)
+    _regauge!(a, b)
+    an = anum(b)
+    delta = _row_residual(an, a, r)
+    if rounds !== nothing
+        rounds >= 0 || throw(ArgumentError("rounds must be nonnegative, got $rounds"))
+        for _ in 1:rounds
+            a = _divide_targets(an, r)
+            b = _divide_targets(bnum(a), c)
+            _regauge!(a, b)
+            an = anum(b)
+            delta = _row_residual(an, a, r)
+        end
+        return a, rounds, delta
+    end
+    maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
+    delta <= rtol && return a, 0, delta
+    for iters in 1:maxiter
+        a = _divide_targets(an, r)
+        b = _divide_targets(bnum(a), c)
+        _regauge!(a, b)
+        an = anum(b)
+        delta = _row_residual(an, a, r)
+        delta <= rtol && return a, iters, delta
+    end
+    return error(
+        "balance_cover did not converge in $maxiter rounds: the relative row-marginal residual " *
+            "is still delta = $delta > rtol = $rtol$_TARGET_HINT"
+    )
+end
+
+# `∑_j R_kj / r_k - 1` in absolute value, worst over the live rows. `anum[k] = ∑_j Ũ_kj/b_j`, so
+# `∑_j R_kj = anum[k]/a[k]`. Dead rows carry zero weight and zero target and are skipped.
+function _row_residual(anum, a, r)
+    worst = zero(float(real(eltype(anum))))
+    for k in eachindex(anum, a, r)
+        r[k] > 0 || continue
+        a[k] > 0 ||
+            throw(ArgumentError("a is zero on live output $k; no input cover can cover it"))
+        worst = max(worst, abs(anum[k] / (a[k] * r[k]) - 1))
+    end
+    return worst
+end
+
+# Exactly `rounds` alternation rounds, with no convergence, drift or stall test: the caller has
+# chosen a budget rather than a tolerance, and whatever the rounds reach is the answer.
+function _balance_budget(bstep, astep, a, rounds)
+    rounds >= 0 || throw(ArgumentError("rounds must be nonnegative, got $rounds"))
+    b = bstep(a)
+    _regauge!(a, b)
+    delta = Inf
+    for _ in 1:rounds
+        aprev, bprev = a, b
+        a = astep(b)
+        b = bstep(a)
+        _regauge!(a, b)
+        ulo, uhi = _logchange_extrema(a, aprev)
+        wlo, whi = _logchange_extrema(b, bprev)
+        delta = max(uhi + whi, -(ulo + wlo))
+    end
+    return a, b, rounds, delta
+end
+
 # Log-ratio of the largest to the smallest positive weight. Zero weights mark dead outputs or
 # inputs and are excluded: they are exact, and stay zero for the whole run.
 function _logspread(v)
@@ -651,17 +1155,42 @@ function _logspread(v)
 end
 
 function _regauge!(a, b)
-    lsum = 0.0
-    nnz = 0
+    # `a` and `1 ./ b` both scale by the same factor under the gauge, so centering their combined
+    # log range is the shift that keeps the most room on both sides at once.
+    lo, hi = Inf, -Inf
+    alo, ahi, blo, bhi = Inf, -Inf, Inf, -Inf
     for x in a
         x > 0 || continue
-        lsum += log2(x)
-        nnz += 1
+        l = log2(x)
+        alo, ahi = min(alo, l), max(ahi, l)
+        lo, hi = min(lo, l), max(hi, l)
     end
-    nnz == 0 && return
-    gamma = exp2(round(lsum / nnz))
+    for x in b
+        x > 0 || continue
+        l = -log2(x)
+        blo, bhi = min(blo, -l), max(bhi, -l)
+        lo, hi = min(lo, l), max(hi, l)
+    end
+    lo <= hi || return
+    gamma = exp2(round((lo + hi) / 2))
     a ./= gamma
     b .*= gamma
+    for (i, x) in pairs(a)
+        (isfinite(x) && (x > 0 || x == 0)) || throw(
+            ArgumentError(
+                "no gauge keeps both factors representable: a spans $(ahi - alo) and b spans " *
+                    "$(bhi - blo) in log2, and together they need more than $(eltype(a)) has"
+            )
+        )
+    end
+    for (j, x) in pairs(b)
+        isfinite(x) || throw(
+            ArgumentError(
+                "no gauge keeps both factors representable: a spans $(ahi - alo) and b spans " *
+                    "$(bhi - blo) in log2, and together they need more than $(eltype(b)) has"
+            )
+        )
+    end
     return
 end
 

@@ -203,8 +203,13 @@ function scaled_singular_value(
         throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
     axes(a) == axes(outidxs) ||
         throw(DimensionMismatch("a and outidxs must share indices: $(axes(a)) vs $(axes(outidxs))"))
-    all(>(0), a) && all(>(0), b) ||
-        throw(ArgumentError("the matrix-free singular value requires strictly positive a and b"))
+    # Power iteration divides by both factors, so unlike the dense method there is nothing it can
+    # do with a zero weight, even on a row or column that vanishes.
+    for (name, v) in (("a", a), ("b", b))
+        k = findfirst(!(>(0)), v)
+        k === nothing ||
+            throw(ArgumentError("the matrix-free singular value requires strictly positive a and b; $name[$k] = $(v[k])"))
+    end
 
     T = promote_type(eltype(t), float(real(promote_type(eltype(a), eltype(b)))))
     v = randn(rng, T, n)

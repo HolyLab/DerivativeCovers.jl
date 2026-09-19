@@ -54,7 +54,7 @@
     @testset "compose_hessian_cover vs ForwardDiff" begin
         y0 = Fsub(x0)
         d = declare_submap(Fsub, x0)
-        jc = cover_jacobian(Fsub, x0)
+        jc = cover_jacobian(WithDiagnostics(), Fsub, x0)
         hg = cover_hessian(WithDiagnostics(), gout, y0)
         gamma = abs.(ForwardDiff.gradient(gout, y0))
         res = compose_hessian_cover(hg.h_sum, gamma, jc.a, jc.b_max, d.S)
@@ -69,7 +69,7 @@
         gl = y -> exp(y[1]) + y[2] * y[3]
         dl = declare_submap(v -> A * v, xl)
         @test all(iszero, dl.S)
-        jcl = cover_jacobian(v -> A * v, xl)
+        jcl = cover_jacobian(WithDiagnostics(), v -> A * v, xl)
         hgl = cover_hessian(WithDiagnostics(), gl, A * xl)
         gammal = abs.(ForwardDiff.gradient(gl, A * xl))
         resl = compose_hessian_cover(hgl.h_sum, gammal, jcl.a, jcl.b_max, nothing)
@@ -127,7 +127,7 @@
         J = ForwardDiff.jacobian(progt, x0)
         t, outidxs = tape_function(progd, x0)
         @test adjoints(t, outidxs)[:, 1:t.ninputs] ≈ J rtol = 1.0e-12
-        jc = cover_jacobian(t, outidxs)
+        jc = cover_jacobian(WithDiagnostics(), t, outidxs)
         @test jacobian_ratio(J, jc.a, jc.b_max) <= GATE
         bal = balance_cover(t, outidxs)
         @test jacobian_ratio(J, bal.a, bal.b) <= GATE

@@ -68,7 +68,7 @@
         f, x0 = programs[1][2], programs[1][3]
         t, outidxs = tape_function(f, x0)
         J = ForwardDiff.jacobian(f, x0)
-        c = cover_jacobian(t, outidxs)
+        c = cover_jacobian(WithDiagnostics(), t, outidxs)
 
         for b in (c.b_sum, c.b_quad, c.b_max)
             Jhat = equilibrate(J, c.a, b)
@@ -108,7 +108,7 @@
     @testset "matrix-free singular value converges from below — $name" for (name, f, x0) in programs
         t, outidxs = tape_function(f, x0)
         J = ForwardDiff.jacobian(f, x0)
-        c = cover_jacobian(t, outidxs)
+        c = cover_jacobian(WithDiagnostics(), t, outidxs)
         b = max.(c.b_sum, eps())            # the power iteration needs strict positivity
 
         exact = scaled_singular_value(J, c.a, b)
@@ -124,7 +124,7 @@
     @testset "matrix-free singular value argument checks" begin
         f, x0 = programs[1][2], programs[1][3]
         t, outidxs = tape_function(f, x0)
-        c = cover_jacobian(t, outidxs)
+        c = cover_jacobian(WithDiagnostics(), t, outidxs)
         @test_throws "strictly positive" scaled_singular_value(t, outidxs, c.a, zeros(3))
         @test_throws "expected 3 (one per input)" scaled_singular_value(t, outidxs, c.a, ones(2))
         @test_throws "a and outidxs must share indices" scaled_singular_value(
@@ -143,7 +143,7 @@
         x0 = [0.3, -0.2, 0.5]
         t, outidxs = tape_function(f, x0)
         J = ForwardDiff.jacobian(f, x0)
-        c = cover_jacobian(t, outidxs)
+        c = cover_jacobian(WithDiagnostics(), t, outidxs)
         a, b = c.a, c.b_max
 
         # An entrywise-minimal cover saturates an entry, so sigma >= 1 and the clamp makes the

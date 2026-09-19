@@ -217,8 +217,8 @@ under either rule. So the measurement bounds what a *dense* array primitive cost
 propagates a constant matrix's sparsity recovers the block-diagonal case, while nothing recovers
 the last one below.
 
-Against the unbalanced pair from `cover_jacobian` the price is exact rather than statistical. `a` is
-all ones there, so a component's `a`-mass is its output count and the bound degrades by the factor
+Against the uniform-weight pair (`cover_jacobian(t, outidxs; a = ones(m))`) the price is exact
+rather than statistical. With `a` all ones a component's `a`-mass is its output count and the bound degrades by the factor
 by which merging enlarges it: merging 2, 4 and 8 equal blocks costs 2.000, 4.000 and 8.000.
 
 Two consequences do not appear as a looseness ratio. A dead input is found by value liveness and not

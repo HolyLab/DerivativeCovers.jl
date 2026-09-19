@@ -122,9 +122,13 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
 
         jc = cover_jacobian(t, outidxs)
         @test jc isa JacobianCover{Float32}
-        @test fieldeltypes(jc) == [Float32]
+        # `roots` indexes nodes, so it stays `Int` whatever the tape's precision is.
+        @test fieldeltypes(jc) == [Float32, Int]
+        jd = cover_jacobian(WithDiagnostics(), t, outidxs)
+        @test jd isa JacobianDiagnostics{Float32}
+        @test fieldeltypes(jd) == [Float32, Int]
         @test eltype(jacobian_surrogate(t, outidxs)) === Float32
-        @test cover_jacobian_hybrid(t, outidxs, 2) isa Vector{Float32}
+        @test cover_jacobian_hybrid(t, outidxs, 2).b isa Vector{Float32}
         @test eltype(marginal_weights(t, outidxs, ones(Float32, 3))) === Float32
 
         bc = balance_cover(t, outidxs)
@@ -177,7 +181,9 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         # Float64 weights do not widen a Float32 cover: the tape's type is the cover's.
         jc = cover_jacobian(t, outidxs; a = [1.0, 2.0, 0.5])
         @test jc isa JacobianCover{Float32}
-        @test cover_jacobian_hybrid(t, outidxs, 2; a = [1.0, 2.0, 0.5]) isa Vector{Float32}
+        @test cover_jacobian(WithDiagnostics(), t, outidxs; a = [1.0, 2.0, 0.5]) isa
+            JacobianDiagnostics{Float32}
+        @test cover_jacobian_hybrid(t, outidxs, 2; a = [1.0, 2.0, 0.5]).b isa Vector{Float32}
         @test eltype(balance_cover(t, outidxs; a0 = [1.0, 2.0, 0.5]).a) === Float32
         # The weights are copied on the way in, so the caller's vector is never rescaled.
         a0 = [1.0, 2.0, 0.5]

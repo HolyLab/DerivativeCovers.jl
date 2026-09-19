@@ -8,7 +8,7 @@
     x0 = [0.3, 0.7, 1.1, -0.4]
     t, outidxs = tape_function(prog, x0)
     U = DerivativeCovers.jacobian_surrogate(t, outidxs)
-    jc = cover_jacobian(t, outidxs)
+    jc = cover_jacobian(WithDiagnostics(), t, outidxs)
     a, b = jc.a, jc.b_max
     J = ForwardDiff.jacobian(prog, x0)
 
@@ -97,7 +97,7 @@
         # x[4] is untouched, so its Gram column vanishes and its scale is exactly zero.
         pd = xs -> [sin(xs[1]) * xs[2], xs[2] * exp(xs[1]), cos(xs[3])]
         td, od = tape_function(pd, x0)
-        jcd = cover_jacobian(td, od)
+        jcd = cover_jacobian(WithDiagnostics(), td, od)
         s = gramcover(jcd.a, jcd.b_max, td, od)
         @test s[4] == 0
         @test all(>(0), s[1:3])

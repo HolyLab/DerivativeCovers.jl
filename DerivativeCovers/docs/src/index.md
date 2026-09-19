@@ -195,6 +195,7 @@ HessianDiagnostics
 ForwardCover
 CoverLattice
 JacobianCover
+JacobianDiagnostics
 NLSCover
 NLSDiagnostics
 VarianceCover

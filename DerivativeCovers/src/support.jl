@@ -73,6 +73,34 @@ without ever forming `Ũ`.
 """
 function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
     N, n = nnodes(t), t.ninputs
+    live = _live_nodes(t, outidxs)
+
+    uf = UnionFind(N)
+    for k in (n + 1):N
+        live[k] || continue
+        ps, ds = t.parents[k], t.ds[k]
+        for i in eachindex(ps)
+            (live[ps[i]] && !iszero(ds[i])) || continue
+            _union!(uf, k, ps[i])
+        end
+    end
+    ids, ncomp = _label_components(uf, live)
+    m = length(outidxs)
+    # Component rows follow output position, not the axes of outidxs.
+    rowcomp = Vector{Int}(undef, m)
+    for (p, k) in enumerate(outidxs)
+        rowcomp[p] = ids[k]
+    end
+    colcomp = ids[1:n]
+    return SupportComponents(rowcomp, colcomp, ncomp, Base.OneTo(m), Base.OneTo(n))
+end
+
+# Nodes lying on some input-to-output path whose local derivatives are all nonzero: one forward
+# reachability pass from the inputs and one reverse pass from the output nodes, O(L) together.
+# Only the slots between two live nodes carry sensitivity, so these are the nodes the surrogate's
+# support is built from.
+function _live_nodes(t::Tape, outidxs::AbstractVector{<:Integer})
+    N, n = nnodes(t), t.ninputs
     for k in outidxs
         1 <= k <= N || throw(BoundsError(1:N, k))
     end
@@ -101,24 +129,5 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
             iszero(ds[i]) || (reach[ps[i]] = true)
         end
     end
-    live = dep .& reach
-
-    uf = UnionFind(N)
-    for k in (n + 1):N
-        live[k] || continue
-        ps, ds = t.parents[k], t.ds[k]
-        for i in eachindex(ps)
-            (live[ps[i]] && !iszero(ds[i])) || continue
-            _union!(uf, k, ps[i])
-        end
-    end
-    ids, ncomp = _label_components(uf, live)
-    m = length(outidxs)
-    # Component rows follow output position, not the axes of outidxs.
-    rowcomp = Vector{Int}(undef, m)
-    for (p, k) in enumerate(outidxs)
-        rowcomp[p] = ids[k]
-    end
-    colcomp = ids[1:n]
-    return SupportComponents(rowcomp, colcomp, ncomp, Base.OneTo(m), Base.OneTo(n))
+    return dep .& reach
 end
