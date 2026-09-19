@@ -123,9 +123,10 @@
 
         # Everything else numbers its outputs by position, so offset outidxs is accepted and
         # leaves no trace in the result.
-        @test cover_jacobian(t, oidx).Utilde == cover_jacobian(t, outidxs).Utilde
-        @test cover_jacobian(t, oidx).b_max == cover_jacobian(t, outidxs).b_max
-        @test cover_jacobian_hybrid(t, oidx, 2) == cover_jacobian_hybrid(t, outidxs, 2)
+        @test cover_jacobian(WithDiagnostics(), t, oidx).Utilde ==
+            cover_jacobian(WithDiagnostics(), t, outidxs).Utilde
+        @test cover_jacobian(t, oidx).b_sum == cover_jacobian(t, outidxs).b_sum
+        @test cover_jacobian_hybrid(t, oidx, 2).b == cover_jacobian_hybrid(t, outidxs, 2).b
         @test jacobian_surrogate(t, oidx) == jacobian_surrogate(t, outidxs)
         @test adjoints(t, oidx) == adjoints(t, outidxs)
 

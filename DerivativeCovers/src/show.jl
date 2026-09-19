@@ -61,7 +61,15 @@ Base.show(io::IO, ::MIME"text/plain", c::CoverLattice) =
 Base.show(io::IO, c::JacobianCover) = print(io, "JacobianCover(", c.m, "x", c.n, ")")
 
 Base.show(io::IO, ::MIME"text/plain", c::JacobianCover) =
-    print(io, "JacobianCover: ", c.m, " outputs x ", c.n, " inputs; a, b_sum, b_quad, b_max")
+    print(io, "JacobianCover: ", c.m, " outputs x ", c.n, " inputs; a, b_sum")
+
+Base.show(io::IO, c::JacobianDiagnostics) =
+    print(io, "JacobianDiagnostics(", c.m, "x", c.n, ")")
+
+Base.show(io::IO, ::MIME"text/plain", c::JacobianDiagnostics) = print(
+    io, "JacobianDiagnostics: ", c.m, " outputs x ", c.n,
+    " inputs; a, b_sum, b_quad, b_max, Utilde"
+)
 
 Base.show(io::IO, c::NLSCover) =
     print(io, "NLSCover(", c.m, " residuals, ", length(c.grad), " inputs)")

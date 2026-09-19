@@ -19,7 +19,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
     nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
     local_covers, balanced_split, variance_seeds, dependency_sweep,
-    jacobian_surrogate, marginal_weights, balance_cover,
+    jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge
 # This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
 using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
@@ -53,6 +53,7 @@ include("nls.jl")
 include("vectoroutput.jl")
 include("support.jl")
 include("jacobian.jl")
+include("covariant.jl")
 include("gram.jl")
 include("jacobianconverse.jl")
 include("equilibrate.jl")
@@ -104,7 +105,8 @@ include("genericaxes.jl")
                 :cover_hybrid, :cover_jacobian_hybrid, :cover_lattice,
                 :CoverOnly, :WithDiagnostics,
                 :TangentChannel, :AbsoluteTangents, :SignedTangents,
-                :CoverLattice, :HessianCover, :HessianDiagnostics, :JacobianCover, :NLSCover,
+                :CoverLattice, :HessianCover, :HessianDiagnostics,
+                :JacobianCover, :JacobianDiagnostics, :NLSCover,
                 :NLSDiagnostics, :VarianceCover,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
@@ -141,7 +143,8 @@ include("genericaxes.jl")
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :value_bounds_split, :dispatchcurvature,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-            :balance_cover, :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
+            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
+            :balance_cover, :tape_potentials,
         )
         for sym in private
             @test isdefined(DerivativeCovers, sym)
@@ -217,6 +220,7 @@ include("genericaxes.jl")
             cover_lattice(f, x0),
             forward_cover(f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
+            cover_jacobian(WithDiagnostics(), xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_variance(f, x0),
@@ -230,8 +234,9 @@ include("genericaxes.jl")
             end
         end
         @test sprint(show, results[5]) == "JacobianCover(2x3)"
-        @test sprint(show, results[6]) == "NLSCover(2 residuals, 3 inputs)"
-        @test sprint(show, results[7]) == "NLSDiagnostics(2 residuals, 3 inputs)"
+        @test sprint(show, results[6]) == "JacobianDiagnostics(2x3)"
+        @test sprint(show, results[7]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[8]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin

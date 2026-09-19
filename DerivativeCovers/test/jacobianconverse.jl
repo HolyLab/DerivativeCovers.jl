@@ -35,13 +35,13 @@
 
     @testset "indistinguishability: every magnitude object is bit-identical" begin
         pm, pp = pair(; nout = 5, m = 6, sigma = 0.5, seed = 4)
-        cm = cover_jacobian(pm.r, pm.x0)
-        cp = cover_jacobian(pp.r, pp.x0)
+        cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0)
+        cp = cover_jacobian(WithDiagnostics(), pp.r, pp.x0)
         @test cm.Utilde == cp.Utilde
         @test cm.b_sum == cp.b_sum && cm.b_quad == cp.b_quad && cm.b_max == cp.b_max
         tm, om = tape_function(pm.r, pm.x0)
         tp, op = tape_function(pp.r, pp.x0)
-        @test cover_jacobian_hybrid(tm, om, 3) == cover_jacobian_hybrid(tp, op, 3)
+        @test cover_jacobian_hybrid(tm, om, 3).b == cover_jacobian_hybrid(tp, op, 3).b
         balm = balance_cover(cm.Utilde; merge = MaxMerge(), arule = :geomean)
         balp = balance_cover(cp.Utilde; merge = MaxMerge(), arule = :geomean)
         @test balm.a == balp.a && balm.b == balp.b
@@ -66,7 +66,8 @@
             pm, pp = pair(; kwargs...)
             Jm, Jp = exact_jacobian(pm), exact_jacobian(pp)
             kappa = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))    # constant down each column
-            cm = cover_jacobian(pm.r, pm.x0)
+            # Uniform output weights: the merge-gap identity below is a statement about them.
+            cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(noutputs(pm)))
 
             # The minimax cover of the (rank-1) surrogate attains looseness kappa_j at every
             # entry of the cancel member — the theorem says no magnitude method beats it.

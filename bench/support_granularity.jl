@@ -92,7 +92,8 @@ columns, so the looseness ratio isolates their effect.
 function granularity(f, x0)
     t, outidxs = tape_function(f, x0)
     scv, scs = support_components(t, outidxs), structural_components(t, outidxs)
-    r = cover_jacobian(t, outidxs)
+    # Uniform output weights: the price below is stated against them.
+    r = cover_jacobian(t, outidxs; a = ones(length(outidxs)))
     G = let J = ForwardDiff.jacobian(f, x0)
         J' * J
     end

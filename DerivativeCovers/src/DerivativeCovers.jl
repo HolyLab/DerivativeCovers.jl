@@ -25,7 +25,7 @@ using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
 using SparseArrays: SparseArrays, AbstractSparseVector
 using StaticArrays: StaticMatrix, StaticVector, similar_type
-using MatrixCovers: SupportComponents
+using MatrixCovers: SupportComponents, initialize_cover
 import MatrixCovers: support_components, gramcover, gramcover!
 
 # Main entry points and result types.
@@ -35,7 +35,8 @@ export cover_hessian, cover_jacobian, cover_nls, cover_variance
 export cover_hybrid, cover_jacobian_hybrid, cover_lattice
 export CoverOnly, WithDiagnostics
 export TangentChannel, AbsoluteTangents, SignedTangents
-export CoverLattice, HessianCover, HessianDiagnostics, JacobianCover
+export CoverLattice, HessianCover, HessianDiagnostics
+export JacobianCover, JacobianDiagnostics
 export NLSCover, NLSDiagnostics, VarianceCover
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
@@ -89,7 +90,9 @@ include("variance.jl")
 include("spectral.jl")
 include("metrics.jl")
 include("nls.jl")
+# `covariant.jl` defines `LiveInfo`, which appears in `jacobian.jl` method signatures.
 include("support.jl")
+include("covariant.jl")
 include("jacobian.jl")
 include("gram.jl")
 include("equilibrate.jl")

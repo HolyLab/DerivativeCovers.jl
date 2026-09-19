@@ -824,17 +824,29 @@ With `theta` from [`local_covers`](@ref), `abar[1:t.ninputs]` is the sum-merge c
 merge in a single gradient-cost sweep, because `sum_k s_k = sum_j theta[j] * utilde_j` is linear
 in the seeds.
 """
-function abs_reverse(t::Tape, theta::AbstractVector)
+abs_reverse(t::Tape, theta::AbstractVector) = _reverse_sweep(_absslot, t, theta)
+
+# Reverse sweep with a pluggable per-slot weight. `w(d, k, i, p)` sees the slot's first partial and
+# both of its endpoints, so `_absslot` gives [`abs_reverse`](@ref) and the flow weightings of
+# `covariant.jl` divide by a node's degree. A zero weight is skipped, which also keeps an infinite
+# accumulator out of a slot that transmits nothing.
+function _reverse_sweep(w::F, t::Tape, theta::AbstractVector) where {F}
     abar = collect(float.(theta))
     for k in nnodes(t):-1:1
         ak = abar[k]
         ak == 0 && continue
         for (i, p) in enumerate(t.parents[k])
-            abar[p] += abs(t.ds[k][i]) * ak
+            wd = w(t.ds[k][i], k, i, p)
+            wd == 0 && continue
+            abar[p] += wd * ak
         end
     end
     return abar
 end
+
+# The magnitude weighting, as a plain function so the sweeps specialize on it exactly as they did
+# on `abs`.
+_absslot(d, k, i, p) = abs(d)
 
 """
     CoverOnly()
