@@ -230,6 +230,10 @@ The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `
 carries (the absolute adjoint `abs(vbar[k])` in a reverse sweep, `1` in a forward one). Returns
 `nothing` when the elemental contributes no second-order term.
 
+Entries involving a slot whose tangent vanishes are exempt: they are multiplied by zero in the
+Hessian, so covering them would only import the other slot's scale into a term that is not there.
+[`dead_slot`](@ref) is the test, and it reads the slot's entry of `sl`.
+
 `rho` must be a `Vector{T}` for `T = eltype(site)`: [`local_cover_slots`](@ref) asserts that type
 so that the sweeps, which call it once per node, need not box the result.
 
@@ -287,12 +291,15 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
     for j in 1:q
         s1 = sl[j]
         s2 = sl[q + j]
-        a, b = split_block(ratio, zero(c), c, zero(c), s1, s2)
+        # A pair is a pure cross term, so one dead slot empties it: the pair's Hessian
+        # contribution is exactly zero and neither slot carries weight.
+        dead = dead_slot(s1) || dead_slot(s2)
+        a, b = dead ? (zero(c), zero(c)) : split_block(ratio, zero(c), c, zero(c), s1, s2)
         if check
             check_finite_partials(site, av, (c,))
             # Allow for roundoff accumulated across the program, not just this comparison.
             rtol = sqrt(eps(float(real(eltype(site)))))
-            a * b >= c * (1 - rtol) || error(
+            dead || a * b >= c * (1 - rtol) || error(
                 "local cover invariant violated at $(site_label(site)), pair $j: rho=($a,$b), c=$c"
             )
         end
@@ -319,17 +326,22 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     (c11 == 0 && c12 == 0 && c22 == 0) && return false
     s1, s2 = sl[1], sl[2]
     resize!(rho, 2)
-    if c12^2 <= c11 * c22
-        rho1, rho2 = sqrt(c11), sqrt(c22)
-    else
+    # A dead slot empties every entry it appears in, leaving only the live slot's own curvature —
+    # which the diagonal cover already supplies. The test comes second so that a block the
+    # diagonal cover serves anyway never asks for it.
+    offdiag = c12^2 > c11 * c22
+    dead = offdiag && (dead_slot(s1) || dead_slot(s2))
+    if offdiag && !dead
         rho1, rho2 = split_block(ratio, c11, c12, c22, s1, s2)
+    else
+        rho1, rho2 = sqrt(c11), sqrt(c22)
     end
     if check
         check_finite_partials(site, av, (c11, c12, c22))
         rtol = sqrt(eps(float(real(T))))
         (
             rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-                rho1 * rho2 >= c12 * (1 - rtol)
+                (dead || rho1 * rho2 >= c12 * (1 - rtol))
         ) ||
             error(
             "local cover invariant violated at $(site_label(site)): " *
