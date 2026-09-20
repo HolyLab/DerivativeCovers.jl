@@ -653,10 +653,13 @@ which is what keeps the cover from importing a live slot's scale into a term tha
 
 The test is exact: a tolerance would either declare a live slot dead, leaving a real Hessian entry
 uncovered, or compare two quantities with different units.
+
+A slot reported by a bare number carries no liveness of its own, and the number is read as the
+whole answer — which a declared scale is only while it cannot underflow. The backends here supply
+a reference that reports liveness separately: [`DeferredScale`](@ref) over a tape,
+[`ForwardScale`](@ref) in a propagation.
 """
 dead_slot(s::SplitScale) = dead_slot(s.declared)
-# A backend carrying the declared scale itself carries it forward by the same recursion the tangent
-# obeys, so a vanishing scale is a vanishing tangent.
 dead_slot(sigma::Real) = sigma == 0
 
 """

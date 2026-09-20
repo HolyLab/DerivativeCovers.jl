@@ -60,6 +60,36 @@ const FORWARD_SPLITS = (
         end
     end
 
+    @testset "a slot is dead by its tangent, not by its declared scale" begin
+        # `sigma` is a sum of products of first partials, so a chain of small factors underflows it
+        # while the tangent it stands for is still there. Reading that as a dead slot would drop
+        # the block's off-diagonal entry, which is in the Hessian and has to be covered.
+        f = x -> (x[1] * 1.0e-100) * x[2]
+        x0 = [1.0e100, 2.0]
+        w = [1.0e-300, 1.0]
+        captured = Ref{Any}(nothing)
+        fc = forward_cover(
+            z -> (u = z[1] * 1.0e-100; captured[] = u; u * z[2]), x0; scales = w
+        )
+        @test captured[].sigma == 0
+        @test !DerivativeCovers.dead_slot(DerivativeCovers.forward_scale(captured[]))
+        @test cover_ratio(ForwardDiff.hessian(f, x0), fc.h_quad) <= GATE
+        @test fc.h_quad ≈ cover_lattice(f, x0; scales = w).h_quad_forward rtol = FORWARD_RTOL
+
+        # The slots a tangent really does empty are dropped by both backends alike.
+        deadprograms = (
+            ("square times zero", x -> x[1]^2 * x[2], [0.0, 3.0]),
+            ("unit cosine", x -> cos(x[1]) * x[2], [0.0, 3.0]),
+            ("switched-off term", x -> (0.0 * x[1]^2) * (x[2] + x[2]^2)^2 + x[1] * x[2], [1.5, 2.0]),
+            ("dead pair of a dot", x -> dot([x[1]^2, x[2]], [x[3], x[4]]), [0.0, 1.0, 2.0, 3.0]),
+        )
+        @testset "$name" for (name, fd, xd) in deadprograms
+            fc = forward_cover(fd, xd)
+            @test fc.h_quad ≈ cover_lattice(fd, xd).h_quad_forward rtol = FORWARD_RTOL
+            @test cover_ratio(ForwardDiff.hessian(fd, xd), fc.h_quad) <= GATE
+        end
+    end
+
     @testset "every intermediate carries a cover" begin
         # `G` maintains its invariant at every variable, not only at the output, so the cover of a
         # sub-expression is available where the sub-expression is.
