@@ -117,7 +117,7 @@ include("genericaxes.jl")
             :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :check_finite_partials,
             :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
-            :sensitivity_scales, :SplitScale, :value, :isconstant, :nnodes, :natoms,
+            :sensitivity_scales, :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
@@ -141,7 +141,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :value_bounds_split, :dispatchcurvature,
+            :value_bounds_split, :dispatchcurvature, :live_nodes,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
             :balance_cover, :tape_potentials,
@@ -459,7 +459,7 @@ include("genericaxes.jl")
         for (c11, c12, c22, z1, z2) in (
                 (0.0, 1.0, 0.0, 2.0, 5.0),      # multiplication node
                 (1.0, 4.0, 2.0, 0.1, 10.0),
-                (0.0, 3.0, 0.0, 0.0, 1.0),      # zero-value fallback
+                (0.0, 3.0, 0.0, 0.0, 1.0),      # a pair with no ratio to read: the last resort
                 (2.0, 5.0, 1.0, 1.0, 0.0),
             )
             rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
@@ -706,18 +706,64 @@ include("genericaxes.jl")
             @test length(sg.store.sigmas) == DerivativeCovers.nnodes(tg)
         end
 
-        # A zero value certifies nothing about a slot, so none is dropped: the fallback covers the
-        # pair rather than leaving it uncovered.
+        # A zero *value* certifies nothing about a slot, so none is dropped on that account. A zero
+        # *tangent* does: the slot multiplies its block's entries by the zero vector, so they are
+        # absent from the Hessian and the cover leaves them uncovered. Here the two coincide —
+        # `x[1]^2` has both — and the cover is the exact one, `H = [6 0; 0 0]` admitting no cover
+        # smaller than `[sqrt(6), 0]`.
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
-        @test cover_ratio(Hd, cover_hessian(WithDiagnostics(), fdead, xd).h_sum) <= GATE
+        resdead = cover_hessian(WithDiagnostics(), fdead, xd)
+        @test cover_ratio(Hd, resdead.h_sum) <= GATE
+        @test resdead.h_sum ≈ [sqrt(6.0), 0.0]
+        @test resdead.h_quad ≈ [sqrt(6.0), 0.0]
+        @test cover_hybrid(fdead, xd, 1) ≈ [sqrt(6.0), 0.0]
+        @test forward_cover(fdead, xd).h_quad ≈ [sqrt(6.0), 0.0]
+
+        # A slot the value channel sees no problem with: `cos` is `1` at `0`, so the block keeps a
+        # usable value pair and only the tangent reports the slot dead.
+        fung = x -> cos(x[1]) * x[2]
+        xu = [0.0, 3.0]
+        resung = cover_hessian(WithDiagnostics(), fung, xu)
+        @test cover_ratio(ForwardDiff.hessian(fung, xu), resung.h_sum) <= GATE
+        @test resung.h_sum ≈ [sqrt(3.0), 0.0]
+
+        # The converse: a vanishing value with a live tangent keeps its weight, since the block's
+        # off-diagonal entry is in the Hessian and has to be covered.
+        xlivecos = [pi / 2, 3.0]
+        reslive = cover_hessian(WithDiagnostics(), fung, xlivecos)
+        @test cover_ratio(ForwardDiff.hessian(fung, xlivecos), reslive.h_sum) <= GATE
+        @test all(>(0), reslive.h_sum)
+
+        # A term switched off by a zero coefficient contributes nothing to the Hessian, so it
+        # contributes nothing to the cover either: what is left is the cover of the live term.
+        fbeta = b -> (x -> (b * x[1]^2) * (x[2] + x[2]^2)^2 + x[1] * x[2])
+        xb = [1.5, 2.0]
+        resbeta = cover_hessian(WithDiagnostics(), fbeta(0.0), xb)
+        @test cover_ratio(ForwardDiff.hessian(fbeta(0.0), xb), resbeta.h_sum) <= GATE
+        @test resbeta.h_sum ≈ cover_hessian(WithDiagnostics(), x -> x[1] * x[2], xb).h_sum
+        @test resbeta.h_quad ≈ cover_hessian(WithDiagnostics(), x -> x[1] * x[2], xb).h_quad
+
+        # Dropping a dead slot's entries is a covariant operation: `x -> D*x` puts `1/d[a]` on each
+        # input edge and leaves every value and adjoint alone, so `h -> h ./ d` exactly.
+        ddead = [4.0, 0.25]
+        @testset "dead slots stay covariant — $i" for (i, (fz, xz)) in
+            enumerate(((fdead, xd), (fung, xu), (fbeta(0.0), xb)))
+            rz = cover_hessian(WithDiagnostics(), fz, xz)
+            rzd = cover_hessian(WithDiagnostics(), xt -> fz(xt ./ ddead), ddead .* xz)
+            @test rzd.h_sum ≈ rz.h_sum ./ ddead rtol = 1.0e-12
+            @test rzd.h_quad ≈ rz.h_quad ./ ddead rtol = 1.0e-12
+        end
+
         fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
         xdot = [0.0, 1.0, 2.0, 3.0]
-        @test cover_ratio(
-            ForwardDiff.hessian(fdot, xdot),
-            cover_hessian(WithDiagnostics(), fdot, xdot).h_sum
-        ) <= GATE
+        resdot = cover_hessian(WithDiagnostics(), fdot, xdot)
+        @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
+        # The `(x[1]^2, x[3])` pair is dead at `xdot`, so `x[3]` carries no weight at all and the
+        # remaining pair is covered exactly.
+        @test resdot.h_sum[3] == 0
+        @test resdot.h_sum[2] * resdot.h_sum[4] ≈ 1.0
 
         # An inner product puts the same question to each of its pairs, and one degenerate pair
         # decides the node: the `(x[1]^2, x[3])` pair vanishes at `xdot`, no pair does at `xlive`,
@@ -727,8 +773,11 @@ include("genericaxes.jl")
         @test DerivativeCovers.guards_any_block(first(tape_function(fdot, xdot)))
         @test !DerivativeCovers.guards_any_block(first(tape_function(fdot, xlive)))
         @test DerivativeCovers.guards_any_block(first(tape_function(fdot, xtail)))
-        # The prediction is measured against the sweep it predicts: the declared-scale store fills
-        # exactly on the tapes it names.
+        # The prediction is measured against the sweep it predicts, in the direction it claims: a
+        # tape it clears never fills the declared-scale store. A tape it names may leave the store
+        # empty all the same, since a guarded pair whose slot has no tangent is dropped outright
+        # and asks for no scale — which is `xdot`, where `x[1]^2` is the vanishing side.
+        stored = Dict{Vector{Float64}, Bool}()
         for xf in (xdot, xlive, xtail)
             t, outidx = tape_function(fdot, xf)
             sc = DerivativeCovers.split_scales(nothing, t)
@@ -737,8 +786,10 @@ include("genericaxes.jl")
             for k in (t.ninputs + 1):nnodes(t)
                 DerivativeCovers.local_cover_slots(r, t, k, abs(vbar[k]), sc)
             end
-            @test !isempty(sc.store.sigmas) == DerivativeCovers.guards_any_block(t)
+            stored[xf] = !isempty(sc.store.sigmas)
+            @test DerivativeCovers.guards_any_block(t) || isempty(sc.store.sigmas)
         end
+        @test stored == Dict(xdot => false, xlive => false, xtail => true)
 
         # Declared scales must be strictly positive and finite: a zero entry would blank a live
         # slot's scale where the guard falls back on them. Both keywords are validated at the

@@ -49,7 +49,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :public, :pushnode!, :unarynode, :binarynode, :dotnode, :linearnode, :noderef,
             :constantnode, :atom_slots, :check_finite_partials, :submapnode,
             :split_scales, :split_block, :split_ratio, :guards_any_block, :sensitivity_scales,
-            :SplitScale, :value, :isconstant, :nnodes, :natoms, :CoverVar,
+            :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms, :CoverVar,
             :constantvar, :tangent_channel, :forward_scale
         )
     )

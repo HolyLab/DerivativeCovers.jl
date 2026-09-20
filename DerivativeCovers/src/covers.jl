@@ -399,7 +399,11 @@ never presents a vanishing `z1`. The second is also reached by `x^y` at a zero e
 
 These zero-reference cases concern the value channel, and they are exactly the ones
 [`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there,
-so this function receives a vanishing pair only when both channels vanish at once.
+and a declared scale vanishes only at a slot with no tangent, which [`cover_slots!`](@ref) covers
+diagonally instead of splitting. So a split reaches this function with a pair that is not
+degenerate, and the fallbacks are entered only when `c12*z2/z1` overflows or underflows the
+element type at a block whose feasible segment has a degenerate endpoint — a ratio the working
+precision cannot represent, not a ratio that is missing.
 """
 function balanced_split(c11, c12, c22, z1, z2)
     lo = sqrt(c11)
@@ -516,10 +520,11 @@ Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
 """
     DeclaredScales(w, t)
 
-The declared-scale channel over the tape `t`: [`sensitivity_scales`](@ref) seeded with the input
-scales `w`, built by the first block that asks for it and shared by every block after.
+The two node channels a block may ask for beyond the values: [`sensitivity_scales`](@ref) seeded
+with the input scales `w`, and the [`live_nodes`](@ref) flags. Each is built by the first block
+that asks for it and shared by every block after.
 
-Deferring the sweep is what makes the fallback free on a program that never needs it. Deciding in
+Deferring the sweeps is what makes them free on a program that never needs them. Deciding in
 advance would take its own `O(L)` pass over the recorded blocks, which on a tape whose blocks all
 keep a usable value pair costs about as much as the cover sweep it precedes — so every program
 would pay for the possibility of a fallback none of its blocks reach.
@@ -528,12 +533,49 @@ mutable struct DeclaredScales{T, W, TT <: Tape{T}}
     const w::W
     const tape::TT
     sigmas::Vector{T}
+    lives::Vector{Bool}
 end
-DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, T[])
+DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, T[], Bool[])
 
 function declared_scale(d::DeclaredScales, i::Integer)
     isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.w, d.tape))
     return d.sigmas[i]
+end
+
+function dead_slot(d::DeclaredScales, i::Integer)
+    isempty(d.lives) && (d.lives = live_nodes(d.tape))
+    return !d.lives[i]
+end
+
+"""
+    live_nodes(t::Tape) -> live
+
+Which nodes of `t` have a tangent that is not identically zero. `live[k]` is `false` exactly when
+every path from the inputs to node `k` passes through a recorded first partial that is exactly
+zero, and then `∇v_k` is the zero vector in any arithmetic: every term of every path product
+carries an exact zero factor.
+
+The test is on the recorded partials rather than on a propagated magnitude, so it neither
+underflows a live node to dead nor depends on the declared input scales.
+
+Costs one `O(L)` forward pass, paid once per cover and only by a program carrying a block whose
+off-diagonal is active.
+"""
+function live_nodes(t::Tape)
+    live = fill(false, nnodes(t))
+    for k in 1:t.ninputs
+        live[k] = true
+    end
+    for k in (t.ninputs + 1):nnodes(t)
+        d = t.ds[k]
+        for (i, p) in enumerate(t.parents[k])
+            if live[p] && !iszero(d[i])
+                live[k] = true
+                break
+            end
+        end
+    end
+    return live
 end
 
 """
@@ -547,12 +589,31 @@ split.
 
 `declared` is whatever [`declared_scale`](@ref) resolves: the number itself where a backend
 already has it, and a [`DeferredScale`](@ref) where the sweep that produces it should run only if
-some block asks.
+some block asks. [`dead_slot`](@ref) reads the same field, since a backend that can name a slot's
+declared scale can say whether the slot has a tangent at all.
 """
 struct SplitScale{T, D}
     value::T
     declared::D
 end
+
+"""
+    dead_slot(s::SplitScale) -> Bool
+
+Whether the slot's tangent `∇v` is identically zero.
+
+Such a slot contributes no outer product to the Hessian
+`H = sum_k vbar_k * sum_{i,j} C^k_{ij} * ∇v_{p_i} * ∇v_{p_j}'`, so every entry of its block that
+involves it is multiplied away and needs no cover. [`cover_slots!`](@ref) drops those entries,
+which is what keeps the cover from importing a live slot's scale into a term that vanishes.
+
+The test is exact: a tolerance would either declare a live slot dead, leaving a real Hessian entry
+uncovered, or compare two quantities with different units.
+"""
+dead_slot(s::SplitScale) = dead_slot(s.declared)
+# A backend carrying the declared scale itself carries it forward by the same recursion the tangent
+# obeys, so a vanishing scale is a vanishing tangent.
+dead_slot(sigma::Real) = sigma == 0
 
 """
     declared_scale(x) -> sigma
@@ -574,6 +635,7 @@ struct DeferredScale{D}
     index::Int
 end
 declared_scale(d::DeferredScale) = declared_scale(d.store, d.index)
+dead_slot(d::DeferredScale) = dead_slot(d.store, d.index)
 
 # The scale references over a whole tape, gathered per slot on demand.
 struct SplitScales{T, V <: AbstractVector{T}, D} <:
@@ -636,11 +698,12 @@ input rescaling, and pays no extra sweep. On one that answers `true` the cover i
 its inputs are expressed in at the blocks where no covariant local choice exists, and stays
 covariant only when the declared scales are rescaled alongside.
 
-The test reads recorded values and second partials, never an adjoint. The adjoint scales a block's
-three entries together, so it changes neither the value ratio nor which diagonal entries are
-nonzero, except where it underflows one of them to zero. Reading it that way overcounts — a block
-whose adjoint vanishes contributes no cover term for the fallback to reach — and, in that
-underflow corner alone, can undercount.
+The test reads recorded values and second partials, never an adjoint and never a tangent. The
+adjoint scales a block's three entries together, so it changes neither the value ratio nor which
+diagonal entries are nonzero, except where it underflows one of them to zero. Reading it that way
+overcounts — a block whose adjoint vanishes contributes no cover term for the fallback to reach —
+and, in that underflow corner alone, can undercount. Ignoring tangents overcounts too: a block
+with a [`dead_slot`](@ref) is covered diagonally and never consults a scale at all.
 
 So this predicts which programs will ask for the declared scales without running a cover; the
 covers themselves build those scales on demand and never call it, and they are the authority on
@@ -700,10 +763,10 @@ end
     local_covers(t::Tape, vbar; check::Bool=true) -> (rhos, theta)
 
 Per-node rank-1 covers. For node `k`, `rhos[k][i] >= 0` satisfies
-`rhos[k][i] * rhos[k][j] >= c^k[i,j]` where `c^k[i,j] = abs(vbar[k]) * abs(C^k[i,j])`; nodes
-with no second-order contribution get an empty `rhos[k]`. `theta[j] = sum_k rhos[k][i]` collects
-the weight each node receives as a parent, which seeds the reverse sweep of
-[`abs_reverse`](@ref).
+`rhos[k][i] * rhos[k][j] >= c^k[i,j]` where `c^k[i,j] = abs(vbar[k]) * abs(C^k[i,j])`, except at
+entries a [`dead_slot`](@ref) empties; nodes with no second-order contribution get an empty
+`rhos[k]`. `theta[j] = sum_k rhos[k][i]` collects the weight each node receives as a parent, which
+seeds the reverse sweep of [`abs_reverse`](@ref).
 
 Each node's cover comes from [`cover_slots`](@ref), dispatching on its [`Curvature`](@ref). A
 [`DeclaredCurvature`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings its
@@ -739,9 +802,10 @@ end
     local_cover_slots(ratio, t::Tape, k::Integer, av, scales; check::Bool=true)
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
-`rho[i]*rho[j] >= av*abs(C^k[i,j])`, where `av` is the absolute adjoint `abs(vbar[k])`. Returns
-`nothing` when the node contributes no second-order term (`av == 0`, or a
-[`NoCurvature`](@ref) node). This is the per-node kernel shared by [`local_covers`](@ref), which
+`rho[i]*rho[j] >= av*abs(C^k[i,j])` wherever both slots have a tangent (see [`dead_slot`](@ref)),
+and `av` the absolute adjoint `abs(vbar[k])`. Returns `nothing` when the node contributes no
+second-order term (`av == 0`, or a [`NoCurvature`](@ref) node).
+This is the per-node kernel shared by [`local_covers`](@ref), which
 accumulates the results into `(rhos, theta)`, and the [`CoverOnly`](@ref) sweep, which deposits
 them directly into the absolute adjoint channel. It reads the node's [`Curvature`](@ref) off the
 tape and forwards to [`cover_slots`](@ref), which holds the construction for each form. `check`
