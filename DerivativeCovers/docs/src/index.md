@@ -223,6 +223,7 @@ DerivativeCovers.guards_any_block
 DerivativeCovers.sensitivity_scales
 DerivativeCovers.value_bounds_split
 DerivativeCovers.balanced_split
+DerivativeCovers.split_fallback
 ```
 
 ## Tangent channels

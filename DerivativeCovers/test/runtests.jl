@@ -141,6 +141,7 @@ include("genericaxes.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
+            :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
@@ -459,7 +460,7 @@ include("genericaxes.jl")
         for (c11, c12, c22, z1, z2) in (
                 (0.0, 1.0, 0.0, 2.0, 5.0),      # multiplication node
                 (1.0, 4.0, 2.0, 0.1, 10.0),
-                (0.0, 3.0, 0.0, 0.0, 1.0),      # a pair with no ratio to read: the last resort
+                (1.0, 3.0, 1.0, 0.0, 0.0),      # no ratio to read: the geometric mean
                 (2.0, 5.0, 1.0, 1.0, 0.0),
             )
             rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
@@ -474,7 +475,10 @@ include("genericaxes.jl")
         @test rho1 * rho2 ≈ 1.0
 
         # The split lands on the feasible segment [sqrt(c11), c12/sqrt(c22)], so the cover is
-        # exactly tight on the off-diagonal however extreme the entries and values.
+        # exactly tight on the off-diagonal however extreme the entries and values. A vanishing
+        # reference leaves a determined split only where the endpoint it runs toward is a positive
+        # finite scale, and where it does not there is no cover to return.
+        determined(c11, c22, z1, z2) = (z1 > 0 || c22 > 0) && (z2 > 0 || c11 > 0)
         rng = MersenneTwister(11)
         for _ in 1:10_000
             c11 = rand(rng) < 0.25 ? 0.0 : exp(12 * randn(rng))
@@ -483,6 +487,12 @@ include("genericaxes.jl")
             c12^2 > c11 * c22 || continue
             z1 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
             z2 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
+            if !determined(c11, c22, z1, z2)
+                @test_throws "outside the floating-point range" balanced_split(
+                    c11, c12, c22, z1, z2
+                )
+                continue
+            end
             rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
             @test isfinite(rho1) && isfinite(rho2)
             @test rho1 >= sqrt(c11) * (1 - 1.0e-12)
@@ -519,16 +529,42 @@ include("genericaxes.jl")
             @test rho2 ≈ 10.0
         end
 
-        # Selecting the degenerate fallback with `ifelse` rather than a branch gives bit-identical
-        # results, so a backend that cannot branch on values has an equivalent form. The grid
-        # includes zero in every argument, which covers the three families where the result is
-        # discontinuous.
+        # Where the segment has no endpoint to fall back on, the equalizing point is the answer
+        # and the exponents carry it: the product under the root overflows while the point itself
+        # is an ordinary number.
+        @test balanced_split(0.0, 1.0, 0.0, 1.0e-200, 1.0e200) === (1.0e200, 1.0e-200)
+        @test balanced_split(0.0, 1.0, 0.0, 1.0e200, 1.0e-200) === (1.0e-200, 1.0e200)
+        @test balanced_split(0.0f0, 1.0f0, 0.0f0, 1.0f-30, 1.0f30) === (1.0f30, 1.0f-30)
+
+        # That path is covariant to the bit under a rescaling by powers of two, which moves
+        # exponents and leaves every mantissa alone.
+        for l1 in (2.0^-40, 1.0, 2.0^40), l2 in (2.0^-40, 1.0, 2.0^40)
+            base = balanced_split(0.0, 1.0, 0.0, 1.0e-200, 1.0e200)
+            r1, r2 = balanced_split(
+                0.0, 1.0 / (l1 * l2), 0.0, l1 * 1.0e-200, l2 * 1.0e200
+            )
+            @test r1 * l1 === base[1]
+            @test r2 * l2 === base[2]
+        end
+
+        # A ratio no exponent can represent is refused rather than covered by something else.
+        @test_throws "outside the floating-point range" balanced_split(
+            0.0, 1.0e300, 0.0, 1.0e-300, 1.0e300
+        )
+        # So is a segment with no endpoint and a pair with no ratio, which between them leave
+        # nothing to place `rho1` by.
+        @test_throws "outside the floating-point range" balanced_split(
+            0.0, 3.0, 0.0, 0.0, 1.0
+        )
+
+        # Selecting the fallback with `ifelse` rather than a branch gives bit-identical results, so
+        # a backend that cannot branch on values has an equivalent form. The grid includes zero in
+        # every argument, which covers the three families where the result is discontinuous.
         function split_select(c11, c12, c22, z1, z2)
             lo = sqrt(c11)
             hi = c12 / sqrt(c22)
             rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
-            g = sqrt(lo * hi)
-            fallback = clamp(ifelse(isfinite(g) & (g > 0), g, sqrt(c12)), lo, hi)
+            fallback = clamp(DerivativeCovers.split_fallback(lo, hi, c12, z1, z2), lo, hi)
             rho1 = ifelse(isfinite(rho1) & (rho1 > 0), rho1, fallback)
             return rho1, c12 / rho1
         end
@@ -538,13 +574,14 @@ include("genericaxes.jl")
         ncases = 0
         for c11 in vals, c22 in vals, c12 in vals, z1 in vals, z2 in vals
             (c12 > 0 && c12^2 > c11 * c22) || continue
+            determined(c11, c22, z1, z2) || continue
             ncases += 1
             branched = balanced_split(c11, c12, c22, z1, z2)
             selected = split_select(c11, c12, c22, z1, z2)
             all(same.(branched, selected)) ||
                 push!(differing, ((c11, c12, c22, z1, z2), branched, selected))
         end
-        @test ncases > 30_000
+        @test ncases > 25_000
         @test isempty(differing)
     end
 
@@ -648,6 +685,15 @@ include("genericaxes.jl")
         # default.
         @test DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 0.0)
         @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 1.0, 0.0)
+
+        # Scale references whose ratio no product of them can hold: the split is theirs all the
+        # same, and the cover is the exact one for `H = [0 1; 1 0]`.
+        fwide = x -> (1.0e-200 * x[1]) * (1.0e200 * x[2])
+        xwide = [0.0, 0.0]
+        Hwide = [0.0 1.0; 1.0 0.0]
+        @test cover_hessian(WithDiagnostics(), fwide, xwide).h_sum == [1.0, 1.0]
+        @test cover_ratio(Hwide, cover_hessian(WithDiagnostics(), fwide, xwide).h_quad) <= GATE
+        @test forward_cover(fwide, xwide).h_quad == [1.0, 1.0]
 
         # `guards_any_block` predicts which case a tape is in without running a cover. It may
         # overcount, since a block whose adjoint vanishes contributes no cover term, so it is
