@@ -382,7 +382,7 @@ not when the corresponding diagonal entry vanishes: `c22 == 0` puts the upper en
 infinity, `c11 == 0` puts the lower endpoint at zero. Nor is there any limit to take when both
 values vanish at once, since the equalizing point then depends on the ratio `z2/z1` alone. In
 those cases the geometric mean of the endpoints is used, which is covariant and
-permutation-equivariant; when it too is degenerate the balanced `sqrt(c12)` is returned.
+permutation-equivariant.
 
 So the result is continuous except at three families of inputs, where it is the ratio `z2/z1`
 that carries the information and the ratio is unavailable:
@@ -401,9 +401,12 @@ These zero-reference cases concern the value channel, and they are exactly the o
 [`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there,
 and a declared scale vanishes only at a slot with no tangent, which [`cover_slots!`](@ref) covers
 diagonally instead of splitting. So a split reaches this function with a pair that is not
-degenerate, and the fallbacks are entered only when `c12*z2/z1` overflows or underflows the
-element type at a block whose feasible segment has a degenerate endpoint — a ratio the working
-precision cannot represent, not a ratio that is missing.
+degenerate, and a pair carrying a ratio reaches the geometric mean only when `c12*z2/z1` leaves
+the range of the element type at a block whose feasible segment has a degenerate endpoint. There
+the equalizing point is recomputed from the separated exponents, which represents it whenever it
+is representable at all; see [`split_fallback`](@ref). A split that is genuinely out of range
+throws, since every pair returned here is a cover. Entries that are already non-finite are
+returned as IEEE arithmetic gives them, which is what `check=false` asks for.
 """
 function balanced_split(c11, c12, c22, z1, z2)
     lo = sqrt(c11)
@@ -413,11 +416,52 @@ function balanced_split(c11, c12, c22, z1, z2)
     # target reaches the fallback.
     rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
     if !(isfinite(rho1) && rho1 > 0)
-        g = sqrt(lo * hi)
-        rho1 = clamp((isfinite(g) && g > 0) ? g : sqrt(c12), lo, hi)
+        rho1 = clamp(split_fallback(lo, hi, c12, z1, z2), lo, hi)
     end
-    return rho1, c12 / rho1
+    rho2 = c12 / rho1
+    if !(isfinite(rho1) && rho1 > 0 && isfinite(rho2) && rho2 > 0)
+        all(isfinite, (c11, c12, c22, z1, z2)) || return rho1, rho2
+        throw(
+            ArgumentError(
+                "the balanced split of the block [$c11 $c12; $c12 $c22] against the scale " *
+                    "references ($z1, $z2) is outside the floating-point range of " *
+                    "$(typeof(rho1)): it asks for rho = ($rho1, $rho2)"
+            )
+        )
+    end
+    return rho1, rho2
 end
+
+"""
+    split_fallback(lo, hi, c12, z1, z2) -> rho1
+
+The equalizing point [`balanced_split`](@ref) aims at, for blocks where `sqrt(c12*z2/z1)` misses it.
+
+A pair with a ratio to read misses it only by overflow or underflow of the product under the root,
+and `frexp` recovers the point from the separated exponents: the exponent arithmetic is exact, and
+a rescaling by powers of two shifts `e` by an even amount, so this form is covariant to the bit
+exactly as the product form is. A pair with no ratio — a vanishing or non-finite reference — gets
+the geometric mean of the endpoints, the covariant, permutation-equivariant point of the feasible
+segment.
+"""
+function split_fallback(lo, hi, c12::AbstractFloat, z1::AbstractFloat, z2::AbstractFloat)
+    (isfinite(c12) && c12 > 0 && isfinite(z1) && z1 > 0 && isfinite(z2) && z2 > 0) ||
+        return sqrt(lo * hi)
+    m12, e12 = frexp(c12)
+    m2, e2 = frexp(z2)
+    m1, e1 = frexp(z1)
+    m = m12 * m2 / m1
+    e = e12 + e2 - e1
+    if isodd(e)
+        # Only an even exponent halves exactly; the odd factor rides along in the mantissa.
+        m *= 2
+        e -= 1
+    end
+    return ldexp(sqrt(m), e >> 1)
+end
+
+# An element type with no exponent to separate has the geometric mean and nothing else.
+split_fallback(lo, hi, c12, z1, z2) = sqrt(lo * hi)
 
 """
     value_bounds_split(c11, c12, c22, z1, z2, ratio) -> Bool
@@ -479,8 +523,8 @@ Validate declared input scales: `nothing` for unit scales, or one strictly posit
 per input.
 
 Positivity is not a formality. The declared scales stand in for the parent values at blocks whose
-values carry none, so a zero entry would blank a live slot's scale and send its split to the
-fallback of last resort — a bound that is still valid but chosen by nothing.
+values carry none, so a zero entry would blank a live slot's scale, leaving its split with no
+ratio to read and, at a block whose feasible segment is degenerate too, no cover to return.
 """
 function check_input_scales(w, ninputs::Integer)
     w === nothing && return w
@@ -609,10 +653,13 @@ which is what keeps the cover from importing a live slot's scale into a term tha
 
 The test is exact: a tolerance would either declare a live slot dead, leaving a real Hessian entry
 uncovered, or compare two quantities with different units.
+
+A slot reported by a bare number carries no liveness of its own, and the number is read as the
+whole answer — which a declared scale is only while it cannot underflow. The backends here supply
+a reference that reports liveness separately: [`DeferredScale`](@ref) over a tape,
+[`ForwardScale`](@ref) in a propagation.
 """
 dead_slot(s::SplitScale) = dead_slot(s.declared)
-# A backend carrying the declared scale itself carries it forward by the same recursion the tangent
-# obeys, so a vanishing scale is a vanishing tangent.
 dead_slot(sigma::Real) = sigma == 0
 
 """

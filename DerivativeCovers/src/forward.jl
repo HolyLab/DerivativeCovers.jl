@@ -91,15 +91,17 @@ generic numerical code builds typed literals from `eltype`, which is all it has 
 backend by.
 
 For each variable, the propagation holds the value, the signed tangent `∇v`, a squared cover of
-`∇²v` (see [`ForwardChannels`](@ref)), and the scalar declared scale `sigma` the split falls back
-on. Working memory is `O(n)` per *live* variable rather than per recorded node, so a program whose
-intermediates go out of scope costs `O(n × live width)` and never materializes a tape.
+`∇²v` (see [`ForwardChannels`](@ref)), the scalar declared scale `sigma` the split falls back
+on, and whether `∇v` is identically zero (see [`ForwardScale`](@ref)). Working memory is `O(n)`
+per *live* variable rather than per recorded node, so a program whose intermediates go out of
+scope costs `O(n × live width)` and never materializes a tape.
 
 Build one with [`forward_cover`](@ref) rather than directly.
 """
 struct FVar{T, S} <: CoverVar{T}
     val::T
     sigma::T
+    live::Bool
     ctx::Union{ForwardContext{T, S}, Nothing}
     g::S
     G::S
@@ -109,14 +111,15 @@ struct FVar{T, S} <: CoverVar{T}
     # concrete for the same reason -- an immutable `S` is then stored inline, where a
     # `Union{S,Nothing}` would be copied to the heap at every node -- so a constant, which has no
     # channels, gets `constantchannel` in the fields and is recognized by a null context instead.
-    FVar{T, S}(val, sigma, ctx, g, G) where {T, S} = new{T, S}(val, sigma, ctx, g, G)
+    FVar{T, S}(val, sigma, live, ctx, g, G) where {T, S} =
+        new{T, S}(val, sigma, live, ctx, g, G)
 end
 
 # A constant. Its storage is named rather than defaulted: a constant of the wrong storage combines
 # with nothing in the propagation that produced it.
 function FVar{T, S}(val) where {T, S}
     ch = constantchannel(S)
-    return FVar{T, S}(val, zero(T), nothing, ch, ch)
+    return FVar{T, S}(val, zero(T), false, nothing, ch, ch)
 end
 
 isconstant(x::FVar) = x.ctx === nothing
@@ -213,7 +216,7 @@ end
 function input_vars(::Type{FVar{T, S}}, ctx, x0, w) where {T, S}
     sigma(a) = w === nothing ? one(T) : convert(T, w[a])
     # Parent channels are read-only, so inputs can share `ctx.zerochannel`.
-    var(a) = FVar{T, S}(x0[a], sigma(a), ctx, channel_basis(x0, T, a), ctx.zerochannel)
+    var(a) = FVar{T, S}(x0[a], sigma(a), true, ctx, channel_basis(x0, T, a), ctx.zerochannel)
     # `Base.OneTo`, not `eachindex(x0)`: a static point indexes over `SOneTo`, and a comprehension
     # over that rebuilds the static container this is here to avoid. The caller has already
     # declared one-based indexing.
@@ -245,21 +248,42 @@ site_label(::ElementalSite) = "this elemental"
 site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operands))"
 
 """
+    ForwardScale(sigma, live)
+
+The declared channel of one slot of a forward propagation: the scale `sigma` that stands in for a
+parent value carrying none, and whether the slot's tangent is identically zero.
+
+Liveness travels separately from `sigma` because `sigma` cannot report it. It is a sum of products
+of first partials, so it underflows on a long chain of small factors while the tangent it bounds is
+still there, and a slot dropped on that evidence would leave a real Hessian entry uncovered. The
+flag is carried by the same recursion [`live_nodes`](@ref) runs over a tape — a slot is live when
+some parent is live and reaches it through a nonzero partial — so both backends drop exactly the
+same entries.
+"""
+struct ForwardScale{T}
+    sigma::T
+    live::Bool
+end
+
+declared_scale(f::ForwardScale) = f.sigma
+dead_slot(f::ForwardScale) = !f.live
+
+"""
     forward_scale(x::FVar) -> SplitScale
 
 The scale references [`split_block`](@ref) reads at `x` — the forward analogue of
 [`split_scales`](@ref), which reads a whole tape at once.
 
-Both channels are already on the variable: the value, and the declared scale `sigma` the
-propagation carries alongside it. So a propagation splits its local covers by exactly the rule a
-tape does, and the two backends are comparable coordinate by coordinate.
+Both channels are already on the variable: the value, and the [`ForwardScale`](@ref) behind it. So
+a propagation splits its local covers by exactly the rule a tape does, and the two backends are
+comparable coordinate by coordinate.
 
 Nothing is deferred here, unlike on a tape. `sigma` obeys the same recursion as the tape's
 [`sensitivity_scales`](@ref) sweep, `sigma_k = sum_i abs(d_i) * sigma_{p_i}`, but it is a single
 scalar per variable rather than a pass over recorded nodes — so carrying it costs `O(1)` per
 elemental whether or not any block asks for it, against the `O(L)` sweep a tape would have to run.
 """
-forward_scale(x::FVar) = SplitScale(abs(value(x)), x.sigma)
+forward_scale(x::FVar) = SplitScale(abs(value(x)), ForwardScale(x.sigma, x.live))
 
 # The cover recursion of one elemental, in the squared channel:
 #
@@ -295,7 +319,7 @@ function unarynode(x::FVar{T, S}, val, d, c) where {T, S}
         site = ElementalSite(convert(T, val), (value(x),))
         G = add_atoms(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
-    return FVar{T, S}(val, sigma, ctx, g, G)
+    return FVar{T, S}(val, sigma, x.live && !iszero(dT), ctx, g, G)
 end
 
 function binarynode(
@@ -314,7 +338,8 @@ function binarynode(
         sl = (forward_scale(x), forward_scale(y))
         G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
-    return FVar{T, S}(val, sigma, ctx, g, G)
+    live = (x.live && !iszero(a)) || (y.live && !iszero(b))
+    return FVar{T, S}(val, sigma, live, ctx, g, G)
 end
 
 function linearnode(
@@ -325,6 +350,7 @@ function linearnode(
     ctx = channels(xs[first(idxs)]).ctx
     val = zero(T)
     sigma = zero(T)
+    live = false
     g = freshchannel(ctx)
     G = freshchannel(ctx)
     for j in idxs
@@ -333,10 +359,11 @@ function linearnode(
         cj = convert(T, coeffs[j])
         val += cj * value(xs[j])
         sigma += abs(cj) * xs[j].sigma
+        live |= xs[j].live && !iszero(cj)
         g = add_scaled!(g, cj, ch.g)
         G = add_scaled!(G, abs(cj), ch.G)
     end
-    return FVar{T, S}(val, sigma, ctx, g, G)
+    return FVar{T, S}(val, sigma, live, ctx, g, G)
 end
 
 function dotnode(
@@ -348,6 +375,7 @@ function dotnode(
     ctx = channels(ws[first(idxs)]).ctx
     val = zero(T)
     sigma = zero(T)
+    live = false
     g = freshchannel(ctx)
     G = freshchannel(ctx)
     # Slot order is `(w_1..w_q, x_1..x_q)`, matching `PairedCurvature`'s pairing of `j` with `q+j`.
@@ -361,6 +389,7 @@ function dotnode(
         val += vw * vx
         # The partial with respect to one side of a pair is the value of the other.
         sigma += abs(vx) * ws[j].sigma + abs(vw) * xs[j].sigma
+        live |= (ws[j].live && !iszero(vx)) || (xs[j].live && !iszero(vw))
         g = add_scaled!(add_scaled!(g, vx, cw.g), vw, cx.g)
         G = add_scaled!(add_scaled!(G, abs(vx), cw.G), abs(vw), cx.G)
         gs[n], gs[q + n] = cw.g, cx.g
@@ -369,7 +398,7 @@ function dotnode(
     site = ElementalSite(val, ops)
     sl = [forward_scale(v) for v in Iterators.flatten((ws, xs))]
     G = add_atoms(G, PairedCurvature(q), ctx, site, sl, gs)
-    return FVar{T, S}(val, sigma, ctx, g, G)
+    return FVar{T, S}(val, sigma, live, ctx, g, G)
 end
 
 # A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the

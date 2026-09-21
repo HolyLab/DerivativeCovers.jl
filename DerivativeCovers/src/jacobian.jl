@@ -519,17 +519,19 @@ without it.
     count but covariant only in the limit. Both reach the same fixed point.
   - `a0`: starting weights of your own, positive on every live output and zero on the others.
     Combining it with an explicit `start` is an error.
-  - `targets`: `:flow` (tape default; `O(L)`; maximizes a flow-weighted mean log-tightness,
-    typically within a few percent of `:support` in geometric mean), `:support` (matrix default;
+  - `targets`: `:flow` (tape default; `O(L)`; maximizes a flow-weighted mean log-tightness, which
+    can be noticeably looser than `:support` when outputs differ widely in the number of paths
+    reaching them), `:support` (matrix default;
     maximizes the geometric-mean tightness of the sum-merge cover; on a tape it costs
     `cld(n, 64) + cld(m, 64)` bit passes), an explicit `(r, c)`, or `:uniform` for unit row and
     column sums. `:uniform` needs the pattern to have *total support* — every nonzero entry on some
     positive diagonal — and without it the weights *drift*, separating without bound while every
     iterate still covers, so a longer run returns a looser cover. Applies to `arule = :marginal`
     only, and `:flow` needs a tape.
-  - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `nothing`
-    runs to `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming
-    `maxiter` or `rtol` and no `rounds` asks for that too.
+  - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `0` merges
+    the start as it is, without computing `targets`, and reports `delta = Inf`. `nothing` runs to
+    `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming `maxiter` or
+    `rtol` and no `rounds` asks for that too.
   - `maxiter`, `rtol`: bound and tolerance of a `rounds = nothing` run. `maxiter = nothing` picks
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
@@ -593,7 +595,8 @@ function _balance_tape(
     ) where {T}
     m = length(outidxs)
     maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, T)
-    tgt = _tape_targets(targets, arule, t, outidxs, m, T, li)
+    # No round reads the targets, so a zero budget validates them without sweeping for them.
+    tgt = _tape_targets(targets, arule, t, outidxs, m, T, li; needed = rounds !== 0)
     matrixpath = !(merge isa SumMerge) || arule !== :marginal
     _check_start(start, a0, root, cgiters, !matrixpath)
     if matrixpath
@@ -671,6 +674,8 @@ function _balance_matrix(
     )
     T = float(real(eltype(Utilde)))
     m = size(Utilde, 1)
+    # No round reads the targets, so a zero budget goes straight from the start to the merge.
+    rounds === 0 && (tgt = nothing)
     if a0 === nothing && something(start, :covariant) === :covariant
         a0 = _surrogate_start(Utilde, T)
     end
@@ -876,17 +881,22 @@ end
 # Resolve `targets` for the tape form: `nothing` for `:uniform`, else the validated pair `(r, c)`.
 # The keyword's own `nothing` means "unspecified", which is `:flow` here and no targets at all for
 # the geometric-mean fit, which has none to prescribe.
-function _tape_targets(targets, arule::Symbol, t::Tape, outidxs, m::Int, ::Type{T}, li::LiveInfo) where {T}
+function _tape_targets(
+        targets, arule::Symbol, t::Tape, outidxs, m::Int, ::Type{T}, li::LiveInfo;
+        needed::Bool = true
+    ) where {T}
     arule === :marginal || return _reject_targets(targets, arule)
     targets === nothing && (targets = :flow)
     targets === :uniform && return nothing
     if targets === :flow || targets === :support
+        needed || return nothing
         r, c = targets === :flow ? _flow_targets(t, outidxs, li) : _support_counts(t, outidxs, li)
         return (collect(T, r), collect(T, c))
     end
     targets isa Tuple{AbstractVector, AbstractVector} ||
         throw(ArgumentError("targets must be :flow, :support, :uniform, or a tuple (r, c) of marginals; got $(repr(targets))"))
-    return _check_targets(targets[1], targets[2], li.liverow, li.livecol, T)
+    tgt = _check_targets(targets[1], targets[2], li.liverow, li.livecol, T)
+    return needed ? tgt : nothing
 end
 
 # Resolve `targets` for the matrix form. `:support` counts the nonzero entries of each row and

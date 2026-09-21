@@ -522,8 +522,8 @@
         end
     end
 
-    @testset "review regressions" begin
-        # A: a log-scale spread that overflows a mean-centered start. Midrange centering keeps
+    @testset "edge cases: underflow, budgets, sentinels" begin
+        # A log-scale spread too wide for centering on the mean: centering on the midrange keeps
         # both ends representable.
         wide = xs -> [1.0e300 * xs[1], 1.0e-300 * xs[2], 1.0e-300 * xs[1] * xs[2]]
         t, outidxs = tape_function(wide, [1.0, 1.0])
@@ -543,7 +543,7 @@
         @test occursin("floating-point range", wider) || occursin("representable", wider)
         @test !occursin("is zero on live output", wider)
 
-        # B: a structurally live row whose surrogate entries underflow is reported as underflow,
+        # A structurally live row whose surrogate entries underflow is reported as underflow,
         # not blamed on the caller's targets or treated as a dead output.
         under = xs -> [(1.0e-200 * xs[1]) * 1.0e-200, xs[1] * xs[2]]
         tu, ou = tape_function(under, [1.0, 1.0])
@@ -554,7 +554,7 @@
         # The sweep tier never forms the surrogate, so it is unaffected.
         @test all(isfinite, cover_jacobian(tu, ou).b_sum)
 
-        # C: `maxiter` alone asks for a convergence run rather than colliding with the default
+        # `maxiter` alone asks for a convergence run rather than colliding with the default
         # round count.
         Ud = exp.(randn(MersenneTwister(31), 3, 4))
         @test balance_cover(Ud; merge = MaxMerge(), maxiter = 20_000).iters > 0
@@ -562,13 +562,13 @@
         @test balance_cover(Ud).iters == 4
         @test_throws "cannot be combined" balance_cover(Ud; rounds = 2, maxiter = 10)
 
-        # D: `a0` and an explicit `start` are incompatible, whichever start was named.
+        # `a0` and an explicit `start` are incompatible, whichever start was named.
         @test_throws "cannot be combined with start" balance_cover(
             Ud; a0 = ones(3), start = :covariant
         )
         @test_throws "cannot be combined with start" balance_cover(Ud; a0 = ones(3), start = :equal)
 
-        # E: the stall hint names a `targets` value the originating call form accepts.
+        # The stall hint names a `targets` value the originating call form accepts.
         Ucyc = [
             0.0 0.5 0.0 0.0
             2.0 0.5 0.0 0.0
@@ -590,14 +590,14 @@
         @test occursin("targets=:flow", stall.msg)
         @test !occursin("targets=:support", stall.msg)
 
-        # F: a supplied root breaks no tie, so its component reports one.
+        # A supplied root breaks no tie, so its component reports one.
         tch, och = tape_function(chain, [0.7, -0.5, 1.1, -0.9, 0.4, 1.3])
         pot = tape_potentials(tch, och)
         @test pot.nties[1] > 1
         other = findfirst(v -> pot.live[v] && v != pot.roots[1], 1:nnodes(tch))
         @test tape_potentials(tch, och; root = other).nties == [1]
 
-        # Round 7, item 1: a factor that underflows to zero on a live row or column is not a
+        # A factor that underflows to zero on a live row or column is not a
         # cover, so it is an error on every path and whatever `check` says.
         thin = xs -> [1.0e-150 * xs[1], xs[2]]
         tt, ot = tape_function(thin, [1.0, 1.0])
@@ -620,18 +620,32 @@
         # The same program with weights that keep both sides in range is fine.
         @test all(>(0), cover_jacobian(tt, ot).b_sum)
 
-        # Round 7, item 2: `rounds = nothing` means a convergence run at every entry point, and
+        # `rounds = nothing` means a convergence run at every entry point, and
         # leaving it unsaid means the fixed budget.
         @test balance_cover(tt, ot).iters == 4
         @test cover_jacobian(tt, ot; rounds = nothing) isa JacobianCover
-        @test cover_jacobian(tt, ot; rounds = 0).b_sum != cover_jacobian(tt, ot).b_sum ||
-            balance_cover(tt, ot; rounds = 0).delta == balance_cover(tt, ot).delta
+        @test balance_cover(tt, ot; rounds = 0).iters == 0
 
-        # Round 7, item 3: `rtol` tunes a convergence run, so it cannot join a fixed budget.
+        # A zero budget merges the start whatever the targets, and still validates them.
+        for start in (:covariant, :equal)
+            z = [balance_cover(tt, ot; rounds = 0, start, targets) for targets in (:flow, :support, :uniform)]
+            @test z[1].a == z[2].a == z[3].a
+            @test z[1].b == z[2].b == z[3].b
+            @test all(w -> w.iters == 0 && w.delta == Inf, z)
+        end
+        # Equal up to the power-of-two gauge, which leaves every product bit-identical.
+        z = balance_cover(tt, ot; rounds = 0, start = :equal)
+        @test z.a * z.b' == ones(length(ot)) * cover_jacobian(tt, ot; a = ones(length(ot))).b_sum'
+        @test_throws "targets must be" balance_cover(tt, ot; rounds = 0, targets = :bogus)
+        @test_throws "target r has length 1, expected 2" balance_cover(
+            tt, ot; rounds = 0, targets = ([1.0], [1.0, 2.0, 3.0])
+        )
+
+        # `rtol` tunes a convergence run, so it cannot join a fixed budget.
         @test_throws "cannot be combined" balance_cover(tt, ot; rounds = 2, rtol = 1.0e-9)
         @test_throws "cannot be combined" balance_cover(tt, ot; rounds = 2, maxiter = 10)
 
-        # Round 7, item 4: a documented `a0` — zero exactly on dead outputs — is accepted under
+        # A documented `a0` — zero exactly on dead outputs — is accepted under
         # uniform targets too, and a zero on a live output is refused there as well.
         rd2 = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
         td2, od2 = tape_function(rd2, [0.7, 1.3])
@@ -642,7 +656,7 @@
             td2, od2; targets = :uniform, a0 = [0.0, 0.0, 1.0], rounds = 2
         )
 
-        # Round 7, item 5: the gauge is chosen from both factors at once, so a spread that fits
+        # The gauge is chosen from both factors at once, so a spread that fits
         # only when split between them survives.
         split = xs -> [1.0e-160 * xs[1], 1.0e160 * xs[2]]
         ts, os = tape_function(split, [1.0, 1.0])
@@ -650,17 +664,17 @@
         @test all(isfinite, cs.a) && all(>(0), cs.a)
         @test all(isfinite, cs.b_sum) && all(>(0), cs.b_sum)
 
-        # Round 7, item 9: a live input whose path products underflow is refused by name rather
+        # A live input whose path products underflow is refused by name rather
         # than passing a numeric reach test as dead.
         @test_throws "reaches an output" marginal_weights(tt, ot, [0.0, 1.0])
 
-        # Round 7, item 10: the materialized path reports an underflowed entry, not a target that
+        # The materialized path reports an underflowed entry, not a target that
         # the caller is told is realizable.
         under2 = xs -> [(1.0e-200 * xs[1]) * 1.0e-200, xs[1] * xs[2]]
         tu2, ou2 = tape_function(under2, [1.0, 1.0])
         @test_throws "underflowed to zero" balance_cover(tu2, ou2; merge = MaxMerge())
 
-        # G: a non-finite weight is rejected where it enters, by name.
+        # A non-finite weight is rejected where it enters, by name.
         @test_throws "must be finite" cover_jacobian(tu, ou; a = [Inf, 1.0])
         @test_throws "must be finite" cover_jacobian(tu, ou; a = [1.0, NaN])
         @test_throws "must be finite" cover_jacobian_hybrid(tu, ou, 2; a = [Inf, 1.0])
