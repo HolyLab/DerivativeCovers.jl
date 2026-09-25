@@ -329,7 +329,7 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     # A dead slot empties every entry it appears in, leaving only the live slot's own curvature —
     # which the diagonal cover already supplies. The test comes second so that a block the
     # diagonal cover serves anyway never asks for it.
-    offdiag = c12^2 > c11 * c22
+    offdiag = offdiag_active(c11, c12, c22)
     dead = offdiag && (dead_slot(s1) || dead_slot(s2))
     if offdiag && !dead
         rho1, rho2 = split_block(ratio, c11, c12, c22, s1, s2)

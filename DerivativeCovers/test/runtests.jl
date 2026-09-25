@@ -344,6 +344,35 @@ include("genericaxes.jl")
         @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
     end
 
+    @testset "a tiny cross term is still off-diagonal" begin
+        # The classification must not square c12: below the square root of the smallest
+        # subnormal the square underflows to zero, and a multiplication block (c11 == c22 == 0)
+        # with a representable cross term would be covered by (0, 0).
+        @test DerivativeCovers.offdiag_active(0.0, 1.0e-162, 0.0)
+        @test DerivativeCovers.offdiag_active(0.0, nextfloat(0.0), 0.0)
+        @test DerivativeCovers.offdiag_active(0.0f0, 1.0f-30, 0.0f0)
+        @test !DerivativeCovers.offdiag_active(1.0, 10.0, 100.0)
+        @test DerivativeCovers.offdiag_active(1.0, 10.0 * (1 + 1.0e-8), 100.0)
+        # Nor may it overflow: the squared form has both sides at Inf here.
+        @test !DerivativeCovers.offdiag_active(1.0e300, 0.5e300, 1.0e300)
+        @test DerivativeCovers.offdiag_active(1.0e300, 2.0e300, 1.0e300)
+
+        # A running product of 541 halves: the product squared is below the smallest subnormal,
+        # while the blocks along the chain carry cross terms around 1e-162.
+        n = 541
+        x0 = fill(0.5, n)
+        f = x -> (prod(x) - 1)^2
+        res = cover_hessian(WithDiagnostics(), f, x0)
+        @test all(isfinite, res.h_sum)
+        @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
+        @test all(isfinite, cover_variance(f, x0).h_sum)
+
+        # Deeper still, where the adjoints themselves approach the subnormal range.
+        f2 = x -> prod(x)^2
+        res2 = cover_hessian(WithDiagnostics(), f2, fill(0.5, 1000))
+        @test all(h -> isfinite(h) && h > 0, res2.h_sum)
+    end
+
     @testset "constant powers at the origin" begin
         # `x^0` is constant and `x^1` linear, so the derivatives their vanishing leading factors
         # multiply are zero at the origin, where the power those factors multiply is singular.
