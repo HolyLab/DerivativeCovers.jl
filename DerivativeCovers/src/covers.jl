@@ -343,12 +343,28 @@ function hessian_bound(t::Tape{T}, vbar::AbstractVector, utilde::AbstractVector)
 end
 
 """
+    offdiag_active(c11, c12, c22) -> Bool
+
+Whether the diagonal cover `(sqrt(c11), sqrt(c22))` of the nonnegative block `[c11 c12; c12 c22]`
+falls short of its off-diagonal, i.e. whether `c12^2 > c11*c22`, in which case
+[`balanced_split`](@ref) is needed.
+
+The test is `c12 > sqrt(c11)*sqrt(c22)`, never the squared form: `c12^2` underflows to zero for
+`c12` below the square root of the smallest subnormal (about `1e-162` in `Float64`), which would
+misread a block with `c11 == c22 == 0` and a tiny but nonzero cross term as diagonal and cover it
+with `(0, 0)`. A long running product of small factors produces exactly such blocks. Square roots
+keep every representable entry inside the representable range, so this form neither underflows
+nor overflows.
+"""
+offdiag_active(c11, c12, c22) = c12 > sqrt(c11) * sqrt(c22)
+
+"""
     balanced_split(c11, c12, c22, z1, z2) -> (rho1, rho2)
 
 Rank-1 cover of an off-diagonal-active 2×2 block `[c11 c12; c12 c22]`, which requires
-`c12^2 > c11*c22`. Returns `rho1 >= sqrt(c11)` and `rho2 >= sqrt(c22)` with
-`rho1*rho2 == c12`: the cover is exactly tight on the off-diagonal, so no cover of the block is
-smaller in both entries.
+`c12^2 > c11*c22` (see [`offdiag_active`](@ref)). Returns `rho1 >= sqrt(c11)` and
+`rho2 >= sqrt(c22)` with `rho1*rho2 == c12`: the cover is exactly tight on the off-diagonal, so
+no cover of the block is smaller in both entries.
 
 Those constraints leave a one-parameter family. The scale references `z1`, `z2` — one per parent,
 supplied by [`split_block`](@ref): the parent value magnitudes wherever they carry a scale, the
@@ -763,7 +779,7 @@ function guards_any_block(t::Tape{T}; ratio = nothing) where {T}
         C, ps = t.Cs[k], t.parents[k]
         if C isa BinaryCurvature
             c11, c12, c22 = abs(C.c11), abs(C.c12), abs(C.c22)
-            c12^2 > c11 * c22 || continue   # the diagonal cover, which consults no scale
+            offdiag_active(c11, c12, c22) || continue   # the diagonal cover consults no scale
             value_bounds_split(c11, c12, c22, z[ps[1]], z[ps[2]], r) || return true
         elseif C isa PairedCurvature
             for j in 1:C.q
