@@ -199,30 +199,3 @@ carrying their whole Hessian on one quadratic node — but `dag shared` is not a
 adjoint gain is 1.09x by geometric mean and 1.60x on its worst coordinate, and the corners
 nonetheless coincide because the entry that binds its cover is already exact. Channel gains are
 per-coordinate; looseness is the worst entry, and the two need not move together.
-
-## `support_granularity.jl`
-
-[`support_components`](../DerivativeCovers/src/support.jl) calls a tape edge live where its first
-partial is nonzero, which is a property of the point the tape was recorded at. A traced backend has
-no values at trace time, so the most it can offer is structural support: every recorded edge live.
-The script computes components both ways and scores the difference through `gramcover`, which sums
-`a_k^2` over the outputs sharing a column's component — merging components enlarges those sums, so
-both factors of the bound `abs(G_jk) <= s_j*s_k` inflate.
-
-Coarsening happens exactly where a program's separation lives in the *values* of constant
-coefficients rather than in the shape of the graph. Block-diagonal weights record one linear node
-per output row carrying every coefficient, zeros included, and only the partials tell the blocks
-apart. A banded chain and a program whose halves are written separately give identical components
-under either rule. So the measurement bounds what a *dense* array primitive costs; a rule that
-propagates a constant matrix's sparsity recovers the block-diagonal case, while nothing recovers
-the last one below.
-
-Against the uniform-weight pair (`cover_jacobian(t, outidxs; a = ones(m))`) the price is exact
-rather than statistical. With `a` all ones a component's `a`-mass is its output count and the bound degrades by the factor
-by which merging enlarges it: merging 2, 4 and 8 equal blocks costs 2.000, 4.000 and 8.000.
-
-Two consequences do not appear as a looseness ratio. A dead input is found by value liveness and not
-by structural, so the exact and minimal `b_j = 0` has no structural counterpart. And liveness is a
-property of the point rather than of the program: two halves joined only through a product whose
-other factor vanishes separate at that point and nowhere else, so a tape's component count is not
-something a pattern representation can reproduce even in principle.

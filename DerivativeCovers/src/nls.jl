@@ -21,6 +21,10 @@
 #
 # All residual-curvature nodes share one further channel, so the same sweep covers the full
 # Hessian: h² = h_gn² + (that channel)², which is also why h_gn ≤ h entry by entry.
+#
+# A single residual channel instead gives the sum merge c[j] = ∑ₖ ũ_{rₖ,j}, which `gramcover(t,
+# outidxs)` computes in one O(L) sweep of the residual tape; it satisfies
+# h_gn[j] ≤ c[j] ≤ √n_j h_gn[j], with n_j the number of residuals that input j reaches.
 
 """
     NLSCover{T, M}
@@ -239,9 +243,10 @@ end
 
 A valid rank-1 Jacobian cover `(a, b)` — `a_k b_j ≥ |J_{kj}|` — read off the residual
 sensitivities of `nls`: `a = ones(m)` and `b[j] = maximum(Utilde[:, j])`, so
-`a_k b_j = b_j ≥ ũ_{rₖ,j} ≥ |J_{kj}|`. This is the uniform-weight cover, exposed for cross-checks
-against a general asymmetric Jacobian cover; the tight *symmetric* Gauss–Newton cover is `nls.h_gn`,
-not the corollary `‖a‖₂ b` of this pair.
+`a_k b_j = b_j ≥ ũ_{rₖ,j} ≥ |J_{kj}|`. `b` is the max merge for unit output weights: the
+tightest cover of `J` whose row scale the unweighted least-squares loss fixes at one. It serves to
+cross-check a general asymmetric Jacobian cover; the symmetric Gauss–Newton cover of `JᵀJ` is
+`nls.h_gn`.
 """
 function gn_ab(nls::NLSDiagnostics{T, M}) where {T, M}
     a = ones(M, nls.m)

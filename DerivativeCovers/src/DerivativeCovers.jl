@@ -25,7 +25,7 @@ using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
 using SparseArrays: SparseArrays, AbstractSparseVector
 using StaticArrays: StaticMatrix, StaticVector, similar_type
-using MatrixCovers: SupportComponents, initialize_cover
+using MatrixCovers: SupportComponents, initialize_cover, iscover, symcover
 import MatrixCovers: support_components, gramcover, gramcover!
 
 # Main entry points and result types.
