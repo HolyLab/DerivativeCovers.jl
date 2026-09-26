@@ -23,14 +23,15 @@
 # Hessian: h² = h_gn² + (that channel)², which is also why h_gn ≤ h entry by entry.
 
 """
-    NLSCover{T}
+    NLSCover{T, M}
 
-Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`, in the element type `T` of
-the [`Tape`](@ref) it was computed from.
+Result of [`cover_nls`](@ref) for the least-squares loss `f = ½∑ₖ rₖ²`. `T` is the element type of
+the [`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the type of the covers.
+`NLSCover{T}` stands for `NLSCover{T, magtype(T)}`.
 
-- `grad`: gradient of the loss.
-- `h`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
-- `h_gn`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
+- `grad::Vector{T}`: gradient of the loss.
+- `h::Vector{M}`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
+- `h_gn::Vector{M}`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
 - `m`: the number of residuals.
 
 Both covers are read off one grouped reverse sweep with `G` residual channels and one
@@ -38,32 +39,37 @@ residual-curvature channel, so together they cost `O(G * L)` time and memory. Wi
 residual per channel, the default — `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which equals
 `sqrt.(diag(J'J))` when no signed paths cancel.
 """
-struct NLSCover{T}
+struct NLSCover{T, M}
     grad::Vector{T}
-    h::Vector{T}
-    h_gn::Vector{T}
+    h::Vector{M}
+    h_gn::Vector{M}
     m::Int
 end
+NLSCover{T}(grad, h, h_gn, m) where {T} = NLSCover{T, magtype(T)}(grad, h, h_gn, m)
 
 """
-    NLSDiagnostics{T}
+    NLSDiagnostics{T, M}
 
-The extended result returned by `cover_nls(WithDiagnostics(), ...)`, in the element type `T` of
-the [`Tape`](@ref) it was computed from. It carries the fields of [`NLSCover`](@ref) together with
+The extended result returned by `cover_nls(WithDiagnostics(), ...)`. `T` is the element type of
+the [`Tape`](@ref) it was computed from, which `grad` holds, and `M =` [`magtype`](@ref)`(T)` the
+type of the covers and of `Utilde`. `NLSDiagnostics{T}` stands for
+`NLSDiagnostics{T, magtype(T)}`. It carries the fields of [`NLSCover`](@ref) together with
 
-- `Utilde`: `m × n` matrix of absolute residual sensitivities, satisfying
+- `Utilde::Matrix{M}`: `m × n` matrix of absolute residual sensitivities, satisfying
   `Utilde[k,j] >= abs(J[k,j])`.
 
 Forming `Utilde` takes an `m`-channel reverse sweep of its own, `O(m * L)` time and `O(m * n)`
 memory, whatever number of residual channels the covers use.
 """
-struct NLSDiagnostics{T}
+struct NLSDiagnostics{T, M}
     grad::Vector{T}
-    h::Vector{T}
-    h_gn::Vector{T}
-    Utilde::Matrix{T}
+    h::Vector{M}
+    h_gn::Vector{M}
+    Utilde::Matrix{M}
     m::Int
 end
+NLSDiagnostics{T}(grad, h, h_gn, Utilde, m) where {T} =
+    NLSDiagnostics{T, magtype(T)}(grad, h, h_gn, Utilde, m)
 
 """
     nls_loss_tape(r, x0) -> (t, outidx, residx, sqidx)
@@ -75,7 +81,8 @@ indices `residx` of the residuals `rₖ`, and the node indices `sqidx` of their 
 `r` may return residuals that are input or duplicated nodes; each is squared into its own fresh
 node, so `sqidx` has one distinct entry per residual regardless. A constant residual — a fixed
 offset of the loss, contributing `½c²` to `f` and a zero row to `J` — gets a node of its own
-([`constantnode`](@ref)); an all-constant residual vector depends on no parameter and is an error.
+([`constantnode`](@ref)); an all-constant residual vector depends on no parameter and is an error,
+as is a recording that [`check_values`](@ref) rejects.
 """
 function nls_loss_tape(r, x0::AbstractVector)
     t = Tape(x0)
@@ -95,6 +102,7 @@ function nls_loss_tape(r, x0::AbstractVector)
     sqs = [v^2 for v in rnodes]
     sqidx = [s.idx for s in sqs]
     loss = 0.5 * sum(sqs)
+    check_values(t)
     return t, loss.idx, residx, sqidx
 end
 
@@ -235,8 +243,8 @@ sensitivities of `nls`: `a = ones(m)` and `b[j] = maximum(Utilde[:, j])`, so
 against a general asymmetric Jacobian cover; the tight *symmetric* Gauss–Newton cover is `nls.h_gn`,
 not the corollary `‖a‖₂ b` of this pair.
 """
-function gn_ab(nls::NLSDiagnostics{T}) where {T}
-    a = ones(T, nls.m)
+function gn_ab(nls::NLSDiagnostics{T, M}) where {T, M}
+    a = ones(M, nls.m)
     b = [maximum(view(nls.Utilde, :, j)) for j in 1:size(nls.Utilde, 2)]
     return a, b
 end

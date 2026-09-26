@@ -60,6 +60,7 @@ include("equilibrate.jl")
 include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
+include("intervals.jl")
 
 @testset "DerivativeCovers.jl" begin
 
@@ -119,6 +120,7 @@ include("genericaxes.jl")
             :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
             :sensitivity_scales, :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
+            :magnitude, :magtype, :separation, :check_values,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,

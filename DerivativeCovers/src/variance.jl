@@ -8,26 +8,29 @@
 # that cover comes from overlapping paths.
 
 """
-    VarianceCover{T}
+    VarianceCover{T, M}
 
-Result of [`cover_variance`](@ref), in the element type `T` of the [`Tape`](@ref) it was computed
-from.
+Result of [`cover_variance`](@ref). `T` is the element type of the [`Tape`](@ref) it was computed
+from, and `M =` [`magtype`](@ref)`(T)` the type of the two channels. `VarianceCover{T}` stands for
+`VarianceCover{T, magtype(T)}`.
 
-- `grad`: gradient of the scalar function.
-- `h_sum`: certified sum-merge Hessian cover.
-- `h_var`: variance estimate of the quadrature merge. This is **not a certified cover**.
-- `severity`: coordinatewise ratio `h_sum ./ h_var`. Larger values indicate more overlap from
-  reconvergent paths.
+- `grad::Vector{T}`: gradient of the scalar function.
+- `h_sum::Vector{M}`: certified sum-merge Hessian cover.
+- `h_var::Vector{M}`: variance estimate of the quadrature merge. This is **not a certified cover**.
+- `severity::Vector{M}`: coordinatewise ratio `h_sum ./ h_var`. Larger values indicate more
+  overlap from reconvergent paths.
 
 The estimates satisfy `h_var <= h_quad <= h_sum` coordinatewise. Because `h_var` drops
 covariances between reconvergent contributions, it need not bound the Hessian.
 """
-struct VarianceCover{T}
+struct VarianceCover{T, M}
     grad::Vector{T}
-    h_sum::Vector{T}
-    h_var::Vector{T}
-    severity::Vector{T}
+    h_sum::Vector{M}
+    h_var::Vector{M}
+    severity::Vector{M}
 end
+VarianceCover{T}(grad, h_sum, h_var, severity) where {T} =
+    VarianceCover{T, magtype(T)}(grad, h_sum, h_var, severity)
 
 """
     variance_seeds(t::Tape, rhos) -> theta2
@@ -39,7 +42,7 @@ that [`local_covers`](@ref) returns, and it seeds the squared channel of
 """
 function variance_seeds(t::Tape{T}, rhos::AbstractVector) where {T}
     N = nnodes(t)
-    theta2 = zeros(T, N)
+    theta2 = zeros(magtype(T), N)
     for k in (t.ninputs + 1):N
         rho = rhos[k]
         isempty(rho) && continue
@@ -55,14 +58,14 @@ end
 
 One reverse traversal carrying the hard and variance channels together:
 
-    abar[j] = theta[j]  + sum_{k : j in P_k} abs(∂φ_k/∂v_j)   * abar[k]
-    vbar[j] = theta2[j] + sum_{k : j in P_k}    (∂φ_k/∂v_j)^2 * vbar[k]
+    abar[j] = theta[j]  + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)   * abar[k]
+    vbar[j] = theta2[j] + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)^2 * vbar[k]
 
 The hard channel is [`abs_reverse`](@ref): seeded with `theta` from [`local_covers`](@ref), its
 value at the inputs is the sum merge. The variance channel squares both the seeds and the
 coefficients, so it collects the same path contributions in quadrature; seeded with the matching
 `theta2` from [`variance_seeds`](@ref), `sqrt.(vbar)` at the inputs estimates the quadrature merge
-from below.
+from below. Both channels hold magnitudes: `vbar` here is the variance channel, not an adjoint.
 """
 function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector)
     N = nnodes(t)
@@ -76,9 +79,9 @@ function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector
         ak, vk = abar[k], vbar[k]
         (ak == 0 && vk == 0) && continue
         for (i, p) in enumerate(t.parents[k])
-            d = t.ds[k][i]
-            d == 0 && continue
-            abar[p] += abs(d) * ak
+            d = magnitude(t.ds[k][i])
+            iszero(d) && continue
+            abar[p] += d * ak
             vbar[p] += d^2 * vk
         end
     end

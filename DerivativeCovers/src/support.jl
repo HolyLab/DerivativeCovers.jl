@@ -80,7 +80,7 @@ function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
         live[k] || continue
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
-            (live[ps[i]] && !iszero(ds[i])) || continue
+            (live[ps[i]] && !iszero(magnitude(ds[i]))) || continue
             _union!(uf, k, ps[i])
         end
     end
@@ -111,7 +111,7 @@ function _live_nodes(t::Tape, outidxs::AbstractVector{<:Integer})
     for k in (n + 1):N
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
-            if dep[ps[i]] && !iszero(ds[i])
+            if dep[ps[i]] && !iszero(magnitude(ds[i]))
                 dep[k] = true
                 break
             end
@@ -126,7 +126,7 @@ function _live_nodes(t::Tape, outidxs::AbstractVector{<:Integer})
         reach[k] || continue
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
-            iszero(ds[i]) || (reach[ps[i]] = true)
+            iszero(magnitude(ds[i])) || (reach[ps[i]] = true)
         end
     end
     return dep .& reach

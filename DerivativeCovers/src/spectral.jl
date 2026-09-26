@@ -47,7 +47,7 @@ true
 ```
 """
 hvp(t::Tape, outidx::Integer, v::AbstractVector) =
-    hvp!(similar(v, float(eltype(v))), t, outidx, v)
+    hvp!(similar(v, promote_type(eltype(t), float(eltype(v)))), t, outidx, v)
 
 function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -78,12 +78,13 @@ function hvp!(Hv::AbstractVector, t::Tape, outidx::Integer, v::AbstractVector)
         ps = t.parents[k]
         isempty(ps) && continue
         bk, ak = vbar[k], vbardot[k]
-        (bk == 0 && ak == 0) && continue
+        live = !iszero(magnitude(bk))
+        (live || !iszero(magnitude(ak))) || continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
             vbardot[p] += ds[i] * ak
         end
-        if bk != 0
+        if live
             # The ladder resolves the forms the tape recorded, whatever type the tangents carry.
             dispatchcurvature(t.Cs[k], eltype(t)) do C
                 curvature_apply!(vbardot, C, ps, bk, dv)
@@ -113,7 +114,9 @@ The dense method is exact. Coordinates with `h[i] == 0` are admissible only if r
 vanishes, in which case they are dropped; otherwise `h` does not cover `H` and an error is thrown.
 
 The tape method is matrix-free: power iteration on `Hhat` driven by [`hvp`](@ref), stopped when
-the estimate changes by less than `rtol` relative. It requires `h` to be strictly positive. Each
+the estimate changes by less than `rtol` relative. It requires `h` to be strictly positive, and a
+tape whose element type is its own [`magtype`](@ref): power iteration evaluates at a point, so a
+set-valued tape (such as one recorded on intervals) is an error. Each
 iterate `norm(Hhat*v)` with `norm(v) == 1` is a *lower* bound on `lambda` and the sequence
 converges to it from below, so the estimate must be inflated by a safety factor before it is used
 to shrink a cover (see [`spectral_shrink`](@ref)). Failure to converge within `maxiter` is an
@@ -125,7 +128,7 @@ function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
     supp = [i for i in eachindex(h) if h[i] > 0]
     for i in eachindex(h)
         h[i] > 0 && continue
-        all(j -> iszero(H[i, j]), axes(H, 2)) ||
+        all(j -> iszero(magnitude(H[i, j])), axes(H, 2)) ||
             throw(ArgumentError("h[$i] is zero but row $i of H is not: h does not cover H"))
     end
     isempty(supp) && return zero(real(one(eltype(H)) / (one(eltype(h)) * one(eltype(h)))))
@@ -140,6 +143,12 @@ function scaled_spectral_radius(
         rng::AbstractRNG = Xoshiro(0)
     )
     n = t.ninputs
+    magtype(eltype(t)) === eltype(t) || throw(
+        ArgumentError(
+            "power iteration is pointwise; it cannot bound the scaled spectral radius over a " *
+                "set-valued tape of element type $(eltype(t))"
+        )
+    )
     Base.require_one_based_indexing(h)
     length(h) == n ||
         throw(DimensionMismatch("h has length $(length(h)), expected $n (one per input)"))
@@ -176,8 +185,14 @@ improvement exactly when `safety*lambda < 1`; the clamp keeps a spectrally satur
 `safety` inflates `lambda` before it is used. It must be large enough that `safety*lambda` is an
 upper bound on the true spectral norm: with an exact `lambda` the default `1` is correct, but the
 power-iteration estimate converges from below and needs `safety > 1`.
+
+`lambda` must bound the scaled norm wherever the cover is meant to hold: for a cover computed over
+a set of points, such as a box of intervals, that is the supremum over the set. It must be a plain
+number (its type is its own [`magtype`](@ref)); a set-valued `lambda`, such as an interval, is an
+error.
 """
 function spectral_shrink(h::AbstractVector, lambda::Real; safety::Real = 1)
+    _check_pointwise_slack(lambda, "lambda")
     lambda >= 0 || throw(ArgumentError("lambda must be nonnegative, got $lambda"))
     safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
     return h .* sqrt(min(one(float(lambda)), safety * lambda))

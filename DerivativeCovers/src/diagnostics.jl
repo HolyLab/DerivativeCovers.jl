@@ -19,6 +19,7 @@ module Diagnostics
 
 using LinearAlgebra: Diagonal, Symmetric, dot, eigmin, issymmetric, norm
 using Random: AbstractRNG, Xoshiro
+using ..DerivativeCovers: magnitude, magtype
 
 export InflationPattern, UniformInflation, LognormalInflation, SpikeInflation, RampInflation
 export inflation_shape, inflation_factors, inflate, anisotropy

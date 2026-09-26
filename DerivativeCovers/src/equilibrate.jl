@@ -33,7 +33,7 @@ julia> round.(jvp(r, [0.5, 2.0, -1.0], [1.0, 0.0, 1.0]); digits=4)
 ```
 """
 jvp(t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector) =
-    jvp!(similar(v, float(eltype(v)), axes(outidxs)), t, outidxs, v)
+    jvp!(similar(v, promote_type(eltype(t), float(eltype(v))), axes(outidxs)), t, outidxs, v)
 
 function jvp!(Jv::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, v::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -98,7 +98,7 @@ julia> round.(vjp(r, [0.5, 2.0, -1.0], [1.0, 1.0, 1.0]); digits=4)
 ```
 """
 vjp(t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector) =
-    vjp!(similar(u, float(eltype(u)), Base.OneTo(t.ninputs)), t, outidxs, u)
+    vjp!(similar(u, promote_type(eltype(t), float(eltype(u))), Base.OneTo(t.ninputs)), t, outidxs, u)
 
 function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, u::AbstractVector)
     n, N = t.ninputs, nnodes(t)
@@ -114,7 +114,7 @@ function vjp!(Jtu::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, 
     # Reverse topological order finalizes each adjoint before propagation.
     for k in N:-1:1
         vk = vbar[k]
-        vk == 0 && continue
+        iszero(magnitude(vk)) && continue
         for (i, p) in enumerate(t.parents[k])
             vbar[p] += t.ds[k][i] * vk
         end
@@ -147,12 +147,12 @@ function equilibrate(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
         throw(DimensionMismatch("J, a, b must share indices: $(axes(J)) vs $(axes(a)), $(axes(b))"))
     for k in eachindex(a)
         a[k] > 0 && continue
-        all(j -> iszero(J[k, j]), axes(J, 2)) ||
+        all(j -> iszero(magnitude(J[k, j])), axes(J, 2)) ||
             throw(ArgumentError("a[$k] is zero but row $k of J is not: (a, b) does not cover J"))
     end
     for j in eachindex(b)
         b[j] > 0 && continue
-        all(k -> iszero(J[k, j]), axes(J, 1)) ||
+        all(k -> iszero(magnitude(J[k, j])), axes(J, 1)) ||
             throw(ArgumentError("b[$j] is zero but column $j of J is not: (a, b) does not cover J"))
     end
     Jhat = similar(J, float(eltype(J)))
@@ -176,7 +176,9 @@ The dense method is exact, and drops zero weights on the same terms as [`equilib
 
 The tape method is matrix-free: power iteration on `Jhat'Jhat` driven by [`jvp`](@ref) and
 [`vjp`](@ref) — about two gradients per iteration, `O(L)` memory — stopped when the estimate
-changes by less than `rtol` relative. It requires `a` and `b` to be strictly positive. Each iterate
+changes by less than `rtol` relative. It requires `a` and `b` to be strictly positive, and a tape
+whose element type is its own [`magtype`](@ref): power iteration evaluates at a point, so a
+set-valued tape (such as one recorded on intervals) is an error. Each iterate
 `norm(Jhat*v)` with `norm(v) == 1` is a *lower* bound on `sigma` and the sequence converges to it
 from below, so the estimate must carry a safety-factor inflation before it may shrink a cover
 (see [`jacobian_shrink`](@ref)). Failure to converge within `maxiter` is an error, not a silently
@@ -198,6 +200,12 @@ function scaled_singular_value(
         rng::AbstractRNG = Xoshiro(0)
     )
     n = t.ninputs
+    magtype(eltype(t)) === eltype(t) || throw(
+        ArgumentError(
+            "power iteration is pointwise; it cannot bound the scaled singular value over a " *
+                "set-valued tape of element type $(eltype(t))"
+        )
+    )
     Base.require_one_based_indexing(b)
     length(b) == n ||
         throw(DimensionMismatch("b has length $(length(b)), expected $n (one per input)"))
@@ -244,10 +252,28 @@ inflated, which would be valid but looser.
 `safety` inflates `sigma` before it is used. It must be large enough that `safety*sigma` is an
 upper bound on the true spectral norm: with an exact `sigma` the default `1` is correct, but the
 power-iteration estimate converges from below and needs `safety > 1`.
+
+`sigma` must bound the scaled norm wherever the cover is meant to hold: for a cover computed over
+a set of points, such as a box of intervals, that is the supremum over the set. It must be a plain
+number (its type is its own [`magtype`](@ref)); a set-valued `sigma`, such as an interval, is an
+error.
 """
 function jacobian_shrink(a::AbstractVector, b::AbstractVector, sigma::Real; safety::Real = 1)
+    _check_pointwise_slack(sigma, "sigma")
     sigma >= 0 || throw(ArgumentError("sigma must be nonnegative, got $sigma"))
     safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
     scale = sqrt(min(one(float(sigma)), safety * sigma))
     return a .* scale, b .* scale
+end
+
+# A spectral slack that shrinks a cover must be a single number bounding the norm everywhere the
+# cover holds; a set-valued one does not say which member bounds it.
+function _check_pointwise_slack(x, name)
+    magtype(typeof(x)) === typeof(x) || throw(
+        ArgumentError(
+            "$name must be a plain number bounding the scaled norm wherever the cover holds; " *
+                "got a $(typeof(x)), whose values stand for sets"
+        )
+    )
+    return nothing
 end

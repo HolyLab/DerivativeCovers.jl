@@ -1,20 +1,22 @@
 # Quality metrics for a cover: is it valid, and how loose is it?
 
-_ratio_type(A, B) = typeof(float(one(eltype(A)) / one(eltype(B))))
+# The type of a ratio of magnitudes of entries of `A` and `B`.
+_ratio_type(A, B) = typeof(float(one(magtype(eltype(A))) / one(magtype(eltype(B)))))
 
 """
     cover_ratio(H, h) -> r
 
 The worst-case ratio `max_ij abs(H[i,j]) / (h[i]*h[j])` over the nonzero entries of `H`. The vector
 `h` covers `H` exactly when `r <= 1`. Zero entries of `H` impose no constraints and are skipped; a
-nonzero entry with a zero denominator gives `Inf`.
+nonzero entry with a zero denominator gives `Inf`. `abs` is [`magnitude`](@ref), so an `H` whose
+entries enclose a set of Hessians (such as an interval matrix) gives the worst ratio over the set.
 """
 function cover_ratio(H::AbstractMatrix, h::AbstractVector)
     axes(H, 1) == axes(H, 2) == axes(h, 1) ||
         throw(DimensionMismatch("H and h must share indices: $(axes(H)) vs $(axes(h))"))
     worst = zero(_ratio_type(H, h))
     for j in axes(H, 2), i in axes(H, 1)
-        Hij = abs(H[i, j])
+        Hij = magnitude(H[i, j])
         iszero(Hij) && continue
         d = h[i] * h[j]
         worst = max(worst, d > 0 ? Hij / d : oftype(worst, Inf))
@@ -33,7 +35,7 @@ function bound_ratio(H::AbstractMatrix, B::AbstractMatrix)
         throw(DimensionMismatch("H and B must share indices: $(axes(H)) vs $(axes(B))"))
     worst = zero(_ratio_type(H, B))
     for j in axes(H, 2), i in axes(H, 1)
-        Hij = abs(H[i, j])
+        Hij = magnitude(H[i, j])
         iszero(Hij) && continue
         worst = max(worst, B[i, j] > 0 ? Hij / B[i, j] : oftype(worst, Inf))
     end
