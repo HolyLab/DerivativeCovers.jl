@@ -17,14 +17,18 @@ curvature scale) and unchanged when the variables are rescaled.
 A cover coordinate may be exactly zero, which says the Hessian ignores that input. The norm is
 then `Inf` if `g[i]` is nonzero — no step along `i` is justified by curvature, so the test cannot
 be satisfied — and the coordinate is simply skipped if `g[i]` vanishes too.
+
+`abs(g[i])` is taken as [`magnitude`](@ref DerivativeCovers.magnitude)`(g[i])`, so a gradient
+whose entries enclose a set of gradients, such as the interval gradient of a cover computed over a
+box, gives the largest norm over the set.
 """
 function cover_norm(g::AbstractVector, h::AbstractVector)
     axes(g) == axes(h) ||
         throw(DimensionMismatch("g and h must share indices: $(axes(g)) vs $(axes(h))"))
-    T = typeof(float(one(eltype(g)) / one(eltype(h))))
+    T = typeof(float(one(magtype(eltype(g))) / one(eltype(h))))
     acc = zero(T)
     for i in eachindex(g, h)
-        gi = abs(g[i])
+        gi = magnitude(g[i])
         iszero(gi) && continue
         h[i] > 0 || return T(Inf)
         acc += (gi / h[i])^2
@@ -85,6 +89,8 @@ end
 Step of the regularized system `(A + tau*Diagonal(h.^2)) * x = -g`. The shift
 `tau*Diagonal(h.^2)` carries the units of the curvature the cover certifies, so `tau` is
 dimensionless and a single value of it means the same thing on every problem.
+
+`A` and `g` are numeric: a Hessian and gradient at one point, not enclosures over a set.
 """
 function regularized_step(A::AbstractMatrix, g::AbstractVector, h::AbstractVector, tau::Real)
     axes(A, 1) == axes(A, 2) == axes(g, 1) == axes(h, 1) ||
@@ -132,7 +138,8 @@ boost expressed in the units the cover certifies. It is the negative part of the
 eigenvalue of `A` scaled into cover coordinates, `A[i,j]/(h[i]*h[j])`, and so is invariant under
 rescaling of the variables.
 
-Requires a strictly positive cover, since the scaling divides by it. `A` must be symmetric.
+Requires a strictly positive cover, since the scaling divides by it. `A` must be a symmetric
+numeric matrix, such as the Hessian at one point.
 """
 function psd_shift(A::AbstractMatrix, h::AbstractVector)
     axes(A, 1) == axes(A, 2) == axes(h, 1) ||
@@ -198,7 +205,7 @@ Note that the convergence test is itself stated in the cover's metric, so two ru
 covers stop at genuinely different accuracies; comparing them requires a metric fixed outside the
 iteration, as [`step_degradation`](@ref) does.
 
-Requires a strictly positive cover, and a symmetric positive definite `A`. Definiteness is
+Requires a strictly positive cover, and a numeric symmetric positive definite `A`. Definiteness is
 enforced as the iteration goes: a search direction of nonpositive curvature throws rather than
 producing the NaN iterates that dividing by it would.
 """

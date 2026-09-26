@@ -33,7 +33,7 @@ function _live_info(t::Tape, outidxs)
         live[k] || continue
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
-            (live[ps[i]] && !iszero(ds[i])) || continue
+            (live[ps[i]] && !iszero(magnitude(ds[i]))) || continue
             indeg[k] += 1
             outdeg[ps[i]] += 1
         end
@@ -60,7 +60,7 @@ struct ForwardFlow
     li::LiveInfo
 end
 (f::ForwardFlow)(d, k, i, p) =
-    (f.li.live[k] && f.li.live[p] && !iszero(d)) ? 1 / f.li.indeg[k] : 0.0
+    (f.li.live[k] && f.li.live[p] && !iszero(magnitude(d))) ? 1 / f.li.indeg[k] : 0.0
 
 # Slot weight `1/outdeg(parent)`: a node divides its mass equally over its live child slots and its
 # virtual sink slots, so every live input emits exactly 1.
@@ -68,7 +68,7 @@ struct ReverseFlow
     li::LiveInfo
 end
 (f::ReverseFlow)(d, k, i, p) =
-    (f.li.live[k] && f.li.live[p] && !iszero(d)) ? 1 / f.li.outdeg[p] : 0.0
+    (f.li.live[k] && f.li.live[p] && !iszero(magnitude(d))) ? 1 / f.li.outdeg[p] : 0.0
 
 """
     _flow_targets(t::Tape, outidxs, li::LiveInfo) -> (r, c)
@@ -183,7 +183,7 @@ function _foreach_input_block(f, t::Tape, outidxs, li::LiveInfo)
             ps, ds = t.parents[k], t.ds[k]
             acc = UInt64(0)
             for i in eachindex(ps)
-                (li.live[ps[i]] && !iszero(ds[i])) || continue
+                (li.live[ps[i]] && !iszero(magnitude(ds[i]))) || continue
                 acc |= mask[ps[i]]
             end
             mask[k] = acc
@@ -209,7 +209,7 @@ function _foreach_output_block(f, t::Tape, outidxs, li::LiveInfo)
             mk == 0 && continue
             ps, ds = t.parents[k], t.ds[k]
             for i in eachindex(ps)
-                (li.live[ps[i]] && !iszero(ds[i])) || continue
+                (li.live[ps[i]] && !iszero(magnitude(ds[i]))) || continue
                 mask[ps[i]] |= mk
             end
         end
@@ -232,14 +232,14 @@ end
 _degree(g::LiveGraph, v::Integer) = g.ptr[v + 1] - g.ptr[v]
 
 function _live_graph(t::Tape{T}, outidxs::AbstractVector{<:Integer}, live) where {T}
-    TL = float(real(T))
+    TL = magtype(T)
     N = nnodes(t)
     ptr = zeros(Int, N + 1)
     for k in (t.ninputs + 1):N
         live[k] || continue
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
-            (live[ps[i]] && !iszero(ds[i])) || continue
+            (live[ps[i]] && !iszero(magnitude(ds[i]))) || continue
             ptr[k + 1] += 1
             ptr[ps[i] + 1] += 1
         end
@@ -256,8 +256,8 @@ function _live_graph(t::Tape{T}, outidxs::AbstractVector{<:Integer}, live) where
         ps, ds = t.parents[k], t.ds[k]
         for i in eachindex(ps)
             p = ps[i]
-            (live[p] && !iszero(ds[i])) || continue
-            l = log(abs(TL(ds[i])))
+            (live[p] && !iszero(magnitude(ds[i]))) || continue
+            l = log(TL(magnitude(ds[i])))
             nbr[pos[k]] = p
             val[pos[k]] = l
             pos[k] += 1
@@ -524,7 +524,7 @@ function _tape_potentials(
         root = nothing, cgiters::Integer = 0
     ) where {T}
     cgiters >= 0 || throw(ArgumentError("cgiters must be nonnegative, got $cgiters"))
-    TL = float(real(T))
+    TL = magtype(T)
     g = _live_graph(t, outidxs, li.live)
     comp, defroots, defties = _live_components(g)
     roots, nties = _resolve_roots(root, g, comp, defroots, defties)

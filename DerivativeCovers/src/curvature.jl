@@ -136,7 +136,7 @@ end
 
 Declared bound on the second partials of a sub-map output (see [`submapnode`](@ref)):
 `abs(C[i, j]) <= s[i]*s[j]`, with the true `C` not recorded. `s` is nonnegative and slot-aligned
-with the node's parents.
+with the node's parents. On a [`Tape{T}`](@ref Tape), `s` is a vector of [`magtype`](@ref)`(T)`.
 
 Cover constructions consume second partials only through bounds on `abs.(C)`, so the declaration
 substitutes for a recorded matrix everywhere except [`hvp`](@ref), which needs the signed entries
@@ -161,8 +161,9 @@ ordinary way: this is an optimization for the common cases, not a restriction on
 allowed.
 
 `T` is the element type of the tape the curvature came from, which is the one the elementals of
-`overloads.jl` record in. A curvature over some other element or matrix type is correct here, just
-not statically resolved.
+`overloads.jl` record in; a [`DeclaredCurvature`](@ref) holds magnitudes, so its form is resolved
+over [`magtype`](@ref)`(T)`. A curvature over some other element or matrix type is correct here,
+just not statically resolved.
 
 `C` is `@nospecialize`d because specializing on it would defeat the point: a caller that knows
 the concrete form would compile an instance in which every branch below but one is dead, having
@@ -174,7 +175,8 @@ type, branching at run time, is the intended shape.
     C isa UnaryCurvature{T} && return f(C)
     C isa BinaryCurvature{T} && return f(C)
     C isa PairedCurvature && return f(C)
-    C isa DeclaredCurvature{T, Vector{T}} && return f(C)
+    M = magtype(T)
+    C isa DeclaredCurvature{M, Vector{M}} && return f(C)
     return f(C)
 end
 
@@ -222,20 +224,21 @@ atom_slots(::NoCurvature, nslots) = ()
 atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
-    cover_slots(C::Curvature, ratio, site, av, sl; check=true) -> Union{Nothing,Vector{T}}
+    cover_slots(C::Curvature, ratio, site, av, sl; check=true) -> Union{Nothing,Vector{M}}
     cover_slots!(rho::Vector, C::Curvature, ratio, site, av, sl; check=true) -> Bool
 
 The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `rho` with
-`rho[i]*rho[j] >= av*abs(C[i,j])`, where `av` is the weight the elemental's second-order term
-carries (the absolute adjoint `abs(vbar[k])` in a reverse sweep, `1` in a forward one). Returns
-`nothing` when the elemental contributes no second-order term.
+`rho[i]*rho[j] >= av*magnitude(C[i,j])`, where `av` is the weight the elemental's second-order
+term carries (the absolute adjoint `magnitude(vbar[k])` in a reverse sweep, `1` in a forward one).
+Returns `nothing` when the elemental contributes no second-order term.
 
 Entries involving a slot whose tangent vanishes are exempt: they are multiplied by zero in the
 Hessian, so covering them would only import the other slot's scale into a term that is not there.
 [`dead_slot`](@ref) is the test, and it reads the slot's entry of `sl`.
 
-`rho` must be a `Vector{T}` for `T = eltype(site)`: [`local_cover_slots`](@ref) asserts that type
-so that the sweeps, which call it once per node, need not box the result.
+`rho`, `av` and the entries of `sl` are magnitudes, in `M = magtype(eltype(site))`. `rho` must be a
+`Vector{M}`: [`local_cover_slots`](@ref) asserts that type so that the sweeps, which call it once
+per node, need not box the result.
 
 The mutating form resizes `rho` to the elemental's slot count and fills it, returning whether
 there is a second-order term at all and leaving `rho` untouched when there is not. Every
@@ -255,7 +258,7 @@ forward propagation; see [`local_cover_slots`](@ref).
 cover_slots(::NoCurvature, ratio, site, av, sl; check::Bool = true) = nothing
 
 function cover_slots(C::Curvature, ratio, site, av, sl; check::Bool = true)
-    rho = Vector{eltype(site)}(undef, cover_nslots(C, sl))
+    rho = Vector{magtype(eltype(site))}(undef, cover_nslots(C, sl))
     cover_slots!(rho, C, ratio, site, av, sl; check) || return nothing
     return rho
 end
@@ -298,7 +301,7 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
         if check
             check_finite_partials(site, av, (c,))
             # Allow for roundoff accumulated across the program, not just this comparison.
-            rtol = sqrt(eps(float(real(eltype(site)))))
+            rtol = sqrt(eps(magtype(eltype(site))))
             dead || a * b >= c * (1 - rtol) || error(
                 "local cover invariant violated at $(site_label(site)), pair $j: rho=($a,$b), c=$c"
             )
@@ -310,7 +313,7 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
 end
 
 function cover_slots!(rho::Vector, C::UnaryCurvature, ratio, site, av, sl; check::Bool = true)
-    c11 = av * abs(C.c)
+    c11 = av * magnitude(C.c)
     c11 == 0 && return false
     check && check_finite_partials(site, av, (c11,))
     resize!(rho, 1)
@@ -319,10 +322,10 @@ function cover_slots!(rho::Vector, C::UnaryCurvature, ratio, site, av, sl; check
 end
 
 function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; check::Bool = true)
-    T = eltype(site)
-    c11 = av * abs(C.c11)
-    c12 = av * abs(C.c12)
-    c22 = av * abs(C.c22)
+    M = magtype(eltype(site))
+    c11 = av * magnitude(C.c11)
+    c12 = av * magnitude(C.c12)
+    c22 = av * magnitude(C.c22)
     (c11 == 0 && c12 == 0 && c22 == 0) && return false
     s1, s2 = sl[1], sl[2]
     resize!(rho, 2)
@@ -338,7 +341,7 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     end
     if check
         check_finite_partials(site, av, (c11, c12, c22))
-        rtol = sqrt(eps(float(real(T))))
+        rtol = sqrt(eps(M))
         (
             rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
                 (dead || rho1 * rho2 >= c12 * (1 - rtol))
@@ -365,8 +368,8 @@ cover_slots!(rho::Vector, C::DenseCurvature, ratio, site, av, sl; check::Bool = 
     bound_contribution!(B, C::Curvature, av, ps, utilde)
 
 Accumulate node `k`'s term of the elementwise bound into `B`:
-`av * sum_{i,j} abs(C[i,j]) * utilde[ps[i]] * utilde[ps[j]]'`, where `av` is the absolute adjoint
-and `utilde` the forward absolute sensitivities. See [`hessian_bound`](@ref).
+`av * sum_{i,j} magnitude(C[i,j]) * utilde[ps[i]] * utilde[ps[j]]'`, where `av` is the absolute
+adjoint and `utilde` the forward absolute sensitivities. See [`hessian_bound`](@ref).
 
 A [`DeclaredCurvature`](@ref) contributes its declared bound `s[i]*s[j] >= abs(C[i,j])`, which
 factorizes, so its term is the single rank-1 outer product `w*w'` with
@@ -408,7 +411,7 @@ function bound_contribution!(
     )
     n = size(B, 1)
     for i in eachindex(ps), j in eachindex(ps)
-        cij = av * abs(C[i, j])
+        cij = av * magnitude(C[i, j])
         cij == 0 && continue
         ui, uj = utilde[ps[i]], utilde[ps[j]]
         for q in 1:n, r in 1:n

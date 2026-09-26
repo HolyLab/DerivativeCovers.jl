@@ -1,12 +1,61 @@
 # Wengert tape and the overloaded scalar variable that records onto it.
 
 """
+    magnitude(x)
+
+The largest absolute value `x` can take: the quantity the cover sweeps accumulate wherever they
+need the size of a value, partial or adjoint. For a number this is `abs(x)`.
+
+A type whose values stand for a set of numbers, such as an interval, extends this with the largest
+absolute value over the set. A program recorded on such values then yields covers that hold at
+every point of the set.
+"""
+magnitude(x) = abs(x)
+
+"""
+    magtype(T)
+
+The type of [`magnitude`](@ref) applied to a `T`, which is the type the cover sweeps compute in
+for a [`Tape{T}`](@ref Tape). It is `T` for a real floating-point type and the real type of a
+complex one.
+"""
+magtype(::Type{T}) where {T} = typeof(magnitude(zero(T)))
+
+"""
+    separation(x, y)
+
+How far apart `x` and `y` are: `abs(x - y)` for numbers. A type whose values stand for sets
+extends this with the smallest distance between members of the two sets, which is zero whenever
+they overlap. The consistency checks of [`cover_hessian`](@ref) and [`cover_lattice`](@ref) use it
+to compare two computations of the same gradient.
+"""
+separation(x, y) = abs(x - y)
+
+"""
+    check_values(t::Tape)
+
+Throw if the values recorded on `t` show that the program left the domain of one of its
+elementals. [`tape_function`](@ref) calls this once recording finishes. Over numbers there is
+nothing to check, since a numeric elemental outside its domain raises an error or returns a
+non-finite value the cover checks report. A set-valued element type, whose elementals can instead
+return a result flagged as undefined on part of the set, extends this to look for that flag.
+"""
+check_values(t) = nothing
+
+"""
     Tape{T}
 
 A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs, holding its values and
-partials in the element type `T`. `eltype(t)` reports `T`, and every cover computed from `t`
-returns it: `T` is the working precision of the whole construction, and a value or weight a caller
-supplies is converted into it.
+partials in the element type `T`. `eltype(t)` reports `T`: it is the working precision of the whole
+construction, and a value or weight a caller supplies is converted into it. Signed results such as
+gradients are returned in `T`; covers and other nonnegative bounds are computed and returned in
+[`magtype`](@ref)`(T)`, which is `T` itself for a real floating-point type.
+
+`T` may be a type whose values stand for sets of numbers, such as an interval type from
+IntervalArithmetic.jl. The values and partials recorded over a box then enclose those at every
+point of the box, [`magnitude`](@ref) takes the largest absolute value over each set, and the
+covers computed from the tape hold everywhere on the box. Program control flow that the set does
+not decide, such as a comparison between overlapping intervals, raises an error while recording.
 
 The first `ninputs` nodes represent the function inputs. Later nodes are appended in topological
 order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
@@ -255,14 +304,14 @@ constantnode(t::Tape{T}, c::Real) where {T} =
 
 Record a node `φ(x)` with value `val`, `φ'(x) = d`, and `φ''(x) = c`.
 
-A zero `c` is stored as [`NoCurvature`](@ref) rather than as a zero [`UnaryCurvature`](@ref): the
-node contributes no second-order term either way, and that form says so without an entry to load
-and test.
+A zero `c` (one whose [`magnitude`](@ref) is zero) is stored as [`NoCurvature`](@ref) rather than
+as a zero [`UnaryCurvature`](@ref): the node contributes no second-order term either way, and that
+form says so without an entry to load and test.
 """
 function unarynode(x::TVar, val, d, c)
     t, i = noderef(x)
     T = eltype(t)
-    C = iszero(c) ? NoCurvature() : UnaryCurvature(convert(T, c))
+    C = iszero(magnitude(c)) ? NoCurvature() : UnaryCurvature(convert(T, c))
     return pushnode!(t, val, [i], T[d], C)
 end
 
@@ -280,7 +329,7 @@ function binarynode(x::TVar, y::TVar, val, d1, d2, c11, c12, c22)
     ty, iy = noderef(y)
     tx === ty || throw(ArgumentError("cannot combine TVars from different tapes"))
     T = eltype(tx)
-    C = if iszero(c11) && iszero(c12) && iszero(c22)
+    C = if iszero(magnitude(c11)) && iszero(magnitude(c12)) && iszero(magnitude(c22))
         NoCurvature()
     else
         BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
@@ -372,6 +421,11 @@ affordable, [`compose_jacobian_cover`](@ref) and [`compose_hessian_cover`](@ref)
 the two factors with no joint tape and no dense `J`. That route bounds the composition's
 first-order contribution by a rank-1 pair rather than using `J` itself, which loosens the
 `J'∇²g J` term of the chain rule and leaves the declared curvature term unchanged.
+
+On a tape whose element type stands for sets (its [`magtype`](@ref) differs from it), `y` and `J`
+must be of such a type too, enclosing the values and Jacobian over the sets the parents range
+over, and `S` must cover the curvature over them; a declaration with a pointwise `y` or `J` is an
+`ArgumentError`. [`submap`](@ref) meets this by declaring on the parent values themselves.
 """
 function submapnode(
         xs::AbstractVector{<:TVar}, y::AbstractVector{<:Real},
@@ -394,13 +448,28 @@ function submapnode(
     all(x -> first(noderef(x)) === t, xs) ||
         throw(ArgumentError("cannot combine TVars from different tapes"))
     T = eltype(t)
+    M = magtype(T)
+    # Converting a declaration made at a point into a set-valued type would present it as valid
+    # over the whole set. A real type that is not its own magnitude type stands for sets.
+    if T <: Real && M !== T
+        for (name, A) in (("y", y), ("J", J))
+            magtype(eltype(A)) === eltype(A) && throw(
+                ArgumentError(
+                    "the tape's element type $T stands for sets, but the declared $name has " *
+                        "element type $(eltype(A)), which is pointwise: a set-valued tape needs " *
+                        "a declaration evaluated on the same sets, such as declare_submap " *
+                        "applied to the parent values"
+                )
+            )
+        end
+    end
     parents = [last(noderef(x)) for x in xs]   # shared by all q nodes; parent lists are never mutated
     return [
         begin
-                C = if S === nothing || all(iszero, view(S, k, :))
+                C = if S === nothing || all(s -> iszero(magnitude(s)), view(S, k, :))
                     NoCurvature()
             else
-                    DeclaredCurvature(T[S[k, i] for i in 1:p])
+                    DeclaredCurvature(M[magnitude(S[k, i]) for i in 1:p])
             end
                 pushnode!(t, y[k], parents, T[J[k, i] for i in 1:p], C)
             end for k in 1:q
@@ -421,7 +490,8 @@ return value is:
     entry. Input nodes and repeated outputs are preserved. A constant output receives its own
     node and therefore contributes a zero Jacobian row.
 
-A function whose outputs are all constant raises an error.
+A function whose outputs are all constant raises an error, as does a recording that
+[`check_values`](@ref) rejects.
 
 # Examples
 
@@ -447,7 +517,9 @@ julia> outidxs
 function tape_function(f, x0::AbstractVector)
     t = Tape(x0)
     xs = [TVar(t, i) for i in 1:t.ninputs]
-    return _tape_output(t, f(xs))
+    out = _tape_output(t, f(xs))
+    check_values(t)
+    return out
 end
 
 function _tape_output(t::Tape, out::TVar)

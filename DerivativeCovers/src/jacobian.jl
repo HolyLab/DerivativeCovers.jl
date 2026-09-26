@@ -17,7 +17,7 @@ bound `B`. A repeated entry in `outidxs` yields an identical row.
 """
 function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
     m, N = length(outidxs), nnodes(t)
-    Theta = zeros(T, m, N)
+    Theta = zeros(magtype(T), m, N)
     for (k, o) in enumerate(outidxs)
         Theta[k, o] += 1
     end
@@ -27,8 +27,9 @@ end
 """
     JacobianCover{T}
 
-Result of [`cover_jacobian`](@ref), in the element type `T` of the [`Tape`](@ref) it was computed
-from: `a[k] * b_sum[j] >= abs(J[k,j])`.
+Result of [`cover_jacobian`](@ref): `a[k] * b_sum[j] >= abs(J[k,j])`. `T` is
+[`magtype`](@ref) of the element type of the [`Tape`](@ref) it was computed from, which for a
+real floating-point tape is that element type itself.
 
 - `a`: output weights.
 - `b_sum`: input weights from the sum merge, computed in one `O(L)` reverse sweep.
@@ -48,9 +49,9 @@ end
 """
     JacobianDiagnostics{T}
 
-The extended result returned by `cover_jacobian(WithDiagnostics(), ...)`, in the element type `T`
-of the [`Tape`](@ref) it was computed from. It carries the fields of [`JacobianCover`](@ref)
-together with
+The extended result returned by `cover_jacobian(WithDiagnostics(), ...)`. `T` is
+[`magtype`](@ref) of the element type of the [`Tape`](@ref) it was computed from. It carries the
+fields of [`JacobianCover`](@ref) together with
 
 - `b_quad`: the quadrature merge `b_j = √(∑_k (Ũ_kj/a_k)²)`.
 - `b_max`: the smallest valid `b` for this `a`, `b_j = max_k Ũ_kj/a_k`.
@@ -133,13 +134,14 @@ function cover_jacobian(
     w = _jacobian_weights(t, outidxs, start, rounds, a, li)
     Utilde = jacobian_surrogate(t, outidxs)
     _check_surrogate_support(t, outidxs, Utilde, li)
+    M = magtype(T)
     # scaled[k, j] = Ũ_kj / a_k, and zero on a dead output, whose row is zero anyway.
-    scaled = [w.a[k] > 0 ? Utilde[k, j] / w.a[k] : zero(T) for k in 1:m, j in 1:n]
+    scaled = [w.a[k] > 0 ? Utilde[k, j] / w.a[k] : zero(M) for k in 1:m, j in 1:n]
     b_quad = sqrt.(vec(sum(abs2, scaled; dims = 1)))
     b_max = vec(maximum(scaled; dims = 1))
 
     if check
-        rtol = eps(float(real(T)))^(2 // 3)
+        rtol = eps(M)^(2 // 3)
         s, idx = worst_severity(Utilde .* (1 - rtol) ./ (w.a .* b_max'))
         if s > 1
             k, j = Tuple(idx)
@@ -189,8 +191,8 @@ function _jacobian_a(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where 
     Base.require_one_based_indexing(a)
     length(a) == m ||
         throw(DimensionMismatch("a has length $(length(a)), expected $m (one per output)"))
-    # The tape's element type is the cover's, so the weights join it.
-    aw = collect(T, a)
+    # The weights are magnitudes, so they join the type the covers are computed in.
+    aw = collect(magtype(T), a)
     _check_output_weights(aw, .!li.liverow)
     return aw, nothing, nothing, nothing
 end
@@ -256,7 +258,7 @@ function cover_jacobian_hybrid(
     a = first(_jacobian_a(t, outidxs, start, rounds, a, li))
 
     G = maximum(groups)
-    Theta = zeros(T, G, N)
+    Theta = zeros(magtype(T), G, N)
     for (k, o) in enumerate(outidxs)
         # A dead output seeds nothing: its sensitivities are zero whatever weight it carries.
         a[k] > 0 && (Theta[groups[k], o] += 1 / a[k])
@@ -417,7 +419,7 @@ function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo)
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
-    theta = zeros(T, nnodes(t))
+    theta = zeros(magtype(T), nnodes(t))
     for j in 1:t.ninputs
         if b[j] > 0
             theta[j] = 1 / b[j]
@@ -594,9 +596,10 @@ function _balance_tape(
         rtol::Union{Nothing, Real} = nothing, check::Bool = true
     ) where {T}
     m = length(outidxs)
-    maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, T)
+    M = magtype(T)
+    maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, M)
     # No round reads the targets, so a zero budget validates them without sweeping for them.
-    tgt = _tape_targets(targets, arule, t, outidxs, m, T, li; needed = rounds !== 0)
+    tgt = _tape_targets(targets, arule, t, outidxs, m, M, li; needed = rounds !== 0)
     matrixpath = !(merge isa SumMerge) || arule !== :marginal
     _check_start(start, a0, root, cgiters, !matrixpath)
     if matrixpath
@@ -614,7 +617,7 @@ function _balance_tape(
     if a0 === nothing && something(start, :covariant) === :covariant
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
-    a = _balance_start(a0, m, T, li.liverow)
+    a = _balance_start(a0, m, M, li.liverow)
 
     rawbstep = a -> _sum_merge_b(t, outidxs, a, li)
     anumstep = b -> _marginal_weights(t, outidxs, b, li)
@@ -652,7 +655,7 @@ function balance_cover(
     )
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
-    T = float(real(eltype(Utilde)))
+    T = float(magtype(eltype(Utilde)))
     maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, T)
     m, n = size(Utilde)
     tgt = _matrix_targets(targets, arule, Utilde, m, n, T)
@@ -672,7 +675,7 @@ function _balance_matrix(
         Utilde, tgt, liverow, livecol, merge::MergeRule, arule::Symbol, start, a0,
         maxiter, rounds, rtol, check::Bool, suggest::Symbol
     )
-    T = float(real(eltype(Utilde)))
+    T = float(magtype(eltype(Utilde)))
     m = size(Utilde, 1)
     # No round reads the targets, so a zero budget goes straight from the start to the merge.
     rounds === 0 && (tgt = nothing)
@@ -722,7 +725,7 @@ end
 # the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
 # rather than a silently dropped row.
 function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
-    theta = zeros(T, nnodes(t))
+    theta = zeros(magtype(T), nnodes(t))
     for (k, o) in enumerate(outidxs)
         if a[k] > 0
             theta[o] += 1 / a[k]
@@ -767,7 +770,7 @@ _resolve_maxiter(maxiter, arule::Symbol) =
 # governs a call. `rounds === missing` means the caller said nothing about it: tuning a convergence
 # run with `maxiter` or `rtol` then asks for one, and otherwise the default budget applies.
 function _resolve_budget(maxiter, rounds, rtol, arule::Symbol, ::Type{T}) where {T}
-    rtolv = rtol === nothing ? eps(float(real(T)))^(2 // 3) : rtol
+    rtolv = rtol === nothing ? eps(float(magtype(T)))^(2 // 3) : rtol
     rounds === missing &&
         (rounds = (maxiter === nothing && rtol === nothing) ? _DEFAULT_ROUNDS : nothing)
     rounds === nothing && return _resolve_maxiter(maxiter, arule), nothing, rtolv
@@ -820,7 +823,7 @@ end
 # spread; a spread too wide even for that has no representable start at all. Dead outputs get zero.
 function _potential_start(t::Tape{T}, outidxs, root, cgiters::Integer, li::LiveInfo) where {T}
     pot, comp = _tape_potentials(t, outidxs, li; root, cgiters)
-    TL = float(real(T))
+    TL = magtype(T)
     ncomp = length(pot.roots)
     lo, hi = fill(TL(Inf), ncomp), fill(TL(-Inf), ncomp)
     for o in outidxs
@@ -1233,7 +1236,7 @@ function jacobian_ratio(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
         throw(DimensionMismatch("J is $(axes(J)); a is $(axes(a)); b is $(axes(b))"))
     worst = zero(_ratio_type(J, a))
     for j in axes(J, 2), k in axes(J, 1)
-        Jkj = abs(J[k, j])
+        Jkj = magnitude(J[k, j])
         iszero(Jkj) && continue
         d = a[k] * b[j]
         worst = max(worst, d > 0 ? Jkj / d : oftype(worst, Inf))
@@ -1267,12 +1270,12 @@ column `b_j = 0`; both are exact. Unlike [`balance_cover`](@ref) this minimizes 
 excess itself, so it is the tightness yardstick — but the optimum is generally non-unique off
 the critical cycles, so prefer `balance_cover`'s rules when covariance-by-uniqueness matters.
 """
-function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(M))))^(3 // 4))
+function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(magtype(eltype(M))))^(3 // 4))
     Base.require_one_based_indexing(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
     atol > 0 || throw(ArgumentError("atol must be positive, got $atol"))
     m, n = size(M)
-    T = float(real(eltype(M)))
+    T = float(magtype(eltype(M)))
     ks, js, cs = Int[], Int[], T[]
     for j in 1:n, k in 1:m
         M[k, j] > 0 && (push!(ks, k); push!(js, j); push!(cs, log(M[k, j])))
@@ -1297,7 +1300,7 @@ function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(real(eltype(
     b[.!livecol] .= 0
     _regauge!(a, b)
     excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
-    excess >= 1 - eps(float(real(eltype(M))))^(2 // 3) ||
+    excess >= 1 - eps(T)^(2 // 3) ||
         error("minimax pair does not cover M: worst ratio $(1 / excess)")
     return (; a, b, excess)
 end
@@ -1334,7 +1337,8 @@ independent of the merge and surrogate. It is `√(max 2×2 defect)`, where a 2�
 rank-1 `M` gives exactly `1`; block structure (partially separable Jacobians) drives it up.
 
 Computed in `O(m²n)` from row-pair differences of `log M` over shared-support columns — a
-diagnostic. Pass `abs.(J)` or a surrogate `Ũ` as `M`. This is the 2-cycle restriction of the
+diagnostic. Pass [`magnitude`](@ref)`.(J)` (which is `abs.(J)` for a numeric `J`) or a surrogate
+`Ũ` as `M`. This is the 2-cycle restriction of the
 exact forced excess: longer support cycles can dominate it, and [`jacobian_minimax`](@ref)
 computes the exact value together with a pair attaining it.
 """
@@ -1342,7 +1346,7 @@ function jacobian_representability(M::AbstractMatrix)
     Base.require_one_based_indexing(M)
     m, n = size(M)
     all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
-    T = float(real(eltype(M)))
+    T = float(magtype(eltype(M)))
     worst = zero(T)
     for k in 1:m, l in (k + 1):m
         lo = T(Inf)

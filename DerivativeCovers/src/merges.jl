@@ -98,7 +98,7 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:
         throw(DimensionMismatch("groups has length $(length(groups)), expected $N (one per node)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
     G = maximum(groups)
-    Theta = zeros(T, G, N)
+    Theta = zeros(magtype(T), G, N)
     for k in (t.ninputs + 1):N
         rho = rhos[k]
         isempty(rho) && continue
@@ -115,7 +115,7 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, ngroups::Integer) where {
     N = nnodes(t)
     # Channels beyond the atom count would stay empty, so the sweep need not carry them.
     G = max(1, min(Int(ngroups), natoms(t)))
-    Theta = zeros(T, G, N)
+    Theta = zeros(magtype(T), G, N)
     a = 0
     for k in (t.ninputs + 1):N
         rho = rhos[k]
@@ -137,7 +137,9 @@ end
 
 Vector-mode form of [`abs_reverse`](@ref): each row of `Theta` is an independent seed vector over
 the nodes (columns), and all rows are propagated in one traversal. `Abar[:, a]` for an input `a`
-holds that input's value for every channel.
+holds that input's value for every channel. The seeds are nonnegative magnitudes, as
+[`group_seeds`](@ref) returns them in [`magtype`](@ref) of the tape's element type, and `Abar`
+holds them in their floating-point type.
 """
 function abs_reverse(t::Tape, Theta::AbstractMatrix)
     size(Theta, 2) == nnodes(t) ||
@@ -146,7 +148,7 @@ function abs_reverse(t::Tape, Theta::AbstractMatrix)
     G = size(Abar, 1)
     for k in nnodes(t):-1:1
         for (i, p) in enumerate(t.parents[k])
-            a = abs(t.ds[k][i])
+            a = magnitude(t.ds[k][i])
             a == 0 && continue
             for g in 1:G
                 Abar[g, p] += a * Abar[g, k]
