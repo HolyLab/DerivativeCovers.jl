@@ -725,18 +725,24 @@ end
 # the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
 # rather than a silently dropped row.
 function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
-    theta = zeros(magtype(T), nnodes(t))
-    for (k, o) in enumerate(outidxs)
-        if a[k] > 0
-            theta[o] += 1 / a[k]
-        else
-            li.liverow[k] && throw(
-                ArgumentError(
-                    "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
-                        "cover can cover its row"
-                )
+    for k in eachindex(a)
+        a[k] > 0 || !li.liverow[k] || throw(
+            ArgumentError(
+                "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
+                    "cover can cover its row"
             )
-        end
+        )
+    end
+    return _output_sweep(t, outidxs, (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a)))
+end
+
+# `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
+# output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
+# and the seeds of a repeated output node add, as its repeated rows of `Ũ` do.
+function _output_sweep(t::Tape{T}, outidxs, seeds) where {T}
+    theta = zeros(magtype(T), nnodes(t))
+    for (o, sk) in zip(outidxs, seeds)
+        theta[o] += sk
     end
     return abs_reverse(t, theta)[1:t.ninputs]
 end

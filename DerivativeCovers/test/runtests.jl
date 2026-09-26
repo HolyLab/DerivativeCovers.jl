@@ -21,8 +21,8 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     local_covers, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge
-# This package adds `Tape` methods to these MatrixCovers functions but does not re-export them.
-using MatrixCovers: support_components, gramcover, gramcover!, SupportComponents, ncomponents,
+# This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
+using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
     rowcomponent, colcomponent
 using Aqua
 using ExplicitImports

@@ -1,10 +1,9 @@
 # Connected components of the tape's output-input support graph.
 #
-# Outputs and inputs are vertices; a nonzero surrogate entry is an edge. The cover gauge acts
-# independently on each component, so scaling conventions and Gram-cover accumulation must also
-# be componentwise.
+# Outputs and inputs are vertices; a nonzero surrogate entry is an edge. The gauge of an
+# asymmetric cover acts independently on each component.
 #
-# This O(L) tape traversal avoids materializing Ũ. MatrixCovers handles the resulting components.
+# This O(L) tape traversal avoids materializing Ũ and returns MatrixCovers' `SupportComponents`.
 
 struct UnionFind
     parent::Vector{Int}
@@ -67,9 +66,6 @@ splits into ascending and descending runs whose nodes each reach some output,
 which forces the corresponding bipartite vertices into one component; conversely a
 support edge is a directed path of live nodes. The undirected components of the
 live tape graph therefore restrict to the bipartite components exactly.
-
-Passing the result to [`gramcover`](@ref) covers a Gram matrix of the Jacobian
-without ever forming `Ũ`.
 """
 function support_components(t::Tape, outidxs::AbstractVector{<:Integer})
     N, n = nnodes(t), t.ninputs
