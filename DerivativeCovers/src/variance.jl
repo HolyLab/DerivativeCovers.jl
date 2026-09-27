@@ -16,7 +16,8 @@ from, and `M =` [`magtype`](@ref)`(T)` the type of the two channels. `VarianceCo
 
 - `grad::Vector{T}`: gradient of the scalar function.
 - `h_sum::Vector{M}`: certified sum-merge Hessian cover.
-- `h_var::Vector{M}`: variance estimate of the quadrature merge. This is **not a certified cover**.
+- `h_var::Vector{M}`: variance estimate of the quadrature merge, under a random-sign model with
+  one sign per parent slot (see [`cover_variance`](@ref)). This is **not a certified cover**.
 - `severity::Vector{M}`: coordinatewise ratio `h_sum ./ h_var`. Larger values indicate more
   overlap from reconvergent paths.
 
@@ -121,6 +122,17 @@ The same channels follow from the staged form: [`local_covers`](@ref) and
 [`variance_seeds`](@ref) supply the seeds of both channels, and [`dependency_sweep`](@ref)
 propagates them.
 
+`h_sum[i]` adds one contribution per pair of a seeded parent slot and a path from that slot to
+input `i`: the slot's seed times the product of the absolute first partials along the path.
+`h_var[i]^2` sums the squares of the same contributions. That is the expected square of their
+sum when each parent slot carries an independent, equiprobable sign, on its first partial and on
+its seed — the model [`gramvariance`](@ref) uses. A variable that enters one elemental through
+two slots is therefore two paths whose contributions combine in quadrature, although in the
+program they share a sign: `x[1] * x[1]` seeds each of its two slots with `1`, so `h_sum = 2` adds
+them and `h_var = √2`, while `x[1]^2`, a unary elemental with a single slot, gives `√2` for
+both. Where such paths reconverge further along, `h_var` falls below the exact scale: for
+`x[1] * x[1] * x[1]` at `x = 3`, `h_var = √15` against `sqrt(abs(f''(3))) = √18`.
+
 # Examples
 
 ```jldoctest
@@ -142,6 +154,16 @@ julia> round.(vc.severity; digits=4)
 2-element Vector{Float64}:
  1.3239
  1.3938
+
+julia> cover_variance(x -> x[1] * x[1], [3.0]).h_sum   # two slots, two paths
+1-element Vector{Float64}:
+ 2.0
+
+julia> cover_variance(x -> x[1] * x[1], [3.0]).h_var ≈ [sqrt(2)]
+true
+
+julia> cover_variance(x -> x[1] * x[1] * x[1], [3.0]).h_var ≈ [sqrt(15)]   # |f''| = 18
+true
 ```
 """
 function cover_variance(t::Tape, outidx::Integer; check::Bool = true, scales = nothing, ratio = nothing)

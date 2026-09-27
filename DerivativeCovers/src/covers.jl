@@ -22,7 +22,8 @@ The standard result returned by [`cover_hessian`](@ref). `T` is the element type
 - `grad::Vector{T}`: gradient of the scalar function at the evaluation point.
 - `h_sum::Vector{M}`: certified Hessian cover computed with the sum merge.
 - `h_var::Vector{M}`: the variance channel, the root-sum-square of the path contributions that
-  `h_sum` adds. This is a scale, **not a certified cover**; see [`cover_variance`](@ref).
+  `h_sum` adds, which models one independent sign per parent slot. This is a scale, **not a
+  certified cover**; see [`cover_variance`](@ref).
 """
 struct HessianCover{T, M}
     grad::Vector{T}

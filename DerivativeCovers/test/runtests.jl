@@ -1106,6 +1106,21 @@ include("intervals.jl")
         @test cover_ratio(H, vc.h_var) ≈ 9 / 5     # the (1,1) entry is no longer covered
     end
 
+    @testset "variance channel counts each parent slot as its own path" begin
+        # `x*x` seeds two slots that share a sign in the program; the channel squares them apart.
+        vc = cover_variance(x -> x[1] * x[1], [3.0])
+        @test vc.h_sum ≈ [2.0]
+        @test vc.h_var ≈ [sqrt(2.0)]
+        # The unary square has a single slot, so its two channels agree.
+        vu = cover_variance(x -> x[1]^2, [3.0])
+        @test vu.h_sum ≈ vu.h_var ≈ [sqrt(2.0)]
+        # The cube reconverges on x through three slots and falls below sqrt(abs(f'')) = sqrt(18).
+        vcube = cover_variance(x -> x[1] * x[1] * x[1], [3.0])
+        @test vcube.h_var ≈ [sqrt(15.0)]
+        @test vcube.h_var[1] < sqrt(18.0)
+        @test cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var == vcube.h_var
+    end
+
     @testset "variance channel covariance" begin
         cases = [
             ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
