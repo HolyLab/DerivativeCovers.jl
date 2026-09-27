@@ -20,7 +20,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
     local_covers, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
-    MergeRule, SumMerge, QuadMerge, MaxMerge
+    MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
     rowcomponent, colcomponent
@@ -47,6 +47,21 @@ function staged_channels(t, outidx)
     rhos, theta = local_covers(t, adjoints(t, outidx))
     abar, qbar = dependency_sweep(t, theta, variance_seeds(t, rhos))
     return abar[1:n], sqrt.(qbar[1:n])
+end
+
+# `U2[k, j]` sums, over the paths from input `j` to output `k`, the squared path product: the
+# squared channel behind `gramvariance` and the variance pair. The dense forward recurrence over
+# the tape builds it for comparison with the sweeps.
+function squared_path_sums(t, outidxs)
+    N, n = nnodes(t), t.ninputs
+    U2 = zeros(N, n)
+    for j in 1:n
+        U2[j, j] = 1
+    end
+    for k in (n + 1):N, (i, p) in enumerate(t.parents[k])
+        U2[k, :] .+= abs2(DerivativeCovers.magnitude(t.ds[k][i])) .* U2[p, :]
+    end
+    return U2[collect(outidxs), :]
 end
 
 include("constants.jl")
@@ -155,7 +170,7 @@ include("intervals.jl")
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
+            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :VarianceMerge, :variance_surrogate,
             :balance_cover, :tape_potentials,
         )
         for sym in private

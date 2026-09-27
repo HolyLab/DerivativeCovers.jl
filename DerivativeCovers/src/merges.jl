@@ -144,11 +144,16 @@ holds them in their floating-point type.
 function abs_reverse(t::Tape, Theta::AbstractMatrix)
     size(Theta, 2) == nnodes(t) ||
         throw(DimensionMismatch("Theta has $(size(Theta, 2)) columns, expected $(nnodes(t)) (one per node)"))
+    return _reverse_sweep(_absslot, t, Theta)
+end
+
+# Vector-mode reverse sweep with a pluggable per-slot weight, one channel per row of `Theta`.
+function _reverse_sweep(w::F, t::Tape, Theta::AbstractMatrix) where {F}
     Abar = collect(float.(Theta))
     G = size(Abar, 1)
     for k in nnodes(t):-1:1
         for (i, p) in enumerate(t.parents[k])
-            a = magnitude(t.ds[k][i])
+            a = w(t.ds[k][i], k, i, p)
             a == 0 && continue
             for g in 1:G
                 Abar[g, p] += a * Abar[g, k]

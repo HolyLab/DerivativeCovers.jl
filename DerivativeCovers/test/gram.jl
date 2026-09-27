@@ -127,20 +127,6 @@
     end
 end
 
-# `gramvariance` is `sqrt.(∑_k abs(w[k]) * U2[k, :])`, with `U2` the sum over paths of squared
-# path products. The dense forward recurrence over the tape builds `U2` for comparison.
-function squared_path_sums(t, outidxs)
-    N, n = nnodes(t), t.ninputs
-    U2 = zeros(N, n)
-    for j in 1:n
-        U2[j, j] = 1
-    end
-    for k in (n + 1):N, (i, p) in enumerate(t.parents[k])
-        U2[k, :] .+= abs2(DerivativeCovers.magnitude(t.ds[k][i])) .* U2[p, :]
-    end
-    return U2[collect(outidxs), :]
-end
-
 # Exact `E[J.^2]` when each parent slot's local partial carries an independent sign, by
 # enumerating all sign patterns.
 function signed_second_moment(t, outidxs)

@@ -196,6 +196,24 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test ok
     end
 
+    # The squared channel over the box bounds the pointwise one, so the variance pair's squares,
+    # which cover the box's `Ũ⁽²⁾`, cover every pointwise `Ũ⁽²⁾` too.
+    @testset "the variance pair over the box — $name" for (name, r, lo, hi) in vector_programs
+        t, outidxs = tape_function(r, interval.(lo, hi))
+        U2 = DerivativeCovers.variance_surrogate(t, outidxs)
+        @test U2 isa Matrix{Float64}
+        for kw in ((;), (; rounds = nothing), (; start = :equal))
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), check = true, kw...)
+            @test v.a isa Vector{Float64} && v.b isa Vector{Float64}
+            ok = true
+            for x in samples(Xoshiro(47), lo, hi)
+                U2x = DerivativeCovers.variance_surrogate(tape_function(r, x)...)
+                ok &= all(U2x .<= U2 .* slack) && all(U2x .<= (v.a .* v.b') .^ 2 .* slack)
+            end
+            @test ok
+        end
+    end
+
     @testset "products on an interval tape enclose the pointwise products" begin
         _, r, lo, hi = vector_programs[2]
         t, outidxs = tape_function(r, interval.(lo, hi))

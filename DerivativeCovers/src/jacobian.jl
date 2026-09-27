@@ -25,6 +25,26 @@ function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) wher
 end
 
 """
+    variance_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> U2
+
+The `m × n` squared-channel counterpart of [`jacobian_surrogate`](@ref): `U2[k, j]` sums, over the
+paths from input `j` to output `k`, the squared product of the local partial magnitudes along the
+path. A sum of squares is at most the square of the sum, so `U2 <= Utilde.^2` entrywise, with
+equality where an entry has a single path. If each parent slot's local partial carries an
+independent, equiprobable sign, `U2[k, j] = E[J_kj^2]`. This is the matrix
+[`balance_cover`](@ref) takes with `merge = VarianceMerge()`. Formed by one `m`-channel reverse
+sweep through squared partials, `O(m*L)`.
+"""
+function variance_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
+    m, N = length(outidxs), nnodes(t)
+    Theta = zeros(magtype(T), m, N)
+    for (k, o) in enumerate(outidxs)
+        Theta[k, o] += 1
+    end
+    return _reverse_sweep(_sqslot, t, Theta)[:, 1:t.ninputs]
+end
+
+"""
     JacobianCover{T}
 
 Result of [`cover_jacobian`](@ref): `a[k] * b_sum[j] >= abs(J[k,j])`. `T` is
@@ -414,8 +434,11 @@ marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector)
     _marginal_weights(t, outidxs, b, _live_info(t, outidxs))
 
 # The balancing loop already holds the structural liveness, so it passes it in rather than paying
-# for a reachability sweep in every round that has a zero `b`.
-function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo) where {T}
+# for a reachability sweep in every round that has a zero `b`. `slot = _sqslot` gives the
+# squared-channel marginal `∑_j Ũ⁽²⁾_kj / b_j` instead.
+function _marginal_weights(
+        t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo, slot::F = _absslot
+    ) where {T, F}
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
@@ -432,7 +455,7 @@ function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo)
             )
         end
     end
-    s = abs_forward(t, theta)
+    s = _forward_sweep(slot, t, theta)
     # The balancing iteration indexes weights by output position.
     a = Vector{eltype(s)}(undef, length(outidxs))
     for (k, o) in enumerate(outidxs)
@@ -470,6 +493,9 @@ one family, so a parameterized member (a `p`-norm merge) is reachable through th
 without an API break. They are types rather than names so that the b-step's doubly-nested loop
 specializes on the choice, and so that the non-convergence hint can dispatch per rule.
 
+[`VarianceMerge`](@ref) is the exception: it selects the squared channel for the whole
+alternation, not only the final b-step, and the pair it returns is a scale rather than a cover.
+
 `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
 see that function's docstring.
 """
@@ -478,7 +504,8 @@ abstract type MergeRule end
 """
     SumMerge <: MergeRule
 
-`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and the only one the tape form can run as `O(L)` sweeps.
+`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and, with [`VarianceMerge`](@ref), the only one the tape
+form can run as `O(L)` sweeps.
 """
 struct SumMerge <: MergeRule end
 
@@ -499,12 +526,40 @@ round, which no larger budget reduces. [`balance_cover`](@ref) reports that as a
 struct MaxMerge <: MergeRule end
 
 """
+    VarianceMerge <: MergeRule
+
+The variance pair: [`balance_cover`](@ref)'s marginal alternation run on the squared channel
+`Ũ⁽²⁾` ([`variance_surrogate`](@ref)) with squared factors,
+
+    a_k² ← (1/ρ_k) ∑_j Ũ⁽²⁾_kj / b_j²,    b_j² ← (1/γ_j) ∑_k Ũ⁽²⁾_kj / a_k²,
+
+followed by the final b-step `b_j² = ∑_k Ũ⁽²⁾_kj / a_k²`. This is the [`SumMerge`](@ref)
+alternation applied to `Ũ⁽²⁾` with factors `(a², b²)`, with the same targets, round budget and
+convergence test; the start is the default pair's start, squared, and `balance_cover` returns the
+square roots. On a tape each half-step is one sweep through squared local partials, so a round
+costs `O(L)` and `Ũ⁽²⁾` is never formed; the final b-step is
+[`gramvariance`](@ref)`(t, outidxs, w)` with `w_k = 1/a_k²` on the live outputs and zero on the
+others.
+
+The pair is a scale, **not a cover**. The final b-step gives every live column
+`∑_k Ũ⁽²⁾_kj / (a_k² b_j²) = 1`, so `a_k² b_j² >= Ũ⁽²⁾_kj`, which is what `check = true` verifies.
+But `Ũ⁽²⁾ <= Ũ.^2`, with equality only where an entry has a single path, so `a_k b_j` can fall
+below `Ũ_kj`, and below `abs(J_kj)` where several paths add with the same sign. If each parent
+slot's local partial carries an independent, equiprobable sign, `Ũ⁽²⁾_kj = E[J_kj²]`, and at
+convergence the pair standardizes the signed Jacobian in expectation: the normalized iterate
+`(a, b ./ sqrt.(γ))` has expected row sums of squares
+`∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and the returned `b` has
+expected column sums of squares `1`.
+"""
+struct VarianceMerge <: MergeRule end
+
+"""
     balance_cover(t::Tape, outidxs; kwargs...) -> (; a, b, iters, delta, roots, nties)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; kwargs...)
 
 Output and input weights covering the absolute-sensitivity surrogate: `a[k] * b[j] >= Ũ_kj`, and
-so `>= abs(J_kj)`.
+so `>= abs(J_kj)`, for every `merge` except [`VarianceMerge`](@ref).
 
 By default the weights come from a scale-covariant start, `rounds` rounds of a marginal
 alternation toward row and column targets the sparsity pattern makes realizable, and a final
@@ -538,7 +593,9 @@ without it.
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
   - `merge`: the final b-step, [`SumMerge`](@ref) (default), [`QuadMerge`](@ref) or
-    [`MaxMerge`](@ref).
+    [`MaxMerge`](@ref). [`VarianceMerge`](@ref) instead runs the whole alternation on the squared
+    channel `Ũ⁽²⁾` and returns a scale that is not a cover; the matrix form then takes `Ũ⁽²⁾`
+    ([`variance_surrogate`](@ref)) in place of `Ũ`, and `check` verifies `a_k² b_j² >= Ũ⁽²⁾_kj`.
   - `arule`: `:marginal` (default) alternates [`marginal_weights`](@ref) with the b-step;
     `:geomean` fits `log Ũ_kj ≈ log a_k + log b_j` instead and prescribes no `targets`.
   - `root`, `cgiters`: passed to [`tape_potentials`](@ref) for the tape-potential start. Naming
@@ -551,12 +608,14 @@ without it.
 test applies to (the gauge-invariant product change `max_kj |log((a_k b_j)_new/(a_k b_j)_old)|`,
 or the relative row-marginal residual `max_k |∑_j Ũ_kj/(a_k b_j r_k) - 1|` for non-uniform
 targets), and `roots`, `nties` from [`tape_potentials`](@ref) when the tape-potential start was
-used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`.
+used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`. With
+`VarianceMerge()`, `delta` is measured on the squared channel: on `a_k² b_j²` and `Ũ⁽²⁾`.
 
 # Cost
 
-The tape form with `merge = SumMerge(), arule = :marginal` runs as `O(L)` sweeps per round and
-never forms `Ũ`. Every other combination, and `check = true`, forms it at `O(m*L)`.
+The tape form with `merge = SumMerge()` or `VarianceMerge()` and `arule = :marginal` runs as
+`O(L)` sweeps per round and never forms `Ũ`. Every other combination, and `check = true`, forms it
+(or `Ũ⁽²⁾`) at `O(m*L)`.
 
 # Examples
 
@@ -600,12 +659,15 @@ function _balance_tape(
     maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, M)
     # No round reads the targets, so a zero budget validates them without sweeping for them.
     tgt = _tape_targets(targets, arule, t, outidxs, m, M, li; needed = rounds !== 0)
-    matrixpath = !(merge isa SumMerge) || arule !== :marginal
+    variance = merge isa VarianceMerge
+    matrixpath = !(merge isa SumMerge || variance) || arule !== :marginal
     _check_start(start, a0, root, cgiters, !matrixpath)
+    # The surrogate the pair is balanced against: `Ũ`, or `Ũ⁽²⁾` for the variance pair.
+    surrogate = variance ? variance_surrogate : jacobian_surrogate
     if matrixpath
         # Other strategies need separate output channels; materialize the surrogate once. Its zeros
         # must match the structural pattern entrywise before anything reads them.
-        Utilde = jacobian_surrogate(t, outidxs)
+        Utilde = surrogate(t, outidxs)
         _check_surrogate_support(t, outidxs, Utilde, li)
         return _balance_matrix(
             Utilde, tgt, li.liverow, li.livecol, merge, arule, start, a0,
@@ -618,9 +680,12 @@ function _balance_tape(
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
     a = _balance_start(a0, m, M, li.liverow)
+    # The variance pair runs the sum-merge alternation on squared factors through squared partials.
+    variance && (a = _squared_start(a))
+    slot = variance ? _sqslot : _absslot
 
-    rawbstep = a -> _sum_merge_b(t, outidxs, a, li)
-    anumstep = b -> _marginal_weights(t, outidxs, b, li)
+    rawbstep = a -> _sum_merge_b(t, outidxs, a, li, slot)
+    anumstep = b -> _marginal_weights(t, outidxs, b, li, slot)
     if tgt === nothing
         a, b, iters, delta =
             _balance(rawbstep, anumstep, a, maxiter, rtol, _marginal_hint(SumMerge(), :flow); rounds)
@@ -631,13 +696,29 @@ function _balance_tape(
     end
     _check_cover_factors(a, b, li)
     if check
-        Utilde = jacobian_surrogate(t, outidxs)
+        Utilde = surrogate(t, outidxs)
         _check_surrogate_support(t, outidxs, Utilde, li)
         rworst = jacobian_ratio(Utilde, a, b)
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
             error("balanced pair does not cover the surrogate: worst ratio $rworst")
     end
+    variance && (a = sqrt.(a); b = sqrt.(b))
     return (; a, b, iters, delta, roots, nties)
+end
+
+# Squared starting weights for the variance pair, which must be representable in their own right.
+function _squared_start(a)
+    a2 = a .^ 2
+    for k in eachindex(a, a2)
+        a[k] > 0 || continue
+        (isfinite(a2[k]) && a2[k] > 0) || throw(
+            ArgumentError(
+                "the variance pair's squared start is not representable: a[$k]^2 = $(a2[k]) " *
+                    "from a[$k] = $(a[k]). Use start=:equal, or supply a0."
+            )
+        )
+    end
+    return a2
 end
 
 function balance_cover(r, x0::AbstractVector; kwargs...)
@@ -679,10 +760,17 @@ function _balance_matrix(
     m = size(Utilde, 1)
     # No round reads the targets, so a zero budget goes straight from the start to the merge.
     rounds === 0 && (tgt = nothing)
+    # The variance pair is the sum-merge balancing of `Ũ⁽²⁾` with squared factors. The covariant
+    # start computed from `Ũ⁽²⁾` is already squared; one supplied by the caller is not.
+    variance = merge isa VarianceMerge
+    variance && (merge = SumMerge())
     if a0 === nothing && something(start, :covariant) === :covariant
         a0 = _surrogate_start(Utilde, T)
+        a = _balance_start(a0, m, T, liverow)
+    else
+        a = _balance_start(a0, m, T, liverow)
+        variance && (a = _squared_start(a))
     end
-    a = _balance_start(a0, m, T, liverow)
     bstep = a -> _merge_bstep(Utilde, a, merge)
 
     if arule === :marginal && tgt !== nothing
@@ -717,14 +805,15 @@ function _balance_matrix(
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
             error("balanced pair does not cover the matrix: worst ratio $rworst")
     end
+    variance && (a = sqrt.(a); b = sqrt.(b))
     # The tape-potential start is the only one with a root, so the other paths report none.
     return (; a, b, iters, delta, roots = nothing, nties = nothing)
 end
 
 # `b_j = ∑_k Ũ_kj/a_k` from one reverse sweep seeded `1/a_k` at the output nodes, never forming
 # the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
-# rather than a silently dropped row.
-function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
+# rather than a silently dropped row. `slot = _sqslot` gives `∑_k Ũ⁽²⁾_kj/a_k` instead.
+function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, slot::F = _absslot) where {T, F}
     for k in eachindex(a)
         a[k] > 0 || !li.liverow[k] || throw(
             ArgumentError(
@@ -733,14 +822,15 @@ function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
             )
         )
     end
-    return _output_sweep(t, outidxs, (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a)))
+    seeds = (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a))
+    return _output_sweep(t, outidxs, seeds, slot)
 end
 
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
 # output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
 # and the seeds of a repeated output node add, as its repeated rows of `Ũ` do.
-_output_sweep(t::Tape, outidxs, seeds) =
-    abs_reverse(t, _output_seeds(t, outidxs, seeds))[1:t.ninputs]
+_output_sweep(t::Tape, outidxs, seeds, slot::F = _absslot) where {F} =
+    _reverse_sweep(slot, t, _output_seeds(t, outidxs, seeds))[1:t.ninputs]
 
 # Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; repeated nodes add.
 function _output_seeds(t::Tape{T}, outidxs, seeds) where {T}
@@ -817,8 +907,8 @@ function _check_start(start, a0, root, cgiters::Integer, potentialstart::Bool)
             throw(
             ArgumentError(
                 "root and cgiters belong to the tape-potential start, which this call does not " *
-                    "reach: it needs the tape form with merge=SumMerge(), arule=:marginal, " *
-                    "start=:covariant and no a0"
+                    "reach: it needs the tape form with merge=SumMerge() or VarianceMerge(), " *
+                    "arule=:marginal, start=:covariant and no a0"
             )
         )
     end

@@ -696,6 +696,146 @@
         @test_throws "vector-valued program" tape_potentials(xs -> xs[1] * xs[2], x0)
     end
 
+    # The variance pair written out densely on `U2`: the targeted alternation on squared factors,
+    # then the unnormalized final b-step, returned as square roots.
+    function dense_variance_pair(U2, a0, r, c, rounds)
+        inv0(x) = x > 0 ? 1 / x : 0.0
+        divt(v, tg) = [tg[i] > 0 ? v[i] / tg[i] : 0.0 for i in eachindex(v, tg)]
+        A = a0 .^ 2
+        B = divt(U2' * inv0.(A), c)
+        for _ in 1:rounds
+            A = divt(U2 * inv0.(B), r)
+            B = divt(U2' * inv0.(A), c)
+        end
+        return sqrt.(A), sqrt.(U2' * inv0.(A))
+    end
+    # Worst log-discrepancy between two pairs' products over the support of `U`.
+    function product_gap(U, a, b, a2, b2)
+        worst = 0.0
+        for j in axes(U, 2), k in axes(U, 1)
+            U[k, j] > 0 || continue
+            worst = max(worst, abs(log(a[k] * b[j]) - log(a2[k] * b2[j])))
+        end
+        return worst
+    end
+    potential_start(t, outidxs) =
+        DerivativeCovers._potential_start(t, outidxs, nothing, 0, liveinfo(t, outidxs))[1]
+
+    @testset "variance pair: the dense iteration on the squared channel — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        U2 = variance_surrogate(t, outidxs)
+        @test U2 ≈ squared_path_sums(t, outidxs) rtol = 1.0e-14
+        rt, ct = flowtargets(t, outidxs)
+        li = liveinfo(t, outidxs)
+        a0 = [li.liverow[k] ? 1.5^k : 0.0 for k in eachindex(li.liverow)]
+        vm = VarianceMerge()
+        for rounds in (0, 1, 4)
+            bal = balance_cover(t, outidxs; merge = vm, a0, rounds, check = true)
+            ad, bd = dense_variance_pair(U2, a0, rt, ct, rounds)
+            @test product_gap(U2, bal.a, bal.b, ad, bd) < 1.0e-12
+            @test bal.iters == rounds
+            balm = balance_cover(U2; merge = vm, a0, targets = (rt, ct), rounds)
+            @test product_gap(U2, balm.a, balm.b, ad, bd) < 1.0e-12
+            # The final b-step is the Gram variance scale for the weights `1/a²`.
+            w = [ak > 0 ? 1 / ak^2 : 0.0 for ak in bal.a]
+            @test bal.b ≈ DerivativeCovers.gramvariance(t, outidxs, w) rtol = 1.0e-12
+            # Every live column of `U2 ./ (a.^2 .* b'.^2)` sums to one, so the squares cover `U2`.
+            S = [U2[k, j] > 0 ? U2[k, j] / (bal.a[k] * bal.b[j])^2 : 0.0 for k in axes(U2, 1), j in axes(U2, 2)]
+            @test all(sum(S; dims = 1)[j] ≈ 1 for j in axes(U2, 2) if li.livecol[j])
+            @test jacobian_ratio(U2, bal.a .^ 2, bal.b .^ 2) <= GATE
+        end
+
+        # Run to convergence, the normalized iterate `(a, b ./ sqrt.(γ))` meets both targets.
+        bal = balance_cover(t, outidxs; merge = vm, rounds = nothing, check = true)
+        @test bal.delta <= 1.0e-10
+        bn2 = [ct[j] > 0 ? bal.b[j]^2 / ct[j] : 0.0 for j in eachindex(ct)]
+        for k in eachindex(rt)
+            rt[k] > 0 || continue
+            @test sum(U2[k, j] / (bal.a[k]^2 * bn2[j]) for j in eachindex(ct) if ct[j] > 0) ≈ rt[k] rtol = 1.0e-8
+        end
+        # The fixed point has unique products, whatever the start or call form.
+        for other in (
+                balance_cover(t, outidxs; merge = vm, rounds = nothing, start = :equal),
+                balance_cover(U2; merge = vm, targets = (rt, ct), rounds = nothing),
+            )
+            @test product_gap(U2, bal.a, bal.b, other.a, other.b) < 1.0e-8
+        end
+    end
+
+    @testset "variance pair: the default pair on Ũ.^2 where every entry has one path — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        U2 ≈ U .^ 2 || continue                      # some entry has several paths
+        rt, ct = flowtargets(t, outidxs)
+        # The variance pair's squares are the default pair of `Ũ.^2` started from the squared start.
+        # Both regauge their squared factors identically, so the agreement is entrywise.
+        p0 = potential_start(t, outidxs)
+        for rounds in (0, 1, 4, nothing)
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds)
+            d = balance_cover(U .^ 2; targets = (rt, ct), a0 = p0 .^ 2, rounds)
+            @test v.a .^ 2 ≈ d.a rtol = 1.0e-10
+            @test v.b .^ 2 ≈ d.b rtol = 1.0e-10
+            ve = balance_cover(t, outidxs; merge = VarianceMerge(), start = :equal, rounds)
+            de = balance_cover(U .^ 2; targets = (rt, ct), start = :equal, rounds)
+            @test ve.a .^ 2 ≈ de.a rtol = 1.0e-10
+            @test ve.b .^ 2 ≈ de.b rtol = 1.0e-10
+        end
+    end
+
+    @testset "variance pair: covariance under node rescaling — $name" for (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        s = 2.0 .^ rand(MersenneTwister(13), -10:10, nnodes(t))
+        t2 = rescale_tape(t, s)
+        for rounds in (0, 1, 4, nothing), cgiters in (0, 5)
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds, cgiters)
+            v2 = balance_cover(t2, outidxs; merge = VarianceMerge(), rounds, cgiters)
+            @test product_drift(t, outidxs, s, v.a, v.b, v2.a, v2.b) < 1.0e-10
+        end
+        # The matrix form's covariant start transforms with `Ũ⁽²⁾ -> C² Ũ⁽²⁾ D⁻²`.
+        U2 = variance_surrogate(t, outidxs)
+        c = 2.0 .^ rand(MersenneTwister(17), -10:10, length(outidxs))
+        d = 2.0 .^ rand(MersenneTwister(19), -10:10, t.ninputs)
+        for rounds in (0, 1, 4, nothing)
+            v = balance_cover(U2; merge = VarianceMerge(), rounds)
+            v2 = balance_cover(c .^ 2 .* U2 ./ (d .^ 2)'; merge = VarianceMerge(), rounds)
+            @test product_gap(U2, v.a .* c, v.b ./ d, v2.a, v2.b) < 1.0e-10
+        end
+    end
+
+    @testset "variance pair: a scale, not a cover" begin
+        # Two paths reach J = 2x from x, each with partial x: Ũ = 2|x| but Ũ⁽²⁾ = 2x².
+        t, outidxs = tape_function(xs -> [xs[1] * xs[1]], [3.0])
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        @test U2[1, 1] ≈ 18 && U[1, 1] ≈ 6
+        v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds = nothing, check = true)
+        @test v.a[1] * v.b[1] ≈ sqrt(18)
+        @test jacobian_ratio(U, v.a, v.b) ≈ 6 / sqrt(18)          # > 1: not a cover of Ũ
+        @test jacobian_ratio(U2, v.a .^ 2, v.b .^ 2) <= GATE
+
+        # Dead rows and columns keep zero weights.
+        rd = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
+        td, od = tape_function(rd, [0.7, 1.3, -0.5])
+        for kw in ((;), (; rounds = nothing), (; targets = :support), (; arule = :geomean, rounds = nothing))
+            vd = balance_cover(td, od; merge = VarianceMerge(), check = true, kw...)
+            @test vd.a[2] == 0 && vd.b[3] == 0
+            @test all(>(0), vd.a[[1, 3]]) && all(>(0), vd.b[1:2])
+        end
+
+        # The geometric-mean fit reads the same `Ũ⁽²⁾` on a tape as in the matrix form.
+        tt, ot = tape_function(triangular, [0.6, -0.4, 0.9])
+        vg = balance_cover(tt, ot; merge = VarianceMerge(), arule = :geomean, rounds = nothing)
+        vgm = balance_cover(variance_surrogate(tt, ot); merge = VarianceMerge(), arule = :geomean, rounds = nothing)
+        @test vg.a ≈ vgm.a rtol = 1.0e-10
+        @test vg.b ≈ vgm.b rtol = 1.0e-10
+
+        # A start whose square leaves the floating-point range is refused by name.
+        tw, ow = tape_function(xs -> [1.0e300 * xs[1], 1.0e-300 * xs[2], 1.0e-300 * xs[1] * xs[2]], [1.0, 1.0])
+        @test all(>(0), balance_cover(tw, ow).a)
+        @test_throws "squared start is not representable" balance_cover(tw, ow; merge = VarianceMerge())
+    end
+
     # `outidxs` names node numbers, so its axes are the caller's; the results are indexed by
     # output position. `x0` lays out the tape's inputs, which are one-based.
     @testset "generic axes" begin
@@ -719,6 +859,11 @@
             @test balance_cover(t, idx).a == balance_cover(t, outidxs).a
             @test balance_cover(t, idx; start = :equal).a ==
                 balance_cover(t, outidxs; start = :equal).a
+            vw, vwref = balance_cover(t, idx; merge = VarianceMerge()),
+                balance_cover(t, outidxs; merge = VarianceMerge())
+            @test vw.a == vwref.a && vw.b == vwref.b
+            @test axes(vw.a) == (Base.OneTo(3),)
+            @test variance_surrogate(t, idx) == variance_surrogate(t, outidxs)
         end
 
         @test_throws "offset arrays are not supported" balance_cover(
