@@ -804,6 +804,27 @@
         end
     end
 
+    @testset "variance pair: errors name the squared quantities" begin
+        # A path product of 1e-200 is representable; its square is not.
+        tu, ou = tape_function(xs -> [1.0e-100 * (1.0e-100 * xs[1]) + 0 * xs[2], xs[2]], [1.0, 1.0])
+        @test balance_cover(tu, ou).a[1] > 0
+        for kw in ((;), (; rounds = nothing))
+            @test_throws "squared input weight b[1]^2 is zero on an input that reaches an output" balance_cover(
+                tu, ou; merge = VarianceMerge(), kw...
+            )
+        end
+        @test_throws "entry of the squared channel Ũ⁽²⁾ underflowed to zero" balance_cover(
+            tu, ou; merge = VarianceMerge(), arule = :geomean
+        )
+        # The final factor check names the squared factors too.
+        tq, oq = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
+        li = liveinfo(tq, oq)
+        check! = DerivativeCovers._check_cover_factors
+        @test_throws "squared output weight a[1]^2 is 0.0" check!([0.0, 1.0], [1.0, 1.0], li; variance = true)
+        @test_throws "squared input weight b[1]^2 is 0.0" check!([1.0, 1.0], [0.0, 1.0], li; variance = true)
+        @test_throws "output weight a[1] is 0.0" check!([0.0, 1.0], [1.0, 1.0], li)
+    end
+
     @testset "variance pair: a scale, not a cover" begin
         # Two paths reach J = 2x from x, each with partial x: Ũ = 2|x| but Ũ⁽²⁾ = 2x².
         t, outidxs = tape_function(xs -> [xs[1] * xs[1]], [3.0])

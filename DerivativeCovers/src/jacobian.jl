@@ -320,26 +320,39 @@ end
 
 # A returned pair must cover every structurally live entry, so neither factor may vanish there.
 # Only underflow can put a zero on a live row or column, and a cover with one is not a cover, so
-# this runs on every path rather than only under `check`. `O(m + n)`.
-function _check_cover_factors(a, b, li::LiveInfo)
+# this runs on every path rather than only under `check`. `O(m + n)`. With `variance = true`, `a`
+# and `b` are the variance pair's squared factors, which bound `Ũ⁽²⁾` rather than cover `Ũ`.
+function _check_cover_factors(a, b, li::LiveInfo; variance::Bool = false)
+    aname, bname = _factor_names(variance)
+    rowtail, coltail = variance ?
+        (
+            "no squared input factor can bound Ũ⁽²⁾ on its row",
+            "no squared output factor can bound Ũ⁽²⁾ on its column",
+        ) :
+        ("no input factor can cover its row", "no output factor can cover its column")
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !li.liverow[k])) || throw(
             ArgumentError(
-                "output weight a[$k] is $(a[k]) on an output that inputs reach: the products " *
-                    "along those paths underflowed, so no input factor can cover its row"
+                "$(aname(k)) is $(a[k]) on an output that inputs reach: the products along " *
+                    "those paths underflowed, so $rowtail"
             )
         )
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !li.livecol[j])) || throw(
             ArgumentError(
-                "input weight b[$j] is $(b[j]) on an input that reaches an output: the products " *
-                    "along those paths underflowed, so no output factor can cover its column"
+                "$(bname(j)) is $(b[j]) on an input that reaches an output: the products along " *
+                    "those paths underflowed, so $coltail"
             )
         )
     end
     return nothing
 end
+
+# How error messages name the factors: the variance pair reports its squared factors.
+_factor_names(variance::Bool) = variance ?
+    (k -> "squared output weight a[$k]^2", j -> "squared input weight b[$j]^2") :
+    (k -> "output weight a[$k]", j -> "input weight b[$j]")
 
 # Output weights are finite and strictly positive wherever an input reaches the output. A zero
 # weight is admitted only on a dead output, where it covers that row exactly; anything else —
@@ -363,7 +376,8 @@ end
 # too small to represent. That is a floating-point event the caller needs to know about, not a
 # structurally dead entry to be covered vacuously. Entrywise, from `cld(n, 64)` integer passes and
 # `m * cld(n, 64)` words — small beside the `m * n` surrogate already in hand.
-function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo)
+function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo; variance::Bool = false)
+    entry = variance ? "entry of the squared channel Ũ⁽²⁾" : "surrogate entry"
     P = _structural_pattern(t, outidxs, li)
     n = t.ninputs
     for j in 1:n, k in 1:length(outidxs)
@@ -371,8 +385,8 @@ function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo)
         (P[k, blk] >> bit) & UInt64(1) == 1 || continue
         iszero(Utilde[k, j]) && throw(
             ArgumentError(
-                "output $k reaches input $j along nonzero local derivatives, but the surrogate " *
-                    "entry underflowed to zero: the products along those paths are below the " *
+                "output $k reaches input $j along nonzero local derivatives, but the $entry " *
+                    "underflowed to zero: the products along those paths are below the " *
                     "smallest representable $(eltype(Utilde))"
             )
         )
@@ -450,7 +464,10 @@ function _marginal_weights(
             # A zero input weight is valid only for an input that reaches no output.
             li.livecol[j] && throw(
                 ArgumentError(
-                    "b is zero on input $j, which reaches an output; no output weighting can cover it"
+                    slot === _sqslot ?
+                        "squared input weight b[$j]^2 is zero on an input that reaches an output; " *
+                        "no squared output weighting can bound Ũ⁽²⁾ on its column" :
+                        "b is zero on input $j, which reaches an output; no output weighting can cover it"
                 )
             )
         end
@@ -671,7 +688,7 @@ function _balance_tape(
         # Other strategies need separate output channels; materialize the surrogate once. Its zeros
         # must match the structural pattern entrywise before anything reads them.
         Utilde = surrogate(t, outidxs)
-        _check_surrogate_support(t, outidxs, Utilde, li)
+        _check_surrogate_support(t, outidxs, Utilde, li; variance)
         return _balance_matrix(
             Utilde, tgt, li.liverow, li.livecol, merge, arule, start, a0,
             maxiter, rounds, rtol, check, :flow
@@ -697,13 +714,16 @@ function _balance_tape(
         # The normalized iterate is not a cover; the plain sum merge for this `a` is.
         b = rawbstep(a)
     end
-    _check_cover_factors(a, b, li)
+    _check_cover_factors(a, b, li; variance)
     if check
         Utilde = surrogate(t, outidxs)
-        _check_surrogate_support(t, outidxs, Utilde, li)
+        _check_surrogate_support(t, outidxs, Utilde, li; variance)
         rworst = jacobian_ratio(Utilde, a, b)
-        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the surrogate: worst ratio $rworst")
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
+            variance ?
+                "the variance pair's squared factors do not bound Ũ⁽²⁾: worst ratio $rworst" :
+                "balanced pair does not cover the surrogate: worst ratio $rworst"
+        )
     end
     variance && (a = sqrt.(a); b = sqrt.(b))
     return (; a, b, iters, delta, roots, nties)
@@ -795,18 +815,22 @@ function _balance_matrix(
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
+    aname, bname = _factor_names(variance)
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !liverow[k])) ||
-            throw(ArgumentError("output weight a[$k] is $(a[k]) on a row with nonzero entries"))
+            throw(ArgumentError("$(aname(k)) is $(a[k]) on a row with nonzero entries"))
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !livecol[j])) ||
-            throw(ArgumentError("input weight b[$j] is $(b[j]) on a column with nonzero entries"))
+            throw(ArgumentError("$(bname(j)) is $(b[j]) on a column with nonzero entries"))
     end
     if check
         rworst = jacobian_ratio(Utilde, a, b)
-        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the matrix: worst ratio $rworst")
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
+            variance ?
+                "the variance pair's squared factors do not bound the matrix: worst ratio $rworst" :
+                "balanced pair does not cover the matrix: worst ratio $rworst"
+        )
     end
     variance && (a = sqrt.(a); b = sqrt.(b))
     # The tape-potential start is the only one with a root, so the other paths report none.
@@ -820,7 +844,10 @@ function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, slot::F = _absslot) 
     for k in eachindex(a)
         a[k] > 0 || !li.liverow[k] || throw(
             ArgumentError(
-                "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
+                slot === _sqslot ?
+                    "squared output weight a[$k]^2 is $(a[k]) on an output that inputs reach; no " *
+                    "squared input factor can bound Ũ⁽²⁾ on its row" :
+                    "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
                     "cover can cover its row"
             )
         )
