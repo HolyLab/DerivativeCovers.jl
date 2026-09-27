@@ -183,6 +183,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         w = [1.0, -2.0, 0.5]
         hv = DerivativeCovers.gramvariance(t, outidxs, w)
         @test hv isa Vector{Float64}
+        @test DerivativeCovers.gramvariance!(zeros(t.ninputs), t, outidxs, w) == hv
         @test all(hv .<= gramcover(t, outidxs, w) .* slack)
         nc = cover_nls(r, X)
         @test nc.h_var_gn isa Vector{Float64}

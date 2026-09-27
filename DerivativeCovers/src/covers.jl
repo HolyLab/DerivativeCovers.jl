@@ -995,6 +995,8 @@ end
 
 # The magnitude weighting, as a plain function so that the sweeps specialize on it.
 _absslot(d, k, i, p) = magnitude(d)
+# The squared magnitude, which carries squared seeds along each path.
+_sqslot(d, k, i, p) = magnitude(d)^2
 
 """
     CoverOnly()

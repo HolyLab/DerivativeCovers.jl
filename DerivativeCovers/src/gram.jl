@@ -191,8 +191,9 @@ of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`; 
 outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
 
 `h` comes from one reverse sweep with squared local partials (the variance channel of
-[`dependency_sweep`](@ref)) seeded `abs(w[k])` at output node `outidxs[k]`, so it costs `O(L)` for
-a tape of length `L`, where `h_gn` needs one channel per output.
+[`dependency_sweep`](@ref), without its linear channel) seeded `abs(w[k])` at output node
+`outidxs[k]`, so it costs `O(L)` for a tape of length `L`, where `h_gn` needs one channel per
+output. [`gramvariance!`](@ref) writes `h` into a supplied vector.
 
 # Examples
 
@@ -220,18 +221,31 @@ julia> round.(DerivativeCovers.gramvariance(t2, o2); digits=4)   # sqrt(3^2 + 3^
  4.2426
 ```
 """
-gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}) =
-    _output_variance_sweep(t, outidxs, Iterators.repeated(1, length(outidxs)))
+gramvariance(t::Tape{T}, outidxs::AbstractVector{<:Integer}, args...) where {T} =
+    gramvariance!(Vector{magtype(T)}(undef, t.ninputs), t, outidxs, args...)
 
-function gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector)
+"""
+    gramvariance!(h, t::Tape, outidxs) -> h
+    gramvariance!(h, t::Tape, outidxs, w::AbstractVector) -> h
+    gramvariance!(h, t::Tape, outidxs, W::Diagonal) -> h
+
+Write [`gramvariance`](@ref)'s scale of the Gram matrix of the tape outputs `outidxs` into `h` and
+return it. `h` must be indexed like the inputs (`eachindex(h) == 1:t.ninputs`).
+"""
+gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}) =
+    _output_variance_sweep!(h, t, outidxs, Iterators.repeated(1, length(outidxs)))
+
+function gramvariance!(
+        h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector
+    )
     _check_diagonal_weight(outidxs, w)
-    return _output_variance_sweep(t, outidxs, (abs(w[k]) for k in eachindex(w)))
+    return _output_variance_sweep!(h, t, outidxs, (abs(w[k]) for k in eachindex(w)))
 end
 
-gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
-    gramvariance(t, outidxs, W.diag)
+gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
+    gramvariance!(h, t, outidxs, W.diag)
 
-gramvariance(::Tape, ::AbstractVector{<:Integer}, W::AbstractMatrix) = throw(
+gramvariance!(::AbstractVector, ::Tape, ::AbstractVector{<:Integer}, W::AbstractMatrix) = throw(
     ArgumentError(
         "gramvariance takes diagonal weights only (a vector or a Diagonal), got a " *
             "$(typeof(W)); off-diagonal weights have zero expected contribution, so pass " *
@@ -239,10 +253,16 @@ gramvariance(::Tape, ::AbstractVector{<:Integer}, W::AbstractMatrix) = throw(
     )
 )
 
-# `sqrt.(∑_k seeds[k] * Ũ⁽²⁾[k, :])` from the squared channel of `dependency_sweep`, with the
-# linear channel left unseeded.
-function _output_variance_sweep(t::Tape{T}, outidxs, seeds) where {T}
-    theta2 = _output_seeds(t, outidxs, seeds)
-    _, vbar = dependency_sweep(t, zeros(magtype(T), nnodes(t)), theta2)
-    return sqrt.(vbar[1:t.ninputs])
+# `h .= sqrt.(∑_k seeds[k] * Ũ⁽²⁾[k, :])` from a reverse sweep through squared partials.
+function _output_variance_sweep!(h::AbstractVector, t::Tape, outidxs, seeds)
+    eachindex(h) == Base.OneTo(t.ninputs) || throw(
+        DimensionMismatch(
+            "h has indices $(eachindex(h)), expected $(Base.OneTo(t.ninputs)) (one per input)"
+        )
+    )
+    qbar = _reverse_sweep(_sqslot, t, _output_seeds(t, outidxs, seeds))
+    for j in eachindex(h)
+        h[j] = sqrt(qbar[j])
+    end
+    return h
 end

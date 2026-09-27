@@ -136,6 +136,11 @@
         @test DerivativeCovers.gramvariance(t, view(outidxs, 1:3), view(v, 1:3)) ==
             DerivativeCovers.gramvariance(t, outidxs, v)
         @test_throws "w has indices" DerivativeCovers.gramvariance(t, oidx, v)
+        hv = zeros(t.ninputs)
+        @test DerivativeCovers.gramvariance!(hv, t, oidx, offsetcopy(v)) ==
+            DerivativeCovers.gramvariance(t, outidxs, v)
+        @test DerivativeCovers.gramvariance!(view(zeros(t.ninputs + 1), 1:t.ninputs), t, oidx) ==
+            DerivativeCovers.gramvariance(t, outidxs)
 
         # The marginal alternation pairs `outidxs` against a 1-based iterate, so its weights must
         # come back on output positions. It needs a pattern with total support to converge.

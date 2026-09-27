@@ -138,7 +138,7 @@ include("intervals.jl")
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
             :jacobian_shrink, :equilibrate,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
-            :declare_submap, :submap, :gramvariance,
+            :declare_submap, :submap, :gramvariance, :gramvariance!,
         )
         for sym in internals
             @test isdefined(DerivativeCovers, sym)

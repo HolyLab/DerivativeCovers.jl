@@ -80,7 +80,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         )
     )
     # A scale, not a cover, of a tape's Gram matrix.
-    eval(Expr(:public, :gramvariance))
+    eval(Expr(:public, :gramvariance, :gramvariance!))
 end
 
 include("curvature.jl")

@@ -258,10 +258,23 @@ end
             gramvariance(t, outidxs[1:2], [2.0, 1.0])
     end
 
+    @testset "mutating form writes in place" begin
+        for args in ((), (w,), (Diagonal(w),))
+            h = fill(NaN, n)
+            @test DerivativeCovers.gramvariance!(h, t, outidxs, args...) === h
+            @test h == gramvariance(t, outidxs, args...)
+        end
+    end
+
     @testset "argument checks" begin
         @test_throws "w has indices" gramvariance(t, outidxs, [1.0, 2.0])
         @test_throws "weights must be finite" gramvariance(t, outidxs, [1.0, NaN, 2.0])
         @test_throws "diagonal weights only" gramvariance(t, outidxs, ones(m, m))
         @test_throws "diagonal weights only" gramvariance(t, outidxs, Matrix(Diagonal(w)))
+        @test_throws "h has indices" DerivativeCovers.gramvariance!(zeros(n - 1), t, outidxs)
+        @test_throws "h has indices" DerivativeCovers.gramvariance!(
+            OffsetArray(zeros(n), 0:(n - 1)), t, outidxs, w
+        )
+        @test_throws "diagonal weights only" DerivativeCovers.gramvariance!(zeros(n), t, outidxs, ones(m, m))
     end
 end

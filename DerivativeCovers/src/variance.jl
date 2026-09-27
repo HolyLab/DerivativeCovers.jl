@@ -56,7 +56,7 @@ end
 """
     dependency_sweep(t::Tape, theta, theta2) -> (abar, vbar)
 
-One reverse traversal carrying the hard and variance channels together:
+The staged form's propagation of the hard and variance channels, one reverse sweep each:
 
     abar[j] = theta[j]  + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)   * abar[k]
     vbar[j] = theta2[j] + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)^2 * vbar[k]
@@ -66,6 +66,9 @@ value at the inputs is the sum merge. The variance channel squares both the seed
 coefficients, so it collects the same path contributions in quadrature; seeded with the matching
 `theta2` from [`variance_seeds`](@ref), `sqrt.(vbar)` at the inputs estimates the quadrature merge
 from below. Both channels hold magnitudes: `vbar` here is the variance channel, not an adjoint.
+
+[`cover_hessian`](@ref) forms both channels within its single fused sweep instead; this form
+seeds them independently.
 """
 function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector)
     N = nnodes(t)
@@ -73,19 +76,7 @@ function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector
         throw(DimensionMismatch("theta has length $(length(theta)), expected $N (one per node)"))
     length(theta2) == N ||
         throw(DimensionMismatch("theta2 has length $(length(theta2)), expected $N (one per node)"))
-    abar = collect(float.(theta))
-    vbar = collect(float.(theta2))
-    for k in N:-1:1
-        ak, vk = abar[k], vbar[k]
-        (ak == 0 && vk == 0) && continue
-        for (i, p) in enumerate(t.parents[k])
-            d = magnitude(t.ds[k][i])
-            iszero(d) && continue
-            abar[p] += d * ak
-            vbar[p] += d^2 * vk
-        end
-    end
-    return abar, vbar
+    return _reverse_sweep(_absslot, t, theta), _reverse_sweep(_sqslot, t, theta2)
 end
 
 """
