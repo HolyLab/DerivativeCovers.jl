@@ -129,6 +129,18 @@
         @test cover_jacobian_hybrid(t, oidx, 2).b == cover_jacobian_hybrid(t, outidxs, 2).b
         @test jacobian_surrogate(t, oidx) == jacobian_surrogate(t, outidxs)
         @test adjoints(t, oidx) == adjoints(t, outidxs)
+        # Diagonal weights are index-matched to outidxs.
+        @test DerivativeCovers.gramvariance(t, oidx) == DerivativeCovers.gramvariance(t, outidxs)
+        @test DerivativeCovers.gramvariance(t, oidx, offsetcopy(v)) ==
+            DerivativeCovers.gramvariance(t, outidxs, v)
+        @test DerivativeCovers.gramvariance(t, view(outidxs, 1:3), view(v, 1:3)) ==
+            DerivativeCovers.gramvariance(t, outidxs, v)
+        @test_throws "w has indices" DerivativeCovers.gramvariance(t, oidx, v)
+        hv = zeros(t.ninputs)
+        @test DerivativeCovers.gramvariance!(hv, t, oidx, offsetcopy(v)) ==
+            DerivativeCovers.gramvariance(t, outidxs, v)
+        @test DerivativeCovers.gramvariance!(view(zeros(t.ninputs + 1), 1:t.ninputs), t, oidx) ==
+            DerivativeCovers.gramvariance(t, outidxs)
 
         # The marginal alternation pairs `outidxs` against a 1-based iterate, so its weights must
         # come back on output positions. It needs a pattern with total support to converge.

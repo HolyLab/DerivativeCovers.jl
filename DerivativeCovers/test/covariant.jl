@@ -696,6 +696,261 @@
         @test_throws "vector-valued program" tape_potentials(xs -> xs[1] * xs[2], x0)
     end
 
+    # The variance pair written out densely on `U2`: the targeted alternation on squared factors,
+    # then the unnormalized final b-step, returned as square roots.
+    function dense_variance_pair(U2, a0, r, c, rounds)
+        inv0(x) = x > 0 ? 1 / x : 0.0
+        divt(v, tg) = [tg[i] > 0 ? v[i] / tg[i] : 0.0 for i in eachindex(v, tg)]
+        A = a0 .^ 2
+        B = divt(U2' * inv0.(A), c)
+        for _ in 1:rounds
+            A = divt(U2 * inv0.(B), r)
+            B = divt(U2' * inv0.(A), c)
+        end
+        return sqrt.(A), sqrt.(U2' * inv0.(A))
+    end
+    # Worst log-discrepancy between two pairs' products over the support of `U`.
+    function product_gap(U, a, b, a2, b2)
+        worst = 0.0
+        for j in axes(U, 2), k in axes(U, 1)
+            U[k, j] > 0 || continue
+            worst = max(worst, abs(log(a[k] * b[j]) - log(a2[k] * b2[j])))
+        end
+        return worst
+    end
+    potential_start(t, outidxs) =
+        DerivativeCovers._potential_start(t, outidxs, nothing, 0, liveinfo(t, outidxs))[1]
+
+    @testset "variance pair: the dense iteration on the squared channel — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        U2 = variance_surrogate(t, outidxs)
+        @test U2 ≈ squared_path_sums(t, outidxs) rtol = 1.0e-14
+        rt, ct = flowtargets(t, outidxs)
+        li = liveinfo(t, outidxs)
+        a0 = [li.liverow[k] ? 1.5^k : 0.0 for k in eachindex(li.liverow)]
+        vm = VarianceMerge()
+        for rounds in (0, 1, 4)
+            bal = balance_cover(t, outidxs; merge = vm, a0, rounds, check = true)
+            ad, bd = dense_variance_pair(U2, a0, rt, ct, rounds)
+            @test product_gap(U2, bal.a, bal.b, ad, bd) < 1.0e-12
+            @test bal.iters == rounds
+            balm = balance_cover(U2; merge = vm, a0, targets = (rt, ct), rounds)
+            @test product_gap(U2, balm.a, balm.b, ad, bd) < 1.0e-12
+            # The final b-step is the Gram variance scale for the weights `1/a²`.
+            w = [ak > 0 ? 1 / ak^2 : 0.0 for ak in bal.a]
+            @test bal.b ≈ DerivativeCovers.gramvariance(t, outidxs, w) rtol = 1.0e-12
+            # Every live column of `U2 ./ (a.^2 .* b'.^2)` sums to one, so the squares cover `U2`.
+            S = [U2[k, j] > 0 ? U2[k, j] / (bal.a[k] * bal.b[j])^2 : 0.0 for k in axes(U2, 1), j in axes(U2, 2)]
+            @test all(sum(S; dims = 1)[j] ≈ 1 for j in axes(U2, 2) if li.livecol[j])
+            @test jacobian_ratio(U2, bal.a .^ 2, bal.b .^ 2) <= GATE
+        end
+
+        # Run to convergence, the normalized iterate `(a, b ./ sqrt.(γ))` meets both targets.
+        bal = balance_cover(t, outidxs; merge = vm, rounds = nothing, check = true)
+        @test bal.delta <= 1.0e-10
+        bn2 = [ct[j] > 0 ? bal.b[j]^2 / ct[j] : 0.0 for j in eachindex(ct)]
+        for k in eachindex(rt)
+            rt[k] > 0 || continue
+            @test sum(U2[k, j] / (bal.a[k]^2 * bn2[j]) for j in eachindex(ct) if ct[j] > 0) ≈ rt[k] rtol = 1.0e-8
+        end
+        # The fixed point has unique products, whatever the start or call form.
+        for other in (
+                balance_cover(t, outidxs; merge = vm, rounds = nothing, start = :equal),
+                balance_cover(U2; merge = vm, targets = (rt, ct), rounds = nothing),
+            )
+            @test product_gap(U2, bal.a, bal.b, other.a, other.b) < 1.0e-8
+        end
+    end
+
+    @testset "variance pair: the default pair on Ũ.^2 where every entry has one path — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        U2 ≈ U .^ 2 || continue                      # some entry has several paths
+        rt, ct = flowtargets(t, outidxs)
+        # The variance pair's squares are the default pair of `Ũ.^2` started from the squared start.
+        # Both regauge their squared factors identically, so the agreement is entrywise.
+        p0 = potential_start(t, outidxs)
+        for rounds in (0, 1, 4, nothing)
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds)
+            d = balance_cover(U .^ 2; targets = (rt, ct), a0 = p0 .^ 2, rounds)
+            @test v.a .^ 2 ≈ d.a rtol = 1.0e-10
+            @test v.b .^ 2 ≈ d.b rtol = 1.0e-10
+            ve = balance_cover(t, outidxs; merge = VarianceMerge(), start = :equal, rounds)
+            de = balance_cover(U .^ 2; targets = (rt, ct), start = :equal, rounds)
+            @test ve.a .^ 2 ≈ de.a rtol = 1.0e-10
+            @test ve.b .^ 2 ≈ de.b rtol = 1.0e-10
+        end
+    end
+
+    @testset "variance pair: covariance under node rescaling — $name" for (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        s = 2.0 .^ rand(MersenneTwister(13), -10:10, nnodes(t))
+        t2 = rescale_tape(t, s)
+        for rounds in (0, 1, 4, nothing), cgiters in (0, 5)
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds, cgiters)
+            v2 = balance_cover(t2, outidxs; merge = VarianceMerge(), rounds, cgiters)
+            @test product_drift(t, outidxs, s, v.a, v.b, v2.a, v2.b) < 1.0e-10
+        end
+        # The matrix form's covariant start transforms with `Ũ⁽²⁾ -> C² Ũ⁽²⁾ D⁻²`.
+        U2 = variance_surrogate(t, outidxs)
+        c = 2.0 .^ rand(MersenneTwister(17), -10:10, length(outidxs))
+        d = 2.0 .^ rand(MersenneTwister(19), -10:10, t.ninputs)
+        for rounds in (0, 1, 4, nothing)
+            v = balance_cover(U2; merge = VarianceMerge(), rounds)
+            v2 = balance_cover(c .^ 2 .* U2 ./ (d .^ 2)'; merge = VarianceMerge(), rounds)
+            @test product_gap(U2, v.a .* c, v.b ./ d, v2.a, v2.b) < 1.0e-10
+        end
+    end
+
+    @testset "variance pair: errors name the squared quantities" begin
+        # A path product of 1e-200 is representable; its square is not.
+        tu, ou = tape_function(xs -> [1.0e-100 * (1.0e-100 * xs[1]) + 0 * xs[2], xs[2]], [1.0, 1.0])
+        @test balance_cover(tu, ou).a[1] > 0
+        for kw in ((;), (; rounds = nothing))
+            @test_throws "squared input weight b[1]^2 is zero on an input that reaches an output" balance_cover(
+                tu, ou; merge = VarianceMerge(), kw...
+            )
+        end
+        @test_throws "entry of the squared channel Ũ⁽²⁾ underflowed to zero" balance_cover(
+            tu, ou; merge = VarianceMerge(), arule = :geomean
+        )
+        # The final factor check names the squared factors too.
+        tq, oq = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
+        li = liveinfo(tq, oq)
+        check! = DerivativeCovers._check_cover_factors
+        @test_throws "squared output weight a[1]^2 is 0.0" check!([0.0, 1.0], [1.0, 1.0], li; variance = true)
+        @test_throws "squared input weight b[1]^2 is 0.0" check!([1.0, 1.0], [0.0, 1.0], li; variance = true)
+        @test_throws "output weight a[1] is 0.0" check!([0.0, 1.0], [1.0, 1.0], li)
+    end
+
+    @testset "variance pair: a scale, not a cover" begin
+        # Two paths reach J = 2x from x, each with partial x: Ũ = 2|x| but Ũ⁽²⁾ = 2x².
+        t, outidxs = tape_function(xs -> [xs[1] * xs[1]], [3.0])
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        @test U2[1, 1] ≈ 18 && U[1, 1] ≈ 6
+        v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds = nothing, check = true)
+        @test v.a[1] * v.b[1] ≈ sqrt(18)
+        @test jacobian_ratio(U, v.a, v.b) ≈ 6 / sqrt(18)          # > 1: not a cover of Ũ
+        @test jacobian_ratio(U2, v.a .^ 2, v.b .^ 2) <= GATE
+
+        # Dead rows and columns keep zero weights.
+        rd = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
+        td, od = tape_function(rd, [0.7, 1.3, -0.5])
+        for kw in ((;), (; rounds = nothing), (; targets = :support), (; arule = :geomean, rounds = nothing))
+            vd = balance_cover(td, od; merge = VarianceMerge(), check = true, kw...)
+            @test vd.a[2] == 0 && vd.b[3] == 0
+            @test all(>(0), vd.a[[1, 3]]) && all(>(0), vd.b[1:2])
+        end
+
+        # The geometric-mean fit reads the same `Ũ⁽²⁾` on a tape as in the matrix form.
+        tt, ot = tape_function(triangular, [0.6, -0.4, 0.9])
+        vg = balance_cover(tt, ot; merge = VarianceMerge(), arule = :geomean, rounds = nothing)
+        vgm = balance_cover(variance_surrogate(tt, ot); merge = VarianceMerge(), arule = :geomean, rounds = nothing)
+        @test vg.a ≈ vgm.a rtol = 1.0e-10
+        @test vg.b ≈ vgm.b rtol = 1.0e-10
+
+        # A start whose square leaves the floating-point range is refused by name.
+        tw, ow = tape_function(xs -> [1.0e300 * xs[1], 1.0e-300 * xs[2], 1.0e-300 * xs[1] * xs[2]], [1.0, 1.0])
+        @test all(>(0), balance_cover(tw, ow).a)
+        @test_throws "squared start is not representable" balance_cover(tw, ow; merge = VarianceMerge())
+    end
+
+    # The targeted alternation run to convergence on a tape, relaxed or plain.
+    function converge_targets(t, outidxs; relax, variance = false, maxiter = 100_000)
+        DC = DerivativeCovers
+        li = liveinfo(t, outidxs)
+        rt, ct = flowtargets(t, outidxs)
+        a = DC._balance_start(potential_start(t, outidxs), length(outidxs), Float64, li.liverow)
+        variance && (a = DC._squared_start(a))
+        slot = variance ? DC._sqslot : DC._absslot
+        bnum = a -> DC._sum_merge_b(t, outidxs, a, li, slot)
+        anum = b -> DC._marginal_weights(t, outidxs, b, li, slot)
+        rtol = eps()^(2 // 3)
+        a, iters, delta = DC._balance_targets(anum, bnum, a, rt, ct, maxiter, rtol, nothing; relax)
+        b = bnum(a)
+        variance && (a = sqrt.(a); b = sqrt.(b))
+        return (; a, b, iters, delta)
+    end
+    # Rows `w1[i] x[i] + w2[i] x[i+1]`, cyclically: one long cycle through the support, on which
+    # the plain alternation converges slowly.
+    function cyclic_bidiagonal(n, sigma, seed)
+        rng = MersenneTwister(seed)
+        w1, w2 = exp.(sigma .* randn(rng, n)), exp.(sigma .* randn(rng, n))
+        return xs -> [w1[i] * xs[i] + w2[i] * xs[mod1(i + 1, n)] for i in 1:n], randn(rng, n)
+    end
+
+    @testset "a fixed budget runs the plain alternation, bit for bit" begin
+        # Pinned from the plain iteration; a run to convergence is the only one relaxed.
+        r = xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2], exp(xs[1]) + xs[2] * xs[3]]
+        t, outidxs = tape_function(r, [0.6, -0.4, 0.9])
+        bits(v) = reinterpret.(UInt64, v)
+        bal = balance_cover(t, outidxs)
+        @test bits(bal.a) == [0x3ff5c5ca9ce627c4, 0x3ff144945e0db3d3, 0x3ffffa796368de49]
+        @test bits(bal.b) == [0x3ff938539fd17928, 0x3ff7279b5b8a300f, 0x3ff82cf03b1c691e]
+        bal = balance_cover(t, outidxs; merge = VarianceMerge())
+        @test bits(bal.a) == [0x3fedb3afda9817ac, 0x3fe709649b7d5f97, 0x3ff8a09c9c2afcce]
+        @test bits(bal.b) == [0x3ff607bf2e50884b, 0x3ff34bb64da045d9, 0x3ff67a9eec38e833]
+        bal = balance_cover(t, outidxs; rounds = 7, targets = :support)
+        @test bits(bal.a) == [0x3fe555a348fae680, 0x3fe1583015fb5304, 0x3ff07fb66d5d58b7]
+        @test bits(bal.b) == [0x4008d6fdff7ef330, 0x400709a8e554d395, 0x40084701d0030474]
+        bal = balance_cover(jacobian_surrogate(t, outidxs); rounds = 5)
+        @test bits(bal.a) == [0x3fe8087d82ac9a58, 0x3fe389d2861f4957, 0x3ff295eaca0f2aee]
+        @test bits(bal.b) == [0x40060cff0d6f5edc, 0x40047372778c69dd, 0x40058d262909c733]
+    end
+
+    @testset "overrelaxation: the plain fixed point, in fewer rounds" begin
+        r, x0 = cyclic_bidiagonal(50, 2.0, 5)
+        t, outidxs = tape_function(r, x0)
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        for variance in (false, true)
+            plain = converge_targets(t, outidxs; relax = false, variance)
+            relaxed = converge_targets(t, outidxs; relax = true, variance)
+            @test plain.delta <= eps()^(2 // 3) && relaxed.delta <= eps()^(2 // 3)
+            @test product_gap(variance ? U2 : U, plain.a, plain.b, relaxed.a, relaxed.b) < 1.0e-8
+            @test relaxed.iters < plain.iters / 5
+            # The public entry point takes the relaxed run.
+            bal = balance_cover(t, outidxs; rounds = nothing, merge = variance ? VarianceMerge() : SumMerge())
+            @test bal.iters == relaxed.iters
+            @test bal.a == relaxed.a
+        end
+
+        # Rescaling the tape leaves the relaxed run's products covariant.
+        s = 2.0 .^ rand(MersenneTwister(29), -10:10, nnodes(t))
+        t2 = rescale_tape(t, s)
+        for merge in (SumMerge(), VarianceMerge())
+            bal = balance_cover(t, outidxs; rounds = nothing, merge)
+            bal2 = balance_cover(t2, outidxs; rounds = nothing, merge)
+            @test product_drift(t, outidxs, s, bal.a, bal.b, bal2.a, bal2.b) < 1.0e-8
+        end
+
+        # Relaxation amplifies roundoff by about `1/(2 - ω)`, so `ω` stays where that is below
+        # `rtol`, and a tolerance near roundoff turns it off.
+        ωmax = DerivativeCovers._relax_omega_max
+        @test ωmax(Float64, eps()^(2 // 3)) == 1.995
+        @test 1 < ωmax(Float32, eps(Float32)^(2 // 3)) < 1.995
+        @test ωmax(Float64, 1.0e-15) == 1
+
+        # A run to convergence that exhausts its budget says so, relaxed or plain.
+        @test_throws "did not converge in 3 rounds" balance_cover(t, outidxs; rounds = nothing, maxiter = 3)
+        @test_throws "did not converge in 3 rounds" converge_targets(t, outidxs; relax = false, maxiter = 3)
+    end
+
+    @testset "overrelaxation: a step that would overshoot is shortened" begin
+        step! = DerivativeCovers._relaxed_step!
+        # From `x = 1000` toward `F = 1`, `ω = 1.99` in log space would land near 1e-3; the
+        # safeguard halves `ω - 1` until the step's excess is no larger than the plain one allows.
+        x = [1.0e3]
+        @test step!(x, [1.0], [1.0], 1.99) ≈ 0.999
+        @test 1.0e3^(1 - 1.99) < x[1] < 1
+        @test x[1] ≈ 1.0e3^(-0.2475)
+        # A small step is taken in full, and a dead entry is left alone.
+        x = [1.01, 5.0]
+        step!(x, [1.0, 2.0], [1.0, 0.0], 1.5)
+        @test x ≈ [1.01^(-0.5), 5.0]
+    end
+
     # `outidxs` names node numbers, so its axes are the caller's; the results are indexed by
     # output position. `x0` lays out the tape's inputs, which are one-based.
     @testset "generic axes" begin
@@ -719,6 +974,11 @@
             @test balance_cover(t, idx).a == balance_cover(t, outidxs).a
             @test balance_cover(t, idx; start = :equal).a ==
                 balance_cover(t, outidxs; start = :equal).a
+            vw, vwref = balance_cover(t, idx; merge = VarianceMerge()),
+                balance_cover(t, outidxs; merge = VarianceMerge())
+            @test vw.a == vwref.a && vw.b == vwref.b
+            @test axes(vw.a) == (Base.OneTo(3),)
+            @test variance_surrogate(t, idx) == variance_surrogate(t, outidxs)
         end
 
         @test_throws "offset arrays are not supported" balance_cover(

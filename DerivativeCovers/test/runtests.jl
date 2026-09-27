@@ -20,7 +20,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
     local_covers, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
-    MergeRule, SumMerge, QuadMerge, MaxMerge
+    MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
     rowcomponent, colcomponent
@@ -39,6 +39,30 @@ include("programs.jl")
 # The covering chain abs.(H) <= B <= sum_k s_k s_k' <= h*h' is exact in exact arithmetic;
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1.0e-10
+
+# The staged route to the channels `cover_hessian` fuses into one sweep: finish the adjoints, form
+# every local cover, then propagate the linear and squared seeds. Returns `(h_sum, h_var)`.
+function staged_channels(t, outidx)
+    n = t.ninputs
+    rhos, theta = local_covers(t, adjoints(t, outidx))
+    abar, qbar = dependency_sweep(t, theta, variance_seeds(t, rhos))
+    return abar[1:n], sqrt.(qbar[1:n])
+end
+
+# `U2[k, j]` sums, over the paths from input `j` to output `k`, the squared path product: the
+# squared channel behind `gramvariance` and the variance pair. The dense forward recurrence over
+# the tape builds it for comparison with the sweeps.
+function squared_path_sums(t, outidxs)
+    N, n = nnodes(t), t.ninputs
+    U2 = zeros(N, n)
+    for j in 1:n
+        U2[j, j] = 1
+    end
+    for k in (n + 1):N, (i, p) in enumerate(t.parents[k])
+        U2[k, :] .+= abs2(DerivativeCovers.magnitude(t.ds[k][i])) .* U2[p, :]
+    end
+    return U2[collect(outidxs), :]
+end
 
 include("constants.jl")
 include("elementtype.jl")
@@ -129,7 +153,7 @@ include("intervals.jl")
             :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
             :jacobian_shrink, :equilibrate,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
-            :declare_submap, :submap,
+            :declare_submap, :submap, :gramvariance, :gramvariance!,
         )
         for sym in internals
             @test isdefined(DerivativeCovers, sym)
@@ -146,7 +170,7 @@ include("intervals.jl")
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge,
+            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :VarianceMerge, :variance_surrogate,
             :balance_cover, :tape_potentials,
         )
         for sym in private
@@ -1097,6 +1121,21 @@ include("intervals.jl")
         @test cover_ratio(H, vc.h_var) ≈ 9 / 5     # the (1,1) entry is no longer covered
     end
 
+    @testset "variance channel counts each parent slot as its own path" begin
+        # `x*x` seeds two slots that share a sign in the program; the channel squares them apart.
+        vc = cover_variance(x -> x[1] * x[1], [3.0])
+        @test vc.h_sum ≈ [2.0]
+        @test vc.h_var ≈ [sqrt(2.0)]
+        # The unary square has a single slot, so its two channels agree.
+        vu = cover_variance(x -> x[1]^2, [3.0])
+        @test vu.h_sum ≈ vu.h_var ≈ [sqrt(2.0)]
+        # The cube reconverges on x through three slots and falls below sqrt(abs(f'')) = sqrt(18).
+        vcube = cover_variance(x -> x[1] * x[1] * x[1], [3.0])
+        @test vcube.h_var ≈ [sqrt(15.0)]
+        @test vcube.h_var[1] < sqrt(18.0)
+        @test cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var == vcube.h_var
+    end
+
     @testset "variance channel covariance" begin
         cases = [
             ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
@@ -1278,6 +1317,26 @@ include("intervals.jl")
             @test all(>=(0), h)
             @test cover_ratio(H, h) <= GATE
         end
+    end
+
+    # The fused sweep injects each slot's squared seed where the sum channel injects the seed, so
+    # it squares every path contribution before any summation, exactly as the staged form does;
+    # only the order of the additions differs.
+    FUSED_CORPUS = vcat(
+        [(name, f, x0) for (name, f, x0) in PROBLEMS],
+        [("$(p.name) sigma=$sigma", p.f, p.x0) for (sigma, p) in GENERATED],
+        [(p.name, p.f, p.x0) for p in (mlp((4, 6, 5, 2); batch = 3),)],
+        [("tree", tree_program, TREE_X), ("diamond", reconvergent_diamond, [0.4, -0.9])],
+    )
+    @testset "fused variance channel matches the staged form — $name" for (name, f, x0) in FUSED_CORPUS
+        t, outidx = tape_function(f, x0)
+        c = cover_hessian(t, outidx)
+        h_sum, h_var = staged_channels(t, outidx)
+        @test c.h_sum ≈ h_sum rtol = 1.0e-12
+        @test c.h_var ≈ h_var rtol = 1.0e-12
+        @test all(c.h_var .<= c.h_sum .* GATE)
+        vc = cover_variance(t, outidx)
+        @test vc.grad == c.grad && vc.h_sum == c.h_sum && vc.h_var == c.h_var
     end
 
     @testset "quadratic forms share a Hessian and differ as programs" begin

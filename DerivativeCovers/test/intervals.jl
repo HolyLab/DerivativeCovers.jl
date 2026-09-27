@@ -87,6 +87,10 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         X = interval.(lo, hi)
         vc = cover_variance(f, X)
         @test vc isa VarianceCover{Interval{Float64}, Float64}
+        t, outidx = tape_function(f, X)
+        h_sum, h_var = staged_channels(t, outidx)
+        @test vc.h_sum ≈ h_sum rtol = 1.0e-12
+        @test vc.h_var ≈ h_var rtol = 1.0e-12
         hy = cover_hybrid(f, X, 2)
         hn = cover_hybrid(f, X, cyclic_partition(tape_function(f, X)[1], 3))
         @test hy isa Vector{Float64}
@@ -168,6 +172,46 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         end
         @test ok_grad
         @test ok_cover
+    end
+
+    # The partial magnitudes over the box bound those at each point, so the box's scale bounds
+    # every pointwise scale.
+    @testset "the Gram variance scale over the box bounds the pointwise scale — $name" for
+        (name, r, lo, hi) in vector_programs
+        X = interval.(lo, hi)
+        t, outidxs = tape_function(r, X)
+        w = [1.0, -2.0, 0.5]
+        hv = DerivativeCovers.gramvariance(t, outidxs, w)
+        @test hv isa Vector{Float64}
+        @test DerivativeCovers.gramvariance!(zeros(t.ninputs), t, outidxs, w) == hv
+        @test all(hv .<= gramcover(t, outidxs, w) .* slack)
+        nc = cover_nls(r, X)
+        @test nc.h_var_gn isa Vector{Float64}
+        @test all(nc.h_var_gn .<= nc.h_gn .* slack)
+        ok = true
+        for x in samples(Xoshiro(43), lo, hi)
+            tx, ox = tape_function(r, x)
+            ok &= all(DerivativeCovers.gramvariance(tx, ox, w) .<= hv .* slack)
+        end
+        @test ok
+    end
+
+    # The squared channel over the box bounds the pointwise one, so the variance pair's squares,
+    # which cover the box's `Ũ⁽²⁾`, cover every pointwise `Ũ⁽²⁾` too.
+    @testset "the variance pair over the box — $name" for (name, r, lo, hi) in vector_programs
+        t, outidxs = tape_function(r, interval.(lo, hi))
+        U2 = DerivativeCovers.variance_surrogate(t, outidxs)
+        @test U2 isa Matrix{Float64}
+        for kw in ((;), (; rounds = nothing), (; start = :equal))
+            v = balance_cover(t, outidxs; merge = VarianceMerge(), check = true, kw...)
+            @test v.a isa Vector{Float64} && v.b isa Vector{Float64}
+            ok = true
+            for x in samples(Xoshiro(47), lo, hi)
+                U2x = DerivativeCovers.variance_surrogate(tape_function(r, x)...)
+                ok &= all(U2x .<= U2 .* slack) && all(U2x .<= (v.a .* v.b') .^ 2 .* slack)
+            end
+            @test ok
+        end
     end
 
     @testset "products on an interval tape enclose the pointwise products" begin

@@ -25,6 +25,10 @@
 # A single residual channel instead gives the sum merge c[j] = ∑ₖ ũ_{rₖ,j}, which `gramcover(t,
 # outidxs)` computes in one O(L) sweep of the residual tape; it satisfies
 # h_gn[j] ≤ c[j] ≤ √n_j h_gn[j], with n_j the number of residuals that input j reaches.
+#
+# Squaring the local partials instead sums squared path products, Ũ⁽²⁾ ≤ Ũ², and one O(L) sweep
+# seeded at the residuals gives h_var_gn[j] = √(∑ₖ Ũ⁽²⁾_kj) ≤ h_gn[j] (`gramvariance`), the expected
+# column norm of J under random local signs. It is a scale, not a cover.
 
 """
     NLSCover{T, M}
@@ -36,20 +40,26 @@ the [`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the ty
 - `grad::Vector{T}`: gradient of the loss.
 - `h::Vector{M}`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
 - `h_gn::Vector{M}`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
+- `h_var_gn::Vector{M}`: root-mean-square column scale of `JᵀJ` under random local signs,
+  [`gramvariance`](@ref) of the residuals. This is **not a certified cover**; always
+  `h_var_gn <= h_gn`.
 - `m`: the number of residuals.
 
 Both covers are read off one grouped reverse sweep with `G` residual channels and one
 residual-curvature channel, so together they cost `O(G * L)` time and memory. With `G = m` — one
 residual per channel, the default — `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which equals
-`sqrt.(diag(J'J))` when no signed paths cancel.
+`sqrt.(diag(J'J))` when no signed paths cancel. `h_var_gn` takes one further `O(L)` sweep, whatever
+`G` is, and equals `h_gn` (for `G = m`) where each entry of `J` has a single path.
 """
 struct NLSCover{T, M}
     grad::Vector{T}
     h::Vector{M}
     h_gn::Vector{M}
+    h_var_gn::Vector{M}
     m::Int
 end
-NLSCover{T}(grad, h, h_gn, m) where {T} = NLSCover{T, magtype(T)}(grad, h, h_gn, m)
+NLSCover{T}(grad, h, h_gn, h_var_gn, m) where {T} =
+    NLSCover{T, magtype(T)}(grad, h, h_gn, h_var_gn, m)
 
 """
     NLSDiagnostics{T, M}
@@ -69,11 +79,12 @@ struct NLSDiagnostics{T, M}
     grad::Vector{T}
     h::Vector{M}
     h_gn::Vector{M}
+    h_var_gn::Vector{M}
     Utilde::Matrix{M}
     m::Int
 end
-NLSDiagnostics{T}(grad, h, h_gn, Utilde, m) where {T} =
-    NLSDiagnostics{T, magtype(T)}(grad, h, h_gn, Utilde, m)
+NLSDiagnostics{T}(grad, h, h_gn, h_var_gn, Utilde, m) where {T} =
+    NLSDiagnostics{T, magtype(T)}(grad, h, h_gn, h_var_gn, Utilde, m)
 
 """
     nls_loss_tape(r, x0) -> (t, outidx, residx, sqidx)
@@ -143,7 +154,8 @@ Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
 `r` must map a vector of [`TVar`](@ref)s to a vector of residuals. The default
 [`CoverOnly`](@ref) mode returns an [`NLSCover`](@ref) holding a cover `h` of the full loss
-Hessian and a cover `h_gn` of the Gauss–Newton matrix `JᵀJ`. [`WithDiagnostics`](@ref) returns an
+Hessian, a cover `h_gn` of the Gauss–Newton matrix `JᵀJ`, and the uncertified root-mean-square
+scale `h_var_gn <= h_gn` of `JᵀJ` from [`gramvariance`](@ref). [`WithDiagnostics`](@ref) returns an
 [`NLSDiagnostics`](@ref), which adds the absolute-sensitivity surrogate `Utilde` for a further
 `O(m * L)`.
 
@@ -185,7 +197,7 @@ function cover_nls(
         scales = nothing, ratio = nothing
     )
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)
-    return NLSCover(c.grad, c.h, c.h_gn, length(c.residx))
+    return NLSCover(c.grad, c.h, c.h_gn, c.h_var_gn, length(c.residx))
 end
 
 function cover_nls(
@@ -195,7 +207,7 @@ function cover_nls(
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)
     Utilde = jacobian_surrogate(c.t, c.residx)
     check && _check_gn_channels(c.h_gn, Utilde, c.rgroups, c.gres)
-    return NLSDiagnostics(c.grad, c.h, c.h_gn, Utilde, length(c.residx))
+    return NLSDiagnostics(c.grad, c.h, c.h_gn, c.h_var_gn, Utilde, length(c.residx))
 end
 
 cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwargs...)
@@ -212,7 +224,8 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
     h = [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n]
     h_gn = [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n]
-    return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn)
+    h_var_gn = gramvariance(t, residx)
+    return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var_gn)
 end
 
 # The residual channels are the square nodes' cover atoms, which are unit only because the loss

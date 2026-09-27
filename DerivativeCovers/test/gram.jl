@@ -126,3 +126,141 @@
         @test all(>(0), s[1:3])
     end
 end
+
+# Exact `E[J.^2]` when each parent slot's local partial carries an independent sign, by
+# enumerating all sign patterns.
+function signed_second_moment(t, outidxs)
+    N, n = nnodes(t), t.ninputs
+    slots = [(k, i) for k in (n + 1):N for i in eachindex(t.parents[k])]
+    S = length(slots)
+    M = zeros(length(outidxs), n)
+    for bits in 0:(2^S - 1)
+        Jf = zeros(N, n)
+        for j in 1:n
+            Jf[j, j] = 1
+        end
+        for (s, (k, i)) in enumerate(slots)
+            e = isodd(bits >> (s - 1)) ? -1 : 1
+            Jf[k, :] .+= e * t.ds[k][i] .* Jf[t.parents[k][i], :]
+        end
+        M .+= Jf[collect(outidxs), :] .^ 2
+    end
+    return M ./ 2^S
+end
+
+@testset "gramvariance" begin
+    gramvariance = DerivativeCovers.gramvariance
+    # Outputs 1,2 depend on inputs 1,2 through reconvergent paths; output 3 on inputs 3,4.
+    prog = xs -> [sin(xs[1]) * xs[2] + xs[1]^2, xs[2] * exp(xs[1]) * xs[2], xs[3] * xs[4] + cos(xs[4])]
+    x0 = [0.3, 0.7, 1.1, -0.4]
+    t, outidxs = tape_function(prog, x0)
+    U = jacobian_surrogate(t, outidxs)
+    U2 = squared_path_sums(t, outidxs)
+    J = ForwardDiff.jacobian(prog, x0)
+    m, n = size(J)
+    rtol = 1.0e-13
+    w = [0.5, -2.0, 0.0]
+
+    @testset "equals the squared path sums" begin
+        @test isapprox(gramvariance(t, outidxs), sqrt.(vec(sum(U2; dims = 1))); rtol)
+        @test isapprox(gramvariance(t, outidxs, w), sqrt.(U2' * abs.(w)); rtol)
+        @test gramvariance(t, outidxs, Diagonal(w)) == gramvariance(t, outidxs, w)
+        @test gramvariance(t, outidxs, w) == gramvariance(t, outidxs, abs.(w))
+    end
+
+    @testset "is the expected Gram diagonal under random signs" begin
+        rs = x -> [x[1] * x[1] + x[2], sin(x[1] * x[2]) * x[2]]
+        ts, os = tape_function(rs, [0.7, -1.2])
+        M = signed_second_moment(ts, os)
+        @test isapprox(M, squared_path_sums(ts, os); rtol)
+        ws = [2.0, 0.3]
+        @test isapprox(gramvariance(ts, os, ws) .^ 2, M' * ws; rtol)
+    end
+
+    @testset "lies beneath h_gn and the Gram cover" begin
+        @test all(U2 .<= U .^ 2 .* GATE)
+        for ww in (ones(m), w)
+            hv = gramvariance(t, outidxs, ww)
+            hgn = sqrt.(U' .^ 2 * abs.(ww))
+            @test all(hv .<= hgn .* GATE)
+            @test all(hgn .<= gramcover(t, outidxs, ww) .* GATE)
+        end
+        # Reconvergent paths put it strictly below h_gn, and below the column norms of J.
+        hv = gramvariance(t, outidxs)
+        @test hv[1] < sqrt(sum(abs2, U[:, 1])) * (1 - 1.0e-3)
+        tx, ox = tape_function(x -> [x[1] * x[1]], [3.0])
+        @test gramvariance(tx, ox) ≈ [sqrt(18.0)]
+        @test gramvariance(tx, ox)[1] < abs(ForwardDiff.jacobian(x -> [x[1] * x[1]], [3.0])[1])
+    end
+
+    @testset "single paths: equals h_gn and the column norms of J" begin
+        r1 = x -> [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3], sin(x[3])]
+        y0 = [0.5, 2.0, -1.0]
+        t1, o1 = tape_function(r1, y0)
+        J1 = ForwardDiff.jacobian(r1, y0)
+        U1 = jacobian_surrogate(t1, o1)
+        w1 = [1.0, 0.25, 3.0, 0.0]
+        @test isapprox(gramvariance(t1, o1), sqrt.(vec(sum(abs2, U1; dims = 1))); rtol)
+        @test isapprox(gramvariance(t1, o1), sqrt.(vec(sum(abs2, J1; dims = 1))); rtol)
+        @test isapprox(gramvariance(t1, o1, w1), sqrt.(vec(sum(abs2, sqrt.(w1) .* J1; dims = 1))); rtol)
+        nls = cover_nls(r1, y0)
+        @test isapprox(nls.h_var_gn, nls.h_gn; rtol)
+    end
+
+    @testset "cover_nls carries it for the residuals" begin
+        rn = x -> [x[1] * x[2] - 1.0, exp(x[1]) - 2.0, sin(x[1] * x[2]) * x[2], x[3] * x[3]]
+        z0 = [0.5, 2.0, 0.3]
+        tr, or = tape_function(rn, z0)
+        nc = cover_nls(rn, z0)
+        nd = cover_nls(WithDiagnostics(), rn, z0)
+        @test isapprox(nc.h_var_gn, gramvariance(tr, or); rtol)
+        @test nd.h_var_gn == nc.h_var_gn
+        @test all(nc.h_var_gn .<= nc.h_gn .* GATE)
+        @test nc.h_var_gn[3] < nc.h_gn[3] * (1 - 1.0e-3)
+        # Coarser residual channels loosen h_gn but leave the scale alone.
+        @test cover_nls(rn, z0; ngroups = 1).h_var_gn == nc.h_var_gn
+    end
+
+    @testset "input covariance" begin
+        d = [2.0, 0.1, 5.0, 0.3]
+        progd = y -> prog(y ./ d)
+        td, od = tape_function(progd, d .* x0)
+        @test isapprox(gramvariance(td, od), gramvariance(t, outidxs) ./ d; rtol)
+        @test isapprox(gramvariance(td, od, w), gramvariance(t, outidxs, w) ./ d; rtol)
+    end
+
+    @testset "output covariance" begin
+        C = [3.0, 0.02, 7.0]
+        tc, oc = tape_function(xs -> C .* prog(xs), x0)
+        wpos = [0.5, 2.0, 1.5]
+        @test isapprox(gramvariance(tc, oc, wpos ./ C .^ 2), gramvariance(t, outidxs, wpos); rtol)
+        @test isapprox(gramvariance(tc, oc, 1 ./ C .^ 2), gramvariance(t, outidxs); rtol)
+    end
+
+    @testset "a zero weight drops the output; a repeated output adds its weight" begin
+        @test gramvariance(t, outidxs, [1.0, 0.0, 1.0]) == gramvariance(t, outidxs[[1, 3]])
+        @test gramvariance(t, outidxs, [0.0, 0.0, 0.0]) == zeros(n)
+        @test gramvariance(t, [outidxs[1], outidxs[1], outidxs[2]]) ==
+            gramvariance(t, outidxs[1:2], [2.0, 1.0])
+    end
+
+    @testset "mutating form writes in place" begin
+        for args in ((), (w,), (Diagonal(w),))
+            h = fill(NaN, n)
+            @test DerivativeCovers.gramvariance!(h, t, outidxs, args...) === h
+            @test h == gramvariance(t, outidxs, args...)
+        end
+    end
+
+    @testset "argument checks" begin
+        @test_throws "w has indices" gramvariance(t, outidxs, [1.0, 2.0])
+        @test_throws "weights must be finite" gramvariance(t, outidxs, [1.0, NaN, 2.0])
+        @test_throws "diagonal weights only" gramvariance(t, outidxs, ones(m, m))
+        @test_throws "diagonal weights only" gramvariance(t, outidxs, Matrix(Diagonal(w)))
+        @test_throws "h has indices" DerivativeCovers.gramvariance!(zeros(n - 1), t, outidxs)
+        @test_throws "h has indices" DerivativeCovers.gramvariance!(
+            OffsetArray(zeros(n), 0:(n - 1)), t, outidxs, w
+        )
+        @test_throws "diagonal weights only" DerivativeCovers.gramvariance!(zeros(n), t, outidxs, ones(m, m))
+    end
+end

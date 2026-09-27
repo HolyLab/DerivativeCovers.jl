@@ -16,7 +16,8 @@ from, and `M =` [`magtype`](@ref)`(T)` the type of the two channels. `VarianceCo
 
 - `grad::Vector{T}`: gradient of the scalar function.
 - `h_sum::Vector{M}`: certified sum-merge Hessian cover.
-- `h_var::Vector{M}`: variance estimate of the quadrature merge. This is **not a certified cover**.
+- `h_var::Vector{M}`: variance estimate of the quadrature merge, under a random-sign model with
+  one sign per parent slot (see [`cover_variance`](@ref)). This is **not a certified cover**.
 - `severity::Vector{M}`: coordinatewise ratio `h_sum ./ h_var`. Larger values indicate more
   overlap from reconvergent paths.
 
@@ -56,7 +57,7 @@ end
 """
     dependency_sweep(t::Tape, theta, theta2) -> (abar, vbar)
 
-One reverse traversal carrying the hard and variance channels together:
+The staged form's propagation of the hard and variance channels, one reverse sweep each:
 
     abar[j] = theta[j]  + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)   * abar[k]
     vbar[j] = theta2[j] + sum_{k : j in P_k} magnitude(∂φ_k/∂v_j)^2 * vbar[k]
@@ -66,6 +67,9 @@ value at the inputs is the sum merge. The variance channel squares both the seed
 coefficients, so it collects the same path contributions in quadrature; seeded with the matching
 `theta2` from [`variance_seeds`](@ref), `sqrt.(vbar)` at the inputs estimates the quadrature merge
 from below. Both channels hold magnitudes: `vbar` here is the variance channel, not an adjoint.
+
+[`cover_hessian`](@ref) forms both channels within its single fused sweep instead; this form
+seeds them independently.
 """
 function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector)
     N = nnodes(t)
@@ -73,19 +77,7 @@ function dependency_sweep(t::Tape, theta::AbstractVector, theta2::AbstractVector
         throw(DimensionMismatch("theta has length $(length(theta)), expected $N (one per node)"))
     length(theta2) == N ||
         throw(DimensionMismatch("theta2 has length $(length(theta2)), expected $N (one per node)"))
-    abar = collect(float.(theta))
-    vbar = collect(float.(theta2))
-    for k in N:-1:1
-        ak, vk = abar[k], vbar[k]
-        (ak == 0 && vk == 0) && continue
-        for (i, p) in enumerate(t.parents[k])
-            d = magnitude(t.ds[k][i])
-            iszero(d) && continue
-            abar[p] += d * ak
-            vbar[p] += d^2 * vk
-        end
-    end
-    return abar, vbar
+    return _reverse_sweep(_absslot, t, theta), _reverse_sweep(_sqslot, t, theta2)
 end
 
 """
@@ -120,9 +112,26 @@ Compute a certified sum-merge cover and an inexpensive estimate of the quadratur
 Pass either a tape and scalar output node, or a function and evaluation point. The returned
 [`VarianceCover`](@ref) contains the gradient, both channels, and their coordinatewise ratio.
 
-Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Computing both costs
-`O(L)` time and memory, independent of the number of inputs. `scales` and `ratio` govern the
-split, as in [`cover_hessian`](@ref), and `check=true` verifies the local covering conditions.
+Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Both come from the
+single reverse sweep of [`cover_hessian`](@ref), which returns them as well, so this costs `O(L)`
+time and memory, independent of the number of inputs; `cover_variance` adds the severity.
+`scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and `check=true` verifies
+the local covering conditions.
+
+The same channels follow from the staged form: [`local_covers`](@ref) and
+[`variance_seeds`](@ref) supply the seeds of both channels, and [`dependency_sweep`](@ref)
+propagates them.
+
+`h_sum[i]` adds one contribution per pair of a seeded parent slot and a path from that slot to
+input `i`: the slot's seed times the product of the absolute first partials along the path.
+`h_var[i]^2` sums the squares of the same contributions. That is the expected square of their
+sum when each parent slot carries an independent, equiprobable sign, on its first partial and on
+its seed — the model [`gramvariance`](@ref) uses. A variable that enters one elemental through
+two slots is therefore two paths whose contributions combine in quadrature, although in the
+program they share a sign: `x[1] * x[1]` seeds each of its two slots with `1`, so `h_sum = 2` adds
+them and `h_var = √2`, while `x[1]^2`, a unary elemental with a single slot, gives `√2` for
+both. Where such paths reconverge further along, `h_var` falls below the exact scale: for
+`x[1] * x[1] * x[1]` at `x = 3`, `h_var = √15` against `sqrt(abs(f''(3))) = √18`.
 
 # Examples
 
@@ -145,16 +154,21 @@ julia> round.(vc.severity; digits=4)
 2-element Vector{Float64}:
  1.3239
  1.3938
+
+julia> cover_variance(x -> x[1] * x[1], [3.0]).h_sum   # two slots, two paths
+1-element Vector{Float64}:
+ 2.0
+
+julia> cover_variance(x -> x[1] * x[1], [3.0]).h_var ≈ [sqrt(2)]
+true
+
+julia> cover_variance(x -> x[1] * x[1] * x[1], [3.0]).h_var ≈ [sqrt(15)]   # |f''| = 18
+true
 ```
 """
 function cover_variance(t::Tape, outidx::Integer; check::Bool = true, scales = nothing, ratio = nothing)
-    n = t.ninputs
-    vbar = adjoints(t, outidx)
-    rhos, theta = local_covers(t, vbar; check, scales, ratio)
-    abar, w = dependency_sweep(t, theta, variance_seeds(t, rhos))
-    h_sum = abar[1:n]
-    h_var = sqrt.(w[1:n])
-    return VarianceCover(vbar[1:n], h_sum, h_var, dependency_severity(h_sum, h_var))
+    c = cover_hessian(CoverOnly(), t, outidx; check, scales, ratio)
+    return VarianceCover(c.grad, c.h_sum, c.h_var, dependency_severity(c.h_sum, c.h_var))
 end
 
 function cover_variance(f, x0::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing)

@@ -134,6 +134,7 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         bc = balance_cover(t, outidxs)
         @test eltype(bc.a) === Float32 && eltype(bc.b) === Float32
 
+        @test DerivativeCovers.gramvariance(t, outidxs, [1.0, 2.0, 0.5]) isa Vector{Float32}
         @test jvp(t, outidxs, Float32[1, 0, 1]) isa Vector{Float32}
         @test vjp(t, outidxs, Float32[1, 1, 1]) isa Vector{Float32}
 
@@ -211,11 +212,11 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
 
     @testset "a result type named by the element type alone fills in the cover type" begin
         v = Float32[1, 2]
-        @test NLSCover{Float32}(v, v, v, 2) isa NLSCover{Float32, Float32}
-        @test NLSDiagnostics{Float32}(v, v, v, Float32[1 2; 3 4], 2) isa
+        @test NLSCover{Float32}(v, v, v, v, 2) isa NLSCover{Float32, Float32}
+        @test NLSDiagnostics{Float32}(v, v, v, v, Float32[1 2; 3 4], 2) isa
             NLSDiagnostics{Float32, Float32}
         @test VarianceCover{Float32}(v, v, v, v) isa VarianceCover{Float32, Float32}
-        @test HessianCover{Float32}(v, v) isa HessianCover{Float32, Float32}
+        @test HessianCover{Float32}(v, v, v) isa HessianCover{Float32, Float32}
         fc = ForwardCover{Float32}([1.0, 2.0], [1.0, 2.0])
         @test fc isa ForwardCover{Float32, Float32, Vector{Float32}, Vector{Float32}}
         @test ForwardCover(v, [1.0, 2.0]) isa ForwardCover{Float32, Float32}

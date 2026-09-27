@@ -25,6 +25,26 @@ function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) wher
 end
 
 """
+    variance_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> U2
+
+The `m × n` squared-channel counterpart of [`jacobian_surrogate`](@ref): `U2[k, j]` sums, over the
+paths from input `j` to output `k`, the squared product of the local partial magnitudes along the
+path. A sum of squares is at most the square of the sum, so `U2 <= Utilde.^2` entrywise, with
+equality where an entry has a single path. If each parent slot's local partial carries an
+independent, equiprobable sign, `U2[k, j] = E[J_kj^2]`. This is the matrix
+[`balance_cover`](@ref) takes with `merge = VarianceMerge()`. Formed by one `m`-channel reverse
+sweep through squared partials, `O(m*L)`.
+"""
+function variance_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
+    m, N = length(outidxs), nnodes(t)
+    Theta = zeros(magtype(T), m, N)
+    for (k, o) in enumerate(outidxs)
+        Theta[k, o] += 1
+    end
+    return _reverse_sweep(_sqslot, t, Theta)[:, 1:t.ninputs]
+end
+
+"""
     JacobianCover{T}
 
 Result of [`cover_jacobian`](@ref): `a[k] * b_sum[j] >= abs(J[k,j])`. `T` is
@@ -300,26 +320,39 @@ end
 
 # A returned pair must cover every structurally live entry, so neither factor may vanish there.
 # Only underflow can put a zero on a live row or column, and a cover with one is not a cover, so
-# this runs on every path rather than only under `check`. `O(m + n)`.
-function _check_cover_factors(a, b, li::LiveInfo)
+# this runs on every path rather than only under `check`. `O(m + n)`. With `variance = true`, `a`
+# and `b` are the variance pair's squared factors, which bound `Ũ⁽²⁾` rather than cover `Ũ`.
+function _check_cover_factors(a, b, li::LiveInfo; variance::Bool = false)
+    aname, bname = _factor_names(variance)
+    rowtail, coltail = variance ?
+        (
+            "no squared input factor can bound Ũ⁽²⁾ on its row",
+            "no squared output factor can bound Ũ⁽²⁾ on its column",
+        ) :
+        ("no input factor can cover its row", "no output factor can cover its column")
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !li.liverow[k])) || throw(
             ArgumentError(
-                "output weight a[$k] is $(a[k]) on an output that inputs reach: the products " *
-                    "along those paths underflowed, so no input factor can cover its row"
+                "$(aname(k)) is $(a[k]) on an output that inputs reach: the products along " *
+                    "those paths underflowed, so $rowtail"
             )
         )
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !li.livecol[j])) || throw(
             ArgumentError(
-                "input weight b[$j] is $(b[j]) on an input that reaches an output: the products " *
-                    "along those paths underflowed, so no output factor can cover its column"
+                "$(bname(j)) is $(b[j]) on an input that reaches an output: the products along " *
+                    "those paths underflowed, so $coltail"
             )
         )
     end
     return nothing
 end
+
+# How error messages name the factors: the variance pair reports its squared factors.
+_factor_names(variance::Bool) = variance ?
+    (k -> "squared output weight a[$k]^2", j -> "squared input weight b[$j]^2") :
+    (k -> "output weight a[$k]", j -> "input weight b[$j]")
 
 # Output weights are finite and strictly positive wherever an input reaches the output. A zero
 # weight is admitted only on a dead output, where it covers that row exactly; anything else —
@@ -343,7 +376,8 @@ end
 # too small to represent. That is a floating-point event the caller needs to know about, not a
 # structurally dead entry to be covered vacuously. Entrywise, from `cld(n, 64)` integer passes and
 # `m * cld(n, 64)` words — small beside the `m * n` surrogate already in hand.
-function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo)
+function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo; variance::Bool = false)
+    entry = variance ? "entry of the squared channel Ũ⁽²⁾" : "surrogate entry"
     P = _structural_pattern(t, outidxs, li)
     n = t.ninputs
     for j in 1:n, k in 1:length(outidxs)
@@ -351,8 +385,8 @@ function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo)
         (P[k, blk] >> bit) & UInt64(1) == 1 || continue
         iszero(Utilde[k, j]) && throw(
             ArgumentError(
-                "output $k reaches input $j along nonzero local derivatives, but the surrogate " *
-                    "entry underflowed to zero: the products along those paths are below the " *
+                "output $k reaches input $j along nonzero local derivatives, but the $entry " *
+                    "underflowed to zero: the products along those paths are below the " *
                     "smallest representable $(eltype(Utilde))"
             )
         )
@@ -414,8 +448,11 @@ marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector)
     _marginal_weights(t, outidxs, b, _live_info(t, outidxs))
 
 # The balancing loop already holds the structural liveness, so it passes it in rather than paying
-# for a reachability sweep in every round that has a zero `b`.
-function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo) where {T}
+# for a reachability sweep in every round that has a zero `b`. `slot = _sqslot` gives the
+# squared-channel marginal `∑_j Ũ⁽²⁾_kj / b_j` instead.
+function _marginal_weights(
+        t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo, slot::F = _absslot
+    ) where {T, F}
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
@@ -427,12 +464,15 @@ function _marginal_weights(t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo)
             # A zero input weight is valid only for an input that reaches no output.
             li.livecol[j] && throw(
                 ArgumentError(
-                    "b is zero on input $j, which reaches an output; no output weighting can cover it"
+                    slot === _sqslot ?
+                        "squared input weight b[$j]^2 is zero on an input that reaches an output; " *
+                        "no squared output weighting can bound Ũ⁽²⁾ on its column" :
+                        "b is zero on input $j, which reaches an output; no output weighting can cover it"
                 )
             )
         end
     end
-    s = abs_forward(t, theta)
+    s = _forward_sweep(slot, t, theta)
     # The balancing iteration indexes weights by output position.
     a = Vector{eltype(s)}(undef, length(outidxs))
     for (k, o) in enumerate(outidxs)
@@ -470,6 +510,9 @@ one family, so a parameterized member (a `p`-norm merge) is reachable through th
 without an API break. They are types rather than names so that the b-step's doubly-nested loop
 specializes on the choice, and so that the non-convergence hint can dispatch per rule.
 
+[`VarianceMerge`](@ref) is the exception: it selects the squared channel for the whole
+alternation, not only the final b-step, and the pair it returns is a scale rather than a cover.
+
 `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
 see that function's docstring.
 """
@@ -478,7 +521,8 @@ abstract type MergeRule end
 """
     SumMerge <: MergeRule
 
-`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and the only one the tape form can run as `O(L)` sweeps.
+`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and, with [`VarianceMerge`](@ref), the only one the tape
+form can run as `O(L)` sweeps.
 """
 struct SumMerge <: MergeRule end
 
@@ -499,12 +543,40 @@ round, which no larger budget reduces. [`balance_cover`](@ref) reports that as a
 struct MaxMerge <: MergeRule end
 
 """
+    VarianceMerge <: MergeRule
+
+The variance pair: [`balance_cover`](@ref)'s marginal alternation run on the squared channel
+`Ũ⁽²⁾` ([`variance_surrogate`](@ref)) with squared factors,
+
+    a_k² ← (1/ρ_k) ∑_j Ũ⁽²⁾_kj / b_j²,    b_j² ← (1/γ_j) ∑_k Ũ⁽²⁾_kj / a_k²,
+
+followed by the final b-step `b_j² = ∑_k Ũ⁽²⁾_kj / a_k²`. This is the [`SumMerge`](@ref)
+alternation applied to `Ũ⁽²⁾` with factors `(a², b²)`, with the same targets, round budget and
+convergence test; the start is the default pair's start, squared, and `balance_cover` returns the
+square roots. On a tape each half-step is one sweep through squared local partials, so a round
+costs `O(L)` and `Ũ⁽²⁾` is never formed; the final b-step is
+[`gramvariance`](@ref)`(t, outidxs, w)` with `w_k = 1/a_k²` on the live outputs and zero on the
+others.
+
+The pair is a scale, **not a cover**. The final b-step gives every live column
+`∑_k Ũ⁽²⁾_kj / (a_k² b_j²) = 1`, so `a_k² b_j² >= Ũ⁽²⁾_kj`, which is what `check = true` verifies.
+But `Ũ⁽²⁾ <= Ũ.^2`, with equality only where an entry has a single path, so `a_k b_j` can fall
+below `Ũ_kj`, and below `abs(J_kj)` where several paths add with the same sign. If each parent
+slot's local partial carries an independent, equiprobable sign, `Ũ⁽²⁾_kj = E[J_kj²]`, and at
+convergence the pair standardizes the signed Jacobian in expectation: the normalized iterate
+`(a, b ./ sqrt.(γ))` has expected row sums of squares
+`∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and the returned `b` has
+expected column sums of squares `1`.
+"""
+struct VarianceMerge <: MergeRule end
+
+"""
     balance_cover(t::Tape, outidxs; kwargs...) -> (; a, b, iters, delta, roots, nties)
     balance_cover(r, x0::AbstractVector; kwargs...)
     balance_cover(Utilde::AbstractMatrix; kwargs...)
 
 Output and input weights covering the absolute-sensitivity surrogate: `a[k] * b[j] >= Ũ_kj`, and
-so `>= abs(J_kj)`.
+so `>= abs(J_kj)`, for every `merge` except [`VarianceMerge`](@ref).
 
 By default the weights come from a scale-covariant start, `rounds` rounds of a marginal
 alternation toward row and column targets the sparsity pattern makes realizable, and a final
@@ -533,12 +605,17 @@ without it.
   - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `0` merges
     the start as it is, without computing `targets`, and reports `delta = Inf`. `nothing` runs to
     `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming `maxiter` or
-    `rtol` and no `rounds` asks for that too.
+    `rtol` and no `rounds` asks for that too. Such a run overrelaxes the alternation toward
+    `targets`, in log space with a factor adapted to the observed contraction, which reaches the
+    same fixed point in far fewer rounds on slowly converging patterns; a fixed budget always runs
+    the plain rounds.
   - `maxiter`, `rtol`: bound and tolerance of a `rounds = nothing` run. `maxiter = nothing` picks
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
   - `merge`: the final b-step, [`SumMerge`](@ref) (default), [`QuadMerge`](@ref) or
-    [`MaxMerge`](@ref).
+    [`MaxMerge`](@ref). [`VarianceMerge`](@ref) instead runs the whole alternation on the squared
+    channel `Ũ⁽²⁾` and returns a scale that is not a cover; the matrix form then takes `Ũ⁽²⁾`
+    ([`variance_surrogate`](@ref)) in place of `Ũ`, and `check` verifies `a_k² b_j² >= Ũ⁽²⁾_kj`.
   - `arule`: `:marginal` (default) alternates [`marginal_weights`](@ref) with the b-step;
     `:geomean` fits `log Ũ_kj ≈ log a_k + log b_j` instead and prescribes no `targets`.
   - `root`, `cgiters`: passed to [`tape_potentials`](@ref) for the tape-potential start. Naming
@@ -551,12 +628,14 @@ without it.
 test applies to (the gauge-invariant product change `max_kj |log((a_k b_j)_new/(a_k b_j)_old)|`,
 or the relative row-marginal residual `max_k |∑_j Ũ_kj/(a_k b_j r_k) - 1|` for non-uniform
 targets), and `roots`, `nties` from [`tape_potentials`](@ref) when the tape-potential start was
-used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`.
+used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`. With
+`VarianceMerge()`, `delta` is measured on the squared channel: on `a_k² b_j²` and `Ũ⁽²⁾`.
 
 # Cost
 
-The tape form with `merge = SumMerge(), arule = :marginal` runs as `O(L)` sweeps per round and
-never forms `Ũ`. Every other combination, and `check = true`, forms it at `O(m*L)`.
+The tape form with `merge = SumMerge()` or `VarianceMerge()` and `arule = :marginal` runs as
+`O(L)` sweeps per round and never forms `Ũ`. Every other combination, and `check = true`, forms it
+(or `Ũ⁽²⁾`) at `O(m*L)`.
 
 # Examples
 
@@ -600,13 +679,16 @@ function _balance_tape(
     maxiter, rounds, rtol = _resolve_budget(maxiter, rounds, rtol, arule, M)
     # No round reads the targets, so a zero budget validates them without sweeping for them.
     tgt = _tape_targets(targets, arule, t, outidxs, m, M, li; needed = rounds !== 0)
-    matrixpath = !(merge isa SumMerge) || arule !== :marginal
+    variance = merge isa VarianceMerge
+    matrixpath = !(merge isa SumMerge || variance) || arule !== :marginal
     _check_start(start, a0, root, cgiters, !matrixpath)
+    # The surrogate the pair is balanced against: `Ũ`, or `Ũ⁽²⁾` for the variance pair.
+    surrogate = variance ? variance_surrogate : jacobian_surrogate
     if matrixpath
         # Other strategies need separate output channels; materialize the surrogate once. Its zeros
         # must match the structural pattern entrywise before anything reads them.
-        Utilde = jacobian_surrogate(t, outidxs)
-        _check_surrogate_support(t, outidxs, Utilde, li)
+        Utilde = surrogate(t, outidxs)
+        _check_surrogate_support(t, outidxs, Utilde, li; variance)
         return _balance_matrix(
             Utilde, tgt, li.liverow, li.livecol, merge, arule, start, a0,
             maxiter, rounds, rtol, check, :flow
@@ -618,9 +700,12 @@ function _balance_tape(
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
     a = _balance_start(a0, m, M, li.liverow)
+    # The variance pair runs the sum-merge alternation on squared factors through squared partials.
+    variance && (a = _squared_start(a))
+    slot = variance ? _sqslot : _absslot
 
-    rawbstep = a -> _sum_merge_b(t, outidxs, a, li)
-    anumstep = b -> _marginal_weights(t, outidxs, b, li)
+    rawbstep = a -> _sum_merge_b(t, outidxs, a, li, slot)
+    anumstep = b -> _marginal_weights(t, outidxs, b, li, slot)
     if tgt === nothing
         a, b, iters, delta =
             _balance(rawbstep, anumstep, a, maxiter, rtol, _marginal_hint(SumMerge(), :flow); rounds)
@@ -629,15 +714,34 @@ function _balance_tape(
         # The normalized iterate is not a cover; the plain sum merge for this `a` is.
         b = rawbstep(a)
     end
-    _check_cover_factors(a, b, li)
+    _check_cover_factors(a, b, li; variance)
     if check
-        Utilde = jacobian_surrogate(t, outidxs)
-        _check_surrogate_support(t, outidxs, Utilde, li)
+        Utilde = surrogate(t, outidxs)
+        _check_surrogate_support(t, outidxs, Utilde, li; variance)
         rworst = jacobian_ratio(Utilde, a, b)
-        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the surrogate: worst ratio $rworst")
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
+            variance ?
+                "the variance pair's squared factors do not bound Ũ⁽²⁾: worst ratio $rworst" :
+                "balanced pair does not cover the surrogate: worst ratio $rworst"
+        )
     end
+    variance && (a = sqrt.(a); b = sqrt.(b))
     return (; a, b, iters, delta, roots, nties)
+end
+
+# Squared starting weights for the variance pair, which must be representable in their own right.
+function _squared_start(a)
+    a2 = a .^ 2
+    for k in eachindex(a, a2)
+        a[k] > 0 || continue
+        (isfinite(a2[k]) && a2[k] > 0) || throw(
+            ArgumentError(
+                "the variance pair's squared start is not representable: a[$k]^2 = $(a2[k]) " *
+                    "from a[$k] = $(a[k]). Use start=:equal, or supply a0."
+            )
+        )
+    end
+    return a2
 end
 
 function balance_cover(r, x0::AbstractVector; kwargs...)
@@ -679,10 +783,17 @@ function _balance_matrix(
     m = size(Utilde, 1)
     # No round reads the targets, so a zero budget goes straight from the start to the merge.
     rounds === 0 && (tgt = nothing)
+    # The variance pair is the sum-merge balancing of `Ũ⁽²⁾` with squared factors. The covariant
+    # start computed from `Ũ⁽²⁾` is already squared; one supplied by the caller is not.
+    variance = merge isa VarianceMerge
+    variance && (merge = SumMerge())
     if a0 === nothing && something(start, :covariant) === :covariant
         a0 = _surrogate_start(Utilde, T)
+        a = _balance_start(a0, m, T, liverow)
+    else
+        a = _balance_start(a0, m, T, liverow)
+        variance && (a = _squared_start(a))
     end
-    a = _balance_start(a0, m, T, liverow)
     bstep = a -> _merge_bstep(Utilde, a, merge)
 
     if arule === :marginal && tgt !== nothing
@@ -704,47 +815,60 @@ function _balance_matrix(
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
+    aname, bname = _factor_names(variance)
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !liverow[k])) ||
-            throw(ArgumentError("output weight a[$k] is $(a[k]) on a row with nonzero entries"))
+            throw(ArgumentError("$(aname(k)) is $(a[k]) on a row with nonzero entries"))
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !livecol[j])) ||
-            throw(ArgumentError("input weight b[$j] is $(b[j]) on a column with nonzero entries"))
+            throw(ArgumentError("$(bname(j)) is $(b[j]) on a column with nonzero entries"))
     end
     if check
         rworst = jacobian_ratio(Utilde, a, b)
-        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) ||
-            error("balanced pair does not cover the matrix: worst ratio $rworst")
+        rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
+            variance ?
+                "the variance pair's squared factors do not bound the matrix: worst ratio $rworst" :
+                "balanced pair does not cover the matrix: worst ratio $rworst"
+        )
     end
+    variance && (a = sqrt.(a); b = sqrt.(b))
     # The tape-potential start is the only one with a root, so the other paths report none.
     return (; a, b, iters, delta, roots = nothing, nties = nothing)
 end
 
 # `b_j = ∑_k Ũ_kj/a_k` from one reverse sweep seeded `1/a_k` at the output nodes, never forming
 # the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
-# rather than a silently dropped row.
-function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo) where {T}
+# rather than a silently dropped row. `slot = _sqslot` gives `∑_k Ũ⁽²⁾_kj/a_k` instead.
+function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, slot::F = _absslot) where {T, F}
     for k in eachindex(a)
         a[k] > 0 || !li.liverow[k] || throw(
             ArgumentError(
-                "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
+                slot === _sqslot ?
+                    "squared output weight a[$k]^2 is $(a[k]) on an output that inputs reach; no " *
+                    "squared input factor can bound Ũ⁽²⁾ on its row" :
+                    "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
                     "cover can cover its row"
             )
         )
     end
-    return _output_sweep(t, outidxs, (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a)))
+    seeds = (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a))
+    return _output_sweep(t, outidxs, seeds, slot)
 end
 
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
 # output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
 # and the seeds of a repeated output node add, as its repeated rows of `Ũ` do.
-function _output_sweep(t::Tape{T}, outidxs, seeds) where {T}
+_output_sweep(t::Tape, outidxs, seeds, slot::F = _absslot) where {F} =
+    _reverse_sweep(slot, t, _output_seeds(t, outidxs, seeds))[1:t.ninputs]
+
+# Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; repeated nodes add.
+function _output_seeds(t::Tape{T}, outidxs, seeds) where {T}
     theta = zeros(magtype(T), nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
         theta[o] += sk
     end
-    return abs_reverse(t, theta)[1:t.ninputs]
+    return theta
 end
 
 # Merge-specific accumulation methods keep branches out of the inner loop.
@@ -813,8 +937,8 @@ function _check_start(start, a0, root, cgiters::Integer, potentialstart::Bool)
             throw(
             ArgumentError(
                 "root and cgiters belong to the tape-potential start, which this call does not " *
-                    "reach: it needs the tape form with merge=SumMerge(), arule=:marginal, " *
-                    "start=:covariant and no a0"
+                    "reach: it needs the tape form with merge=SumMerge() or VarianceMerge(), " *
+                    "arule=:marginal, start=:covariant and no a0"
             )
         )
     end
@@ -1096,7 +1220,10 @@ end
 # the b-step sets `∑_k R_kj = c_j` exactly — and the row residual is read from `anum(b)`, the sweep
 # the next round's a-step needs, so testing it costs one extra `anum` over the whole run and
 # nothing per round.
-function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
+#
+# A fixed budget runs the plain alternation. A run to convergence is overrelaxed unless `relax`
+# is false (see `_balance_targets_relaxed`).
+function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds; relax::Bool = true)
     b = _divide_targets(bnum(a), c)
     _regauge!(a, b)
     an = anum(b)
@@ -1114,6 +1241,7 @@ function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
     end
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     delta <= rtol && return a, 0, delta
+    relax && return _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
     for iters in 1:maxiter
         a = _divide_targets(an, r)
         b = _divide_targets(bnum(a), c)
@@ -1122,10 +1250,145 @@ function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
         delta = _row_residual(an, a, r)
         delta <= rtol && return a, iters, delta
     end
-    return error(
-        "balance_cover did not converge in $maxiter rounds: the relative row-marginal residual " *
-            "is still delta = $delta > rtol = $rtol$_TARGET_HINT"
-    )
+    return _target_nonconvergence(maxiter, delta, rtol)
+end
+
+_target_nonconvergence(maxiter, delta, rtol) = error(
+    "balance_cover did not converge in $maxiter rounds: the relative row-marginal residual " *
+        "is still delta = $delta > rtol = $rtol$_TARGET_HINT"
+)
+
+# Overrelaxation of the targeted alternation. In the log-scales `x = log a`, `y = log b`, the
+# alternation is block coordinate descent on the convex function
+# `∑_kj Ũ_kj exp(-x_k - y_j) + ∑_k r_k x_k + ∑_j c_j y_j`, and its restriction to one `x_k` is
+# `r_k ψ(x_k - F_k)` plus a constant, with `F_k` the plain step and `ψ(z) = exp(-z) - 1 + z`
+# (likewise for `y_j`). The relaxed step moves to `F_k + (1 - w)(x_k - F_k)`, and is taken only if
+# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `ψ`; otherwise `w - 1` is halved a few
+# times before falling back to the plain step. Every half-step thus removes a fixed fraction of
+# what the plain one would, which keeps the iteration convergent for any `ω < 2`.
+#
+# `ω` is estimated as in MatrixCovers' power-mean solver: a few plain rounds measure the
+# contraction `μ` of the imbalance (the worst relative marginal residual before each half-step),
+# which sets `ω = 2/(1 + √(1 - μ))`, the optimum for a 2-cyclic iteration with plain rate `μ`.
+# Relaxed rounds are then judged over windows by their smallest imbalance, since a relaxed
+# iteration's imbalance is not monotone: a window's observed rate can raise `ω` toward the
+# optimum it implies, and several windows without progress halve `ω - 1`, eventually back to plain
+# rounds and a fresh estimate. The imbalance, its contraction and the steps are all ratios of
+# marginals, so `ω` is invariant under rescaling and the iterates are as covariant as the plain
+# alternation's, up to roundoff.
+#
+# Relaxation amplifies roundoff in the marginals by about `1/(2 - ω)`, so `ω` is capped where
+# that amplification would reach `rtol`. Convergence is declared on the plain criterion, the row
+# residual after an exact b-step, so the fixed point and `delta` mean what they mean without
+# relaxation.
+function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
+    T = float(real(eltype(a)))
+    ωmax = _relax_omega_max(T, rtol)
+    ω = one(T)
+    nplain, r1, r2 = 0, T(Inf), T(Inf)          # plain rounds and the imbalance 1 and 2 back
+    rbest, rwin, nwin, nstall = T(Inf), T(Inf), 0, 0
+    delta = T(Inf)
+    for iters in 1:maxiter
+        ra = _relaxed_step!(a, _divide_targets(an, r), r, ω)
+        rb = _relaxed_step!(b, _divide_targets(bnum(a), c), c, ω)
+        _regauge!(a, b)
+        imb = max(ra, rb)
+        # Near convergence a relaxed round finishes with the plain b-step, so that the row
+        # residual after it is the plain convergence test. A plain round took that step already.
+        exact = ω == 1 || imb <= rtol
+        if ω != 1 && exact
+            b = _divide_targets(bnum(a), c)
+            _regauge!(a, b)
+        end
+        an = anum(b)
+        if exact
+            delta = _row_residual(an, a, r)
+            delta <= rtol && return a, iters, delta
+        end
+        if ω == 1
+            nplain += 1
+            if nplain >= _RELAX_NESTIMATE
+                μ = sqrt(imb / r2)
+                if zero(T) < μ < one(T)
+                    ω = min(ωmax, 2 / (1 + sqrt(1 - μ)))
+                    rbest, rwin, nwin, nstall = imb, T(Inf), 0, 0
+                end
+            end
+            r2, r1 = r1, imb
+        else
+            nwin += 1
+            rwin = min(rwin, imb)
+            wlen = _relax_window(ω)
+            nwin < wlen && continue
+            λ = (rwin / rbest)^(one(T) / wlen)
+            if !(λ < 1)
+                nstall += 1
+                if nstall >= _RELAX_NSTALL
+                    nstall = 0
+                    ω = 1 + (ω - 1) / 2
+                    if ω - 1 < (ωmax - 1) / 16
+                        ω, nplain, r1, r2 = one(T), 0, T(Inf), T(Inf)
+                    end
+                end
+            else
+                nstall = 0
+                if λ > ω - 1
+                    μ2 = (λ + ω - 1)^2 / (ω^2 * λ)
+                    μ2 < 1 && (ω = max(ω, min(ωmax, 2 / (1 + sqrt(1 - μ2)))))
+                end
+            end
+            rbest = min(rbest, rwin)
+            rwin, nwin = T(Inf), 0
+        end
+    end
+    return _target_nonconvergence(maxiter, delta, rtol)
+end
+
+# Plain rounds behind the first estimate of the contraction; the window, in rounds, over which a
+# relaxed rate is measured, which lengthens as `ω → 2` because the rate per round is at best
+# `ω - 1`; the windows without progress that halve `ω - 1`; the halvings a single relaxed step may
+# try; and the largest relaxation factor.
+const _RELAX_NESTIMATE = 4
+const _RELAX_WINDOW = 16
+const _RELAX_WINDOW_SCALE = 4.0
+const _RELAX_NSTALL = 4
+const _RELAX_NBACKTRACK = 4
+const _RELAX_OMEGA_MAX = 1.995
+
+_relax_window(ω) = _RELAX_WINDOW + round(Int, _RELAX_WINDOW_SCALE / (2 - ω))
+
+# Largest `ω` whose roundoff amplification `1/(2 - ω)` keeps `64 eps` below `rtol`; `1`, no
+# relaxation, when even that is too much.
+_relax_omega_max(::Type{T}, rtol) where {T} =
+    clamp(2 - 64 * eps(T) / T(rtol), one(T), T(_RELAX_OMEGA_MAX))
+
+# `ψ(z) = exp(-z) - 1 + z`, the excess of one block's objective over its minimum, per unit target.
+_relax_ψ(z) = expm1(-z) + z
+
+# Move each live `x[i]` from its current value toward the plain step `F[i]`, overrelaxed by `ω` in
+# log space and safeguarded as described at `_balance_targets_relaxed`. Entries with a zero target
+# are dead and stay zero. Returns the imbalance `max |F[i]/x[i] - 1|` before the step.
+function _relaxed_step!(x, F, tgt, ω)
+    imb = zero(float(real(eltype(x))))
+    for i in eachindex(x, F, tgt)
+        tgt[i] > 0 || continue
+        δ = log(x[i] / F[i])
+        imb = max(imb, abs(expm1(-δ)))
+        xi = F[i]
+        if ω != 1
+            ψδ = _relax_ψ(δ)
+            w = ω
+            for _ in 0:_RELAX_NBACKTRACK
+                if _relax_ψ((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * ψδ
+                    xi = F[i] * exp((1 - w) * δ)
+                    break
+                end
+                w = 1 + (w - 1) / 2
+            end
+        end
+        x[i] = xi
+    end
+    return imb
 end
 
 # `∑_j R_kj / r_k - 1` in absolute value, worst over the live rows. `anum[k] = ∑_j Ũ_kj/b_j`, so
