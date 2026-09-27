@@ -39,7 +39,7 @@ Base.show(io::IO, ::MIME"text/plain", c::ForwardCover) =
 Base.show(io::IO, c::HessianCover) = print(io, "HessianCover(", length(c.grad), " inputs)")
 
 Base.show(io::IO, ::MIME"text/plain", c::HessianCover) =
-    print(io, "HessianCover: ", length(c.grad), " inputs; grad, h_sum")
+    print(io, "HessianCover: ", length(c.grad), " inputs; grad, h_sum, h_var")
 
 Base.show(io::IO, c::HessianDiagnostics) =
     print(io, "HessianDiagnostics(", length(c.grad), " inputs)")

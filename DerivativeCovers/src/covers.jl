@@ -21,12 +21,15 @@ The standard result returned by [`cover_hessian`](@ref). `T` is the element type
 
 - `grad::Vector{T}`: gradient of the scalar function at the evaluation point.
 - `h_sum::Vector{M}`: certified Hessian cover computed with the sum merge.
+- `h_var::Vector{M}`: the variance channel, the root-sum-square of the path contributions that
+  `h_sum` adds. This is a scale, **not a certified cover**; see [`cover_variance`](@ref).
 """
 struct HessianCover{T, M}
     grad::Vector{T}
     h_sum::Vector{M}
+    h_var::Vector{M}
 end
-HessianCover{T}(grad, h_sum) where {T} = HessianCover{T, magtype(T)}(grad, h_sum)
+HessianCover{T}(grad, h_sum, h_var) where {T} = HessianCover{T, magtype(T)}(grad, h_sum, h_var)
 
 """
     HessianDiagnostics{T, M}
@@ -996,8 +999,8 @@ _absslot(d, k, i, p) = magnitude(d)
 """
     CoverOnly()
 
-Return only the covers a sweep-tier computation yields: the gradient and sum-merge cover from
-[`cover_hessian`](@ref) at `O(L)`, or the gradient and the two merges from [`cover_nls`](@ref) at
+Return only the covers a sweep-tier computation yields: the gradient, sum-merge cover, and
+variance channel from [`cover_hessian`](@ref) at `O(L)`, or the gradient and the two merges from [`cover_nls`](@ref) at
 `O(G * L)`. This is the default mode of both.
 """
 struct CoverOnly end
@@ -1022,8 +1025,8 @@ const CoverMode = Union{CoverOnly, WithDiagnostics}
 Compute a certified rank-1 cover of a scalar function's Hessian.
 
 Pass either a tape and scalar output node, or a function and evaluation point. The default
-[`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient and the
-sum-merge cover. [`WithDiagnostics`](@ref) additionally computes an explicit elementwise bound
+[`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient, the
+sum-merge cover, and the uncertified variance channel. [`WithDiagnostics`](@ref) additionally computes an explicit elementwise bound
 and a tighter quadrature cover.
 
 The `scales` keyword declares the input scales the split falls back on where a block's parent
@@ -1061,16 +1064,23 @@ intervals, raises an error, as does an elemental evaluated outside its domain so
 # `CoverOnly()`
 
 This mode takes one forward pass and one reverse sweep, or `O(L)` time and memory. The reverse
-sweep carries the ordinary adjoint and the absolute cover channel together:
+sweep carries the ordinary adjoint, the absolute cover channel, and the variance channel
+together:
 
-    vbar[p_i] += d_i * vbar[k]                          # signed channel: reverse-mode AD
-    abar[p_i] += magnitude(d_i) * abar[k] + rho_k[i]    # absolute channel: the cover
+    vbar[p_i] += d_i * vbar[k]                              # signed channel: reverse-mode AD
+    abar[p_i] += magnitude(d_i) * abar[k] + rho_k[i]        # absolute channel: the cover
+    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + rho_k[i]^2    # variance channel
 
-with `rho_k` from [`local_cover_slots`](@ref). Both channels of node `k` are final when the
+with `rho_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
 on the tape and are processed first. That makes `rho_k` — which needs the finished `vbar[k]` —
 computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:ninputs]` up to
 roundoff.
+
+`abar` sums, over every path from a parent slot of a node to an input, the slot's seed times the
+product of the absolute first partials along the path. `qbar` sums the squares of the same path
+contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the variance channel of
+[`cover_variance`](@ref): a scale, not a cover.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
 
@@ -1165,25 +1175,29 @@ function cover_hessian(
     sc = split_scales(scales, t)
     vbar = zeros(T, N)
     abar = zeros(magtype(T), N)
+    qbar = zeros(magtype(T), N)
     vbar[outidx] = 1
     for k in N:-1:1
-        vk, ak = vbar[k], abar[k]
+        vk, ak, qk = vbar[k], abar[k], qbar[k]
         ps = t.parents[k]
         avk = magnitude(vk)
         rho = local_cover_slots(r, t, k, avk, sc; check)
         if rho !== nothing
             for (i, p) in enumerate(ps)
                 abar[p] += rho[i]
+                qbar[p] += rho[i]^2
             end
         end
-        (iszero(avk) && ak == 0) && continue
+        (iszero(avk) && ak == 0 && qk == 0) && continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
             vbar[p] += ds[i] * vk
-            abar[p] += magnitude(ds[i]) * ak
+            d = magnitude(ds[i])
+            abar[p] += d * ak
+            qbar[p] += d^2 * qk
         end
     end
-    return HessianCover(vbar[1:n], abar[1:n])
+    return HessianCover(vbar[1:n], abar[1:n], sqrt.(qbar[1:n]))
 end
 
 function cover_hessian(

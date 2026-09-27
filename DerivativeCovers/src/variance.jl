@@ -120,9 +120,15 @@ Compute a certified sum-merge cover and an inexpensive estimate of the quadratur
 Pass either a tape and scalar output node, or a function and evaluation point. The returned
 [`VarianceCover`](@ref) contains the gradient, both channels, and their coordinatewise ratio.
 
-Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Computing both costs
-`O(L)` time and memory, independent of the number of inputs. `scales` and `ratio` govern the
-split, as in [`cover_hessian`](@ref), and `check=true` verifies the local covering conditions.
+Only `h_sum` is a certified cover; `h_var` may underestimate the Hessian. Both come from the
+single reverse sweep of [`cover_hessian`](@ref), which returns them as well, so this costs `O(L)`
+time and memory, independent of the number of inputs; `cover_variance` adds the severity.
+`scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and `check=true` verifies
+the local covering conditions.
+
+The same channels follow from the staged form: [`local_covers`](@ref) and
+[`variance_seeds`](@ref) supply the seeds of both channels, and [`dependency_sweep`](@ref)
+propagates them.
 
 # Examples
 
@@ -148,13 +154,8 @@ julia> round.(vc.severity; digits=4)
 ```
 """
 function cover_variance(t::Tape, outidx::Integer; check::Bool = true, scales = nothing, ratio = nothing)
-    n = t.ninputs
-    vbar = adjoints(t, outidx)
-    rhos, theta = local_covers(t, vbar; check, scales, ratio)
-    abar, w = dependency_sweep(t, theta, variance_seeds(t, rhos))
-    h_sum = abar[1:n]
-    h_var = sqrt.(w[1:n])
-    return VarianceCover(vbar[1:n], h_sum, h_var, dependency_severity(h_sum, h_var))
+    c = cover_hessian(CoverOnly(), t, outidx; check, scales, ratio)
+    return VarianceCover(c.grad, c.h_sum, c.h_var, dependency_severity(c.h_sum, c.h_var))
 end
 
 function cover_variance(f, x0::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing)

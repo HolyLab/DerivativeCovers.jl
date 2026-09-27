@@ -87,6 +87,10 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         X = interval.(lo, hi)
         vc = cover_variance(f, X)
         @test vc isa VarianceCover{Interval{Float64}, Float64}
+        t, outidx = tape_function(f, X)
+        h_sum, h_var = staged_channels(t, outidx)
+        @test vc.h_sum ≈ h_sum rtol = 1.0e-12
+        @test vc.h_var ≈ h_var rtol = 1.0e-12
         hy = cover_hybrid(f, X, 2)
         hn = cover_hybrid(f, X, cyclic_partition(tape_function(f, X)[1], 3))
         @test hy isa Vector{Float64}

@@ -40,6 +40,15 @@ include("programs.jl")
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1.0e-10
 
+# The staged route to the channels `cover_hessian` fuses into one sweep: finish the adjoints, form
+# every local cover, then propagate the linear and squared seeds. Returns `(h_sum, h_var)`.
+function staged_channels(t, outidx)
+    n = t.ninputs
+    rhos, theta = local_covers(t, adjoints(t, outidx))
+    abar, qbar = dependency_sweep(t, theta, variance_seeds(t, rhos))
+    return abar[1:n], sqrt.(qbar[1:n])
+end
+
 include("constants.jl")
 include("elementtype.jl")
 include("primitives.jl")
@@ -1278,6 +1287,26 @@ include("intervals.jl")
             @test all(>=(0), h)
             @test cover_ratio(H, h) <= GATE
         end
+    end
+
+    # The fused sweep injects each slot's squared seed where the sum channel injects the seed, so
+    # it squares every path contribution before any summation, exactly as the staged form does;
+    # only the order of the additions differs.
+    FUSED_CORPUS = vcat(
+        [(name, f, x0) for (name, f, x0) in PROBLEMS],
+        [("$(p.name) sigma=$sigma", p.f, p.x0) for (sigma, p) in GENERATED],
+        [(p.name, p.f, p.x0) for p in (mlp((4, 6, 5, 2); batch = 3),)],
+        [("tree", tree_program, TREE_X), ("diamond", reconvergent_diamond, [0.4, -0.9])],
+    )
+    @testset "fused variance channel matches the staged form — $name" for (name, f, x0) in FUSED_CORPUS
+        t, outidx = tape_function(f, x0)
+        c = cover_hessian(t, outidx)
+        h_sum, h_var = staged_channels(t, outidx)
+        @test c.h_sum ≈ h_sum rtol = 1.0e-12
+        @test c.h_var ≈ h_var rtol = 1.0e-12
+        @test all(c.h_var .<= c.h_sum .* GATE)
+        vc = cover_variance(t, outidx)
+        @test vc.grad == c.grad && vc.h_sum == c.h_sum && vc.h_var == c.h_var
     end
 
     @testset "quadratic forms share a Hessian and differ as programs" begin
