@@ -739,12 +739,16 @@ end
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
 # output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
 # and the seeds of a repeated output node add, as its repeated rows of `Ũ` do.
-function _output_sweep(t::Tape{T}, outidxs, seeds) where {T}
+_output_sweep(t::Tape, outidxs, seeds) =
+    abs_reverse(t, _output_seeds(t, outidxs, seeds))[1:t.ninputs]
+
+# Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; repeated nodes add.
+function _output_seeds(t::Tape{T}, outidxs, seeds) where {T}
     theta = zeros(magtype(T), nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
         theta[o] += sk
     end
-    return abs_reverse(t, theta)[1:t.ninputs]
+    return theta
 end
 
 # Merge-specific accumulation methods keep branches out of the inner loop.

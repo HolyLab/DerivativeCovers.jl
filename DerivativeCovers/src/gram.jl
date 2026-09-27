@@ -104,6 +104,11 @@ end
 
 # `v[k] = sqrt(abs(w[k]))`, so `v[k]^2` covers the diagonal weight `w[k]`.
 function _diagonal_gram_seeds(outidxs, w::AbstractVector)
+    _check_diagonal_weight(outidxs, w)
+    return (sqrt(abs(w[k])) for k in eachindex(w))
+end
+
+function _check_diagonal_weight(outidxs, w::AbstractVector)
     eachindex(w) == eachindex(outidxs) || throw(
         DimensionMismatch(
             "w has indices $(eachindex(w)), expected $(eachindex(outidxs)) " *
@@ -113,7 +118,7 @@ function _diagonal_gram_seeds(outidxs, w::AbstractVector)
     for k in eachindex(w)
         isfinite(w[k]) || throw(ArgumentError("weights must be finite; w[$k] = $(w[k])"))
     end
-    return (sqrt(abs(w[k])) for k in eachindex(w))
+    return nothing
 end
 
 # A symmetric cover of `abs.(W)` that also covers `abs.(transpose(W))`, so it bounds every entry
@@ -149,4 +154,95 @@ function _check_gram_seeds(outidxs, W::AbstractMatrix, v::AbstractVector)
     iscover(v, v, W) ||
         throw(ArgumentError("v must satisfy abs(W[k,l]) <= v[k]*v[l] for all k, l"))
     return v
+end
+
+"""
+    gramvariance(t::Tape, outidxs) -> h
+    gramvariance(t::Tape, outidxs, w::AbstractVector) -> h
+    gramvariance(t::Tape, outidxs, W::Diagonal) -> h
+
+Root-mean-square column scale of the Gram matrix `G = J'*W*J` of the Jacobian `J` of the tape
+outputs `outidxs`: a nonnegative vector `h`, one entry per input (`1:t.ninputs`), with
+
+    h[j] = sqrt(∑_k abs(w[k]) * Ũ⁽²⁾[k,j]),
+
+where `Ũ⁽²⁾[k,j]` sums, over the paths from input `j` to output `k`, the squared product of the
+local partial magnitudes along the path. `W` defaults to the identity, and a vector `w` means
+`W = Diagonal(w)`, indexed like `outidxs`; only `abs.(w)` enters, so an output with zero weight
+contributes nothing, and a repeated entry of `outidxs` adds its weights.
+
+Model each parent slot's local partial as carrying an independent, equiprobable sign. Distinct
+paths then contribute uncorrelated terms, so `E[J[k,j]^2] = Ũ⁽²⁾[k,j]` and
+`h[j]^2 = E[(J'*abs.(W)*J)[j,j]]`: `h` is the root-mean-square column norm of `sqrt.(abs.(W))*J`,
+the column (MINPACK) scaling of the Gram matrix in expectation. The entries of `J` for distinct
+outputs are uncorrelated too, so off-diagonal weights contribute nothing to this expectation; a
+general `W::AbstractMatrix` is an error. On an interval tape the magnitudes are the largest over
+the box, so `h` bounds the pointwise `h` at every point of the box.
+
+`h` is a scale, **not a cover**: where several paths reach one entry of `J` with the same sign it
+can fall below that column's norm. Per entry `Ũ⁽²⁾ <= Ũ.^2` (a sum of squares is at most the square of
+the sum), where `Ũ` is the absolute-sensitivity surrogate ([`jacobian_surrogate`](@ref)), so
+
+    h[j] <= h_gn[j] = sqrt(∑_k abs(w[k]) * Ũ[k,j]^2) <= gramcover(t, outidxs, w)[j].
+
+Unweighted, `h_gn` is the Gauss–Newton cover of [`cover_nls`](@ref). Where each entry of `J` has a
+single path, `Ũ⁽²⁾ = Ũ.^2 = abs2.(J)` on a point tape, and `h` equals `h_gn` and the column norms
+of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`; rescaling the
+outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
+
+`h` comes from one reverse sweep with squared local partials (the variance channel of
+[`dependency_sweep`](@ref)) seeded `abs(w[k])` at output node `outidxs[k]`, so it costs `O(L)` for
+a tape of length `L`, where `h_gn` needs one channel per output.
+
+# Examples
+
+```jldoctest
+julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
+
+julia> t, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
+
+julia> round.(DerivativeCovers.gramvariance(t, outidxs); digits=4)   # column norms of J
+3-element Vector{Float64}:
+ 2.592
+ 1.118
+ 2.2361
+
+julia> round.(DerivativeCovers.gramvariance(t, outidxs, [1.0, 0.0, 4.0]); digits=4)
+3-element Vector{Float64}:
+ 2.0
+ 2.0616
+ 4.0
+
+julia> t2, o2 = tape_function(x -> [x[1] * x[1]], [3.0]);   # two paths, J = [6.0;;]
+
+julia> round.(DerivativeCovers.gramvariance(t2, o2); digits=4)   # sqrt(3^2 + 3^2)
+1-element Vector{Float64}:
+ 4.2426
+```
+"""
+gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}) =
+    _output_variance_sweep(t, outidxs, Iterators.repeated(1, length(outidxs)))
+
+function gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector)
+    _check_diagonal_weight(outidxs, w)
+    return _output_variance_sweep(t, outidxs, (abs(w[k]) for k in eachindex(w)))
+end
+
+gramvariance(t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
+    gramvariance(t, outidxs, W.diag)
+
+gramvariance(::Tape, ::AbstractVector{<:Integer}, W::AbstractMatrix) = throw(
+    ArgumentError(
+        "gramvariance takes diagonal weights only (a vector or a Diagonal), got a " *
+            "$(typeof(W)); off-diagonal weights have zero expected contribution, so pass " *
+            "diag(W) if its diagonal is what you mean"
+    )
+)
+
+# `sqrt.(∑_k seeds[k] * Ũ⁽²⁾[k, :])` from the squared channel of `dependency_sweep`, with the
+# linear channel left unseeded.
+function _output_variance_sweep(t::Tape{T}, outidxs, seeds) where {T}
+    theta2 = _output_seeds(t, outidxs, seeds)
+    _, vbar = dependency_sweep(t, zeros(magtype(T), nnodes(t)), theta2)
+    return sqrt.(vbar[1:t.ninputs])
 end

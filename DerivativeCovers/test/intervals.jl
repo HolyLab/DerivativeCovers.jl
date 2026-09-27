@@ -170,6 +170,27 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test ok_cover
     end
 
+    # The partial magnitudes over the box bound those at each point, so the box's scale bounds
+    # every pointwise scale.
+    @testset "the Gram variance scale over the box bounds the pointwise scale — $name" for
+        (name, r, lo, hi) in vector_programs
+        X = interval.(lo, hi)
+        t, outidxs = tape_function(r, X)
+        w = [1.0, -2.0, 0.5]
+        hv = DerivativeCovers.gramvariance(t, outidxs, w)
+        @test hv isa Vector{Float64}
+        @test all(hv .<= gramcover(t, outidxs, w) .* slack)
+        nc = cover_nls(r, X)
+        @test nc.h_var_gn isa Vector{Float64}
+        @test all(nc.h_var_gn .<= nc.h_gn .* slack)
+        ok = true
+        for x in samples(Xoshiro(43), lo, hi)
+            tx, ox = tape_function(r, x)
+            ok &= all(DerivativeCovers.gramvariance(tx, ox, w) .<= hv .* slack)
+        end
+        @test ok
+    end
+
     @testset "products on an interval tape enclose the pointwise products" begin
         _, r, lo, hi = vector_programs[2]
         t, outidxs = tape_function(r, interval.(lo, hi))
