@@ -836,6 +836,100 @@
         @test_throws "squared start is not representable" balance_cover(tw, ow; merge = VarianceMerge())
     end
 
+    # The targeted alternation run to convergence on a tape, relaxed or plain.
+    function converge_targets(t, outidxs; relax, variance = false, maxiter = 100_000)
+        DC = DerivativeCovers
+        li = liveinfo(t, outidxs)
+        rt, ct = flowtargets(t, outidxs)
+        a = DC._balance_start(potential_start(t, outidxs), length(outidxs), Float64, li.liverow)
+        variance && (a = DC._squared_start(a))
+        slot = variance ? DC._sqslot : DC._absslot
+        bnum = a -> DC._sum_merge_b(t, outidxs, a, li, slot)
+        anum = b -> DC._marginal_weights(t, outidxs, b, li, slot)
+        rtol = eps()^(2 // 3)
+        a, iters, delta = DC._balance_targets(anum, bnum, a, rt, ct, maxiter, rtol, nothing; relax)
+        b = bnum(a)
+        variance && (a = sqrt.(a); b = sqrt.(b))
+        return (; a, b, iters, delta)
+    end
+    # Rows `w1[i] x[i] + w2[i] x[i+1]`, cyclically: one long cycle through the support, on which
+    # the plain alternation converges slowly.
+    function cyclic_bidiagonal(n, sigma, seed)
+        rng = MersenneTwister(seed)
+        w1, w2 = exp.(sigma .* randn(rng, n)), exp.(sigma .* randn(rng, n))
+        return xs -> [w1[i] * xs[i] + w2[i] * xs[mod1(i + 1, n)] for i in 1:n], randn(rng, n)
+    end
+
+    @testset "a fixed budget runs the plain alternation, bit for bit" begin
+        # Pinned from the plain iteration; a run to convergence is the only one relaxed.
+        r = xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2], exp(xs[1]) + xs[2] * xs[3]]
+        t, outidxs = tape_function(r, [0.6, -0.4, 0.9])
+        bits(v) = reinterpret.(UInt64, v)
+        bal = balance_cover(t, outidxs)
+        @test bits(bal.a) == [0x3ff5c5ca9ce627c4, 0x3ff144945e0db3d3, 0x3ffffa796368de49]
+        @test bits(bal.b) == [0x3ff938539fd17928, 0x3ff7279b5b8a300f, 0x3ff82cf03b1c691e]
+        bal = balance_cover(t, outidxs; merge = VarianceMerge())
+        @test bits(bal.a) == [0x3fedb3afda9817ac, 0x3fe709649b7d5f97, 0x3ff8a09c9c2afcce]
+        @test bits(bal.b) == [0x3ff607bf2e50884b, 0x3ff34bb64da045d9, 0x3ff67a9eec38e833]
+        bal = balance_cover(t, outidxs; rounds = 7, targets = :support)
+        @test bits(bal.a) == [0x3fe555a348fae680, 0x3fe1583015fb5304, 0x3ff07fb66d5d58b7]
+        @test bits(bal.b) == [0x4008d6fdff7ef330, 0x400709a8e554d395, 0x40084701d0030474]
+        bal = balance_cover(jacobian_surrogate(t, outidxs); rounds = 5)
+        @test bits(bal.a) == [0x3fe8087d82ac9a58, 0x3fe389d2861f4957, 0x3ff295eaca0f2aee]
+        @test bits(bal.b) == [0x40060cff0d6f5edc, 0x40047372778c69dd, 0x40058d262909c733]
+    end
+
+    @testset "overrelaxation: the plain fixed point, in fewer rounds" begin
+        r, x0 = cyclic_bidiagonal(50, 2.0, 5)
+        t, outidxs = tape_function(r, x0)
+        U, U2 = jacobian_surrogate(t, outidxs), variance_surrogate(t, outidxs)
+        for variance in (false, true)
+            plain = converge_targets(t, outidxs; relax = false, variance)
+            relaxed = converge_targets(t, outidxs; relax = true, variance)
+            @test plain.delta <= eps()^(2 // 3) && relaxed.delta <= eps()^(2 // 3)
+            @test product_gap(variance ? U2 : U, plain.a, plain.b, relaxed.a, relaxed.b) < 1.0e-8
+            @test relaxed.iters < plain.iters / 5
+            # The public entry point takes the relaxed run.
+            bal = balance_cover(t, outidxs; rounds = nothing, merge = variance ? VarianceMerge() : SumMerge())
+            @test bal.iters == relaxed.iters
+            @test bal.a == relaxed.a
+        end
+
+        # Rescaling the tape leaves the relaxed run's products covariant.
+        s = 2.0 .^ rand(MersenneTwister(29), -10:10, nnodes(t))
+        t2 = rescale_tape(t, s)
+        for merge in (SumMerge(), VarianceMerge())
+            bal = balance_cover(t, outidxs; rounds = nothing, merge)
+            bal2 = balance_cover(t2, outidxs; rounds = nothing, merge)
+            @test product_drift(t, outidxs, s, bal.a, bal.b, bal2.a, bal2.b) < 1.0e-8
+        end
+
+        # Relaxation amplifies roundoff by about `1/(2 - ω)`, so `ω` stays where that is below
+        # `rtol`, and a tolerance near roundoff turns it off.
+        ωmax = DerivativeCovers._relax_omega_max
+        @test ωmax(Float64, eps()^(2 // 3)) == 1.995
+        @test 1 < ωmax(Float32, eps(Float32)^(2 // 3)) < 1.995
+        @test ωmax(Float64, 1.0e-15) == 1
+
+        # A run to convergence that exhausts its budget says so, relaxed or plain.
+        @test_throws "did not converge in 3 rounds" balance_cover(t, outidxs; rounds = nothing, maxiter = 3)
+        @test_throws "did not converge in 3 rounds" converge_targets(t, outidxs; relax = false, maxiter = 3)
+    end
+
+    @testset "overrelaxation: a step that would overshoot is shortened" begin
+        step! = DerivativeCovers._relaxed_step!
+        # From `x = 1000` toward `F = 1`, `ω = 1.99` in log space would land near 1e-3; the
+        # safeguard halves `ω - 1` until the step's excess is no larger than the plain one allows.
+        x = [1.0e3]
+        @test step!(x, [1.0], [1.0], 1.99) ≈ 0.999
+        @test 1.0e3^(1 - 1.99) < x[1] < 1
+        @test x[1] ≈ 1.0e3^(-0.2475)
+        # A small step is taken in full, and a dead entry is left alone.
+        x = [1.01, 5.0]
+        step!(x, [1.0, 2.0], [1.0, 0.0], 1.5)
+        @test x ≈ [1.01^(-0.5), 5.0]
+    end
+
     # `outidxs` names node numbers, so its axes are the caller's; the results are indexed by
     # output position. `x0` lays out the tape's inputs, which are one-based.
     @testset "generic axes" begin

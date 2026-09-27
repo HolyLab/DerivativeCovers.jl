@@ -588,7 +588,10 @@ without it.
   - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `0` merges
     the start as it is, without computing `targets`, and reports `delta = Inf`. `nothing` runs to
     `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming `maxiter` or
-    `rtol` and no `rounds` asks for that too.
+    `rtol` and no `rounds` asks for that too. Such a run overrelaxes the alternation toward
+    `targets`, in log space with a factor adapted to the observed contraction, which reaches the
+    same fixed point in far fewer rounds on slowly converging patterns; a fixed budget always runs
+    the plain rounds.
   - `maxiter`, `rtol`: bound and tolerance of a `rounds = nothing` run. `maxiter = nothing` picks
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
@@ -1190,7 +1193,10 @@ end
 # the b-step sets `∑_k R_kj = c_j` exactly — and the row residual is read from `anum(b)`, the sweep
 # the next round's a-step needs, so testing it costs one extra `anum` over the whole run and
 # nothing per round.
-function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
+#
+# A fixed budget runs the plain alternation. A run to convergence is overrelaxed unless `relax`
+# is false (see `_balance_targets_relaxed`).
+function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds; relax::Bool = true)
     b = _divide_targets(bnum(a), c)
     _regauge!(a, b)
     an = anum(b)
@@ -1208,6 +1214,7 @@ function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
     end
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
     delta <= rtol && return a, 0, delta
+    relax && return _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
     for iters in 1:maxiter
         a = _divide_targets(an, r)
         b = _divide_targets(bnum(a), c)
@@ -1216,10 +1223,145 @@ function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds)
         delta = _row_residual(an, a, r)
         delta <= rtol && return a, iters, delta
     end
-    return error(
-        "balance_cover did not converge in $maxiter rounds: the relative row-marginal residual " *
-            "is still delta = $delta > rtol = $rtol$_TARGET_HINT"
-    )
+    return _target_nonconvergence(maxiter, delta, rtol)
+end
+
+_target_nonconvergence(maxiter, delta, rtol) = error(
+    "balance_cover did not converge in $maxiter rounds: the relative row-marginal residual " *
+        "is still delta = $delta > rtol = $rtol$_TARGET_HINT"
+)
+
+# Overrelaxation of the targeted alternation. In the log-scales `x = log a`, `y = log b`, the
+# alternation is block coordinate descent on the convex function
+# `∑_kj Ũ_kj exp(-x_k - y_j) + ∑_k r_k x_k + ∑_j c_j y_j`, and its restriction to one `x_k` is
+# `r_k ψ(x_k - F_k)` plus a constant, with `F_k` the plain step and `ψ(z) = exp(-z) - 1 + z`
+# (likewise for `y_j`). The relaxed step moves to `F_k + (1 - w)(x_k - F_k)`, and is taken only if
+# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `ψ`; otherwise `w - 1` is halved a few
+# times before falling back to the plain step. Every half-step thus removes a fixed fraction of
+# what the plain one would, which keeps the iteration convergent for any `ω < 2`.
+#
+# `ω` is estimated as in MatrixCovers' power-mean solver: a few plain rounds measure the
+# contraction `μ` of the imbalance (the worst relative marginal residual before each half-step),
+# which sets `ω = 2/(1 + √(1 - μ))`, the optimum for a 2-cyclic iteration with plain rate `μ`.
+# Relaxed rounds are then judged over windows by their smallest imbalance, since a relaxed
+# iteration's imbalance is not monotone: a window's observed rate can raise `ω` toward the
+# optimum it implies, and several windows without progress halve `ω - 1`, eventually back to plain
+# rounds and a fresh estimate. The imbalance, its contraction and the steps are all ratios of
+# marginals, so `ω` is invariant under rescaling and the iterates are as covariant as the plain
+# alternation's, up to roundoff.
+#
+# Relaxation amplifies roundoff in the marginals by about `1/(2 - ω)`, so `ω` is capped where
+# that amplification would reach `rtol`. Convergence is declared on the plain criterion, the row
+# residual after an exact b-step, so the fixed point and `delta` mean what they mean without
+# relaxation.
+function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
+    T = float(real(eltype(a)))
+    ωmax = _relax_omega_max(T, rtol)
+    ω = one(T)
+    nplain, r1, r2 = 0, T(Inf), T(Inf)          # plain rounds and the imbalance 1 and 2 back
+    rbest, rwin, nwin, nstall = T(Inf), T(Inf), 0, 0
+    delta = T(Inf)
+    for iters in 1:maxiter
+        ra = _relaxed_step!(a, _divide_targets(an, r), r, ω)
+        rb = _relaxed_step!(b, _divide_targets(bnum(a), c), c, ω)
+        _regauge!(a, b)
+        imb = max(ra, rb)
+        # Near convergence a relaxed round finishes with the plain b-step, so that the row
+        # residual after it is the plain convergence test. A plain round took that step already.
+        exact = ω == 1 || imb <= rtol
+        if ω != 1 && exact
+            b = _divide_targets(bnum(a), c)
+            _regauge!(a, b)
+        end
+        an = anum(b)
+        if exact
+            delta = _row_residual(an, a, r)
+            delta <= rtol && return a, iters, delta
+        end
+        if ω == 1
+            nplain += 1
+            if nplain >= _RELAX_NESTIMATE
+                μ = sqrt(imb / r2)
+                if zero(T) < μ < one(T)
+                    ω = min(ωmax, 2 / (1 + sqrt(1 - μ)))
+                    rbest, rwin, nwin, nstall = imb, T(Inf), 0, 0
+                end
+            end
+            r2, r1 = r1, imb
+        else
+            nwin += 1
+            rwin = min(rwin, imb)
+            wlen = _relax_window(ω)
+            nwin < wlen && continue
+            λ = (rwin / rbest)^(one(T) / wlen)
+            if !(λ < 1)
+                nstall += 1
+                if nstall >= _RELAX_NSTALL
+                    nstall = 0
+                    ω = 1 + (ω - 1) / 2
+                    if ω - 1 < (ωmax - 1) / 16
+                        ω, nplain, r1, r2 = one(T), 0, T(Inf), T(Inf)
+                    end
+                end
+            else
+                nstall = 0
+                if λ > ω - 1
+                    μ2 = (λ + ω - 1)^2 / (ω^2 * λ)
+                    μ2 < 1 && (ω = max(ω, min(ωmax, 2 / (1 + sqrt(1 - μ2)))))
+                end
+            end
+            rbest = min(rbest, rwin)
+            rwin, nwin = T(Inf), 0
+        end
+    end
+    return _target_nonconvergence(maxiter, delta, rtol)
+end
+
+# Plain rounds behind the first estimate of the contraction; the window, in rounds, over which a
+# relaxed rate is measured, which lengthens as `ω → 2` because the rate per round is at best
+# `ω - 1`; the windows without progress that halve `ω - 1`; the halvings a single relaxed step may
+# try; and the largest relaxation factor.
+const _RELAX_NESTIMATE = 4
+const _RELAX_WINDOW = 16
+const _RELAX_WINDOW_SCALE = 4.0
+const _RELAX_NSTALL = 4
+const _RELAX_NBACKTRACK = 4
+const _RELAX_OMEGA_MAX = 1.995
+
+_relax_window(ω) = _RELAX_WINDOW + round(Int, _RELAX_WINDOW_SCALE / (2 - ω))
+
+# Largest `ω` whose roundoff amplification `1/(2 - ω)` keeps `64 eps` below `rtol`; `1`, no
+# relaxation, when even that is too much.
+_relax_omega_max(::Type{T}, rtol) where {T} =
+    clamp(2 - 64 * eps(T) / T(rtol), one(T), T(_RELAX_OMEGA_MAX))
+
+# `ψ(z) = exp(-z) - 1 + z`, the excess of one block's objective over its minimum, per unit target.
+_relax_ψ(z) = expm1(-z) + z
+
+# Move each live `x[i]` from its current value toward the plain step `F[i]`, overrelaxed by `ω` in
+# log space and safeguarded as described at `_balance_targets_relaxed`. Entries with a zero target
+# are dead and stay zero. Returns the imbalance `max |F[i]/x[i] - 1|` before the step.
+function _relaxed_step!(x, F, tgt, ω)
+    imb = zero(float(real(eltype(x))))
+    for i in eachindex(x, F, tgt)
+        tgt[i] > 0 || continue
+        δ = log(x[i] / F[i])
+        imb = max(imb, abs(expm1(-δ)))
+        xi = F[i]
+        if ω != 1
+            ψδ = _relax_ψ(δ)
+            w = ω
+            for _ in 0:_RELAX_NBACKTRACK
+                if _relax_ψ((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * ψδ
+                    xi = F[i] * exp((1 - w) * δ)
+                    break
+                end
+                w = 1 + (w - 1) / 2
+            end
+        end
+        x[i] = xi
+    end
+    return imb
 end
 
 # `∑_j R_kj / r_k - 1` in absolute value, worst over the live rows. `anum[k] = ∑_j Ũ_kj/b_j`, so
