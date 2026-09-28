@@ -858,11 +858,13 @@
     end
 
     # The targeted alternation run to convergence on a tape, relaxed or plain.
-    function converge_targets(t, outidxs; relax, variance = false, maxiter = 100_000)
+    function converge_targets(
+            t, outidxs; relax, variance = false, maxiter = 100_000, a0 = potential_start(t, outidxs)
+        )
         DC = DerivativeCovers
         li = liveinfo(t, outidxs)
         rt, ct = flowtargets(t, outidxs)
-        a = DC._balance_start(potential_start(t, outidxs), length(outidxs), Float64, li.liverow)
+        a = DC._balance_start(a0, length(outidxs), Float64, li.liverow)
         variance && (a = DC._squared_start(a))
         slot = variance ? DC._sqslot : DC._absslot
         bnum = a -> DC._sum_merge_b(t, outidxs, a, li, slot)
@@ -935,6 +937,41 @@
         # A run to convergence that exhausts its budget says so, relaxed or plain.
         @test_throws "did not converge in 3 rounds" balance_cover(t, outidxs; rounds = nothing, maxiter = 3)
         @test_throws "did not converge in 3 rounds" converge_targets(t, outidxs; relax = false, maxiter = 3)
+        # The residual it reports is that of the iterate reached, relaxed rounds included.
+        function reported_delta(maxiter, merge)
+            msg = try
+                balance_cover(t, outidxs; rounds = nothing, maxiter, merge)
+                ""
+            catch err
+                err isa ErrorException || rethrow()
+                err.msg
+            end
+            return parse(Float64, match(r"delta = (\S+) >", msg)[1])
+        end
+        for merge in (SumMerge(), VarianceMerge())
+            @test reported_delta(100, merge) < reported_delta(4, merge) / 10
+        end
+    end
+
+    @testset "overrelaxation: a plateau does not set the factor" begin
+        # From equal weights both maps hold the imbalance nearly constant for several rounds and
+        # then contract quickly. A factor estimated on the plateau would sit near its cap, where
+        # the relaxed rate `ω - 1` is far slower than the plain rounds. On the first map the
+        # contraction is still improving after `_RELAX_NESTIMATE` rounds; on the second it looks
+        # steady by then, and the bound on the first `ω` is what keeps the run short.
+        powell = xs -> [1.0e4 * xs[1] * xs[2] - 1, exp(-xs[1]) + exp(-xs[2]) - 1.0001]
+        W = [0.03 0.008 0.8; 4.0e5 400.0 0.006; 3.0 0.02 1.0]
+        for (r, x0) in ((powell, [0.0, 1.0]), (xs -> W * xs, ones(3))), variance in (false, true)
+            t, outidxs = tape_function(r, x0)
+            a0 = ones(length(outidxs))
+            plain = converge_targets(t, outidxs; relax = false, variance, a0)
+            relaxed = converge_targets(t, outidxs; relax = true, variance, a0)
+            @test plain.delta <= eps()^(2 // 3) && relaxed.delta <= eps()^(2 // 3)
+            @test relaxed.iters < plain.iters
+            merge = variance ? VarianceMerge() : SumMerge()
+            bal = balance_cover(t, outidxs; rounds = nothing, start = :equal, merge)
+            @test bal.iters == relaxed.iters
+        end
     end
 
     @testset "overrelaxation: a step that would overshoot is shortened" begin

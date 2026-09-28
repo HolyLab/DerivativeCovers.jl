@@ -1270,6 +1270,16 @@ _target_nonconvergence(maxiter, delta, rtol) = error(
 # `ω` is estimated as in MatrixCovers' power-mean solver: a few plain rounds measure the
 # contraction `μ` of the imbalance (the worst relative marginal residual before each half-step),
 # which sets `ω = 2/(1 + √(1 - μ))`, the optimum for a 2-cyclic iteration with plain rate `μ`.
+#
+# Beyond that optimum the relaxed rate is `ω - 1` whatever `μ` is, so the windows below read an
+# `ω` that is too large as steady progress and never lower it. The plain estimate is the one
+# that can be too large: far from the fixed point the imbalance can sit on a plateau, nearly
+# constant for many rounds, before it starts to contract at a much faster rate. Two conditions
+# on the estimate guard against that. It waits while the contraction is still improving from one
+# round to the next, which is how the end of a plateau looks, and it sets `ω` no higher than
+# `_RELAX_OMEGA_START`, where a relaxed round contracts by at least half even if `ω` is beyond
+# the optimum. Only a window's measured rate takes `ω` higher.
+#
 # Relaxed rounds are then judged over windows by their smallest imbalance, since a relaxed
 # iteration's imbalance is not monotone: a window's observed rate can raise `ω` toward the
 # optimum it implies, and several windows without progress halve `ω - 1`, eventually back to plain
@@ -1285,7 +1295,8 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
     T = float(real(eltype(a)))
     ωmax = _relax_omega_max(T, rtol)
     ω = one(T)
-    nplain, r1, r2 = 0, T(Inf), T(Inf)          # plain rounds and the imbalance 1 and 2 back
+    # Plain rounds and the imbalance 1, 2 and 3 back.
+    nplain, r1, r2, r3 = 0, T(Inf), T(Inf), T(Inf)
     rbest, rwin, nwin, nstall = T(Inf), T(Inf), 0, 0
     delta = T(Inf)
     for iters in 1:maxiter
@@ -1308,13 +1319,14 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
         if ω == 1
             nplain += 1
             if nplain >= _RELAX_NESTIMATE
-                μ = sqrt(imb / r2)
-                if zero(T) < μ < one(T)
-                    ω = min(ωmax, 2 / (1 + sqrt(1 - μ)))
+                μ, μprev = sqrt(imb / r2), sqrt(r1 / r3)
+                if zero(T) < μ < one(T) && zero(T) < μprev < one(T) &&
+                        log(μ) >= _RELAX_STEADY * log(μprev)
+                    ω = min(ωmax, T(_RELAX_OMEGA_START), 2 / (1 + sqrt(1 - μ)))
                     rbest, rwin, nwin, nstall = imb, T(Inf), 0, 0
                 end
             end
-            r2, r1 = r1, imb
+            r3, r2, r1 = r2, r1, imb
         else
             nwin += 1
             rwin = min(rwin, imb)
@@ -1327,7 +1339,7 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
                     nstall = 0
                     ω = 1 + (ω - 1) / 2
                     if ω - 1 < (ωmax - 1) / 16
-                        ω, nplain, r1, r2 = one(T), 0, T(Inf), T(Inf)
+                        ω, nplain, r1, r2, r3 = one(T), 0, T(Inf), T(Inf), T(Inf)
                     end
                 end
             else
@@ -1341,14 +1353,19 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
             rwin, nwin = T(Inf), 0
         end
     end
-    return _target_nonconvergence(maxiter, delta, rtol)
+    # `an` belongs to the last round's `b`, so this is the residual of the iterate reached.
+    return _target_nonconvergence(maxiter, _row_residual(an, a, r), rtol)
 end
 
-# Plain rounds behind the first estimate of the contraction; the window, in rounds, over which a
-# relaxed rate is measured, which lengthens as `ω → 2` because the rate per round is at best
-# `ω - 1`; the windows without progress that halve `ω - 1`; the halvings a single relaxed step may
-# try; and the largest relaxation factor.
+# Plain rounds behind the first estimate of the contraction; the factor by which the log of the
+# contraction may grow from one estimate to the next and still count as steady; the largest `ω`
+# a plain estimate may set; the window, in rounds, over which a relaxed rate is measured, which
+# lengthens as `ω → 2` because the rate per round is at best `ω - 1`; the windows without progress
+# that halve `ω - 1`; the halvings a single relaxed step may try; and the largest relaxation
+# factor.
 const _RELAX_NESTIMATE = 4
+const _RELAX_STEADY = 1.25
+const _RELAX_OMEGA_START = 1.5
 const _RELAX_WINDOW = 16
 const _RELAX_WINDOW_SCALE = 4.0
 const _RELAX_NSTALL = 4
