@@ -974,6 +974,30 @@
         end
     end
 
+    @testset "overrelaxation: a window is judged against the window before it" begin
+        # On the squared channel of this map the plain rounds need about 50,000 rounds. The
+        # imbalance level rises with `ω`, so a window judged against the smallest imbalance of the
+        # plain rounds would show no progress for many windows while the run converges, and the
+        # stall rule would halve `ω` when it should rise.
+        t, outidxs = tape_function(xs -> [4000.0 0.3; 9.0 9.0] * xs, ones(2))
+        a0 = ones(2)
+        relaxed = converge_targets(t, outidxs; relax = true, variance = true, a0)
+        @test relaxed.delta <= eps()^(2 // 3)
+        @test relaxed.iters < 1500
+        @test balance_cover(t, outidxs; rounds = nothing, start = :equal, merge = VarianceMerge()).iters == relaxed.iters
+
+        # The first window after `ω` changes is judged against one at the lower `ω`, whose lower
+        # level makes it read as slow. Without a limit on one window's raise this run takes more
+        # than a thousand rounds.
+        W = [100.0 3.0e7 0.0; 0.0 100.0 0.7; 200.0 100.0 2.0]
+        r = xs -> [sum(W[i, j] * exp(-xs[j]) for j in 1:3 if W[i, j] != 0) + xs[i] * xs[mod1(i + 1, 3)] for i in 1:3]
+        t, outidxs = tape_function(r, [0.5, 2.0, 1.0])
+        plain = converge_targets(t, outidxs; relax = false, variance = true)
+        relaxed = converge_targets(t, outidxs; relax = true, variance = true)
+        @test relaxed.delta <= eps()^(2 // 3)
+        @test relaxed.iters < 2 * plain.iters
+    end
+
     @testset "overrelaxation: a step that would overshoot is shortened" begin
         step! = DerivativeCovers._relaxed_step!
         # From `x = 1000` toward `F = 1`, `ω = 1.99` in log space would land near 1e-3; the

@@ -1283,9 +1283,14 @@ _target_nonconvergence(maxiter, delta, rtol) = error(
 # Relaxed rounds are then judged over windows by their smallest imbalance, since a relaxed
 # iteration's imbalance is not monotone: a window's observed rate can raise `ω` toward the
 # optimum it implies, and several windows without progress halve `ω - 1`, eventually back to plain
-# rounds and a fresh estimate. The imbalance, its contraction and the steps are all ratios of
-# marginals, so `ω` is invariant under rescaling and the iterates are as covariant as the plain
-# alternation's, up to roundoff.
+# rounds and a fresh estimate. A window's rate is measured against the window before it, not the
+# smallest imbalance ever seen: the imbalance is the size of the plain step, which a relaxed
+# iterate overshoots by `(ω - 1)` times, so its level rises with `ω`, and a baseline from a lower
+# `ω` could stay unbeaten for many windows while the iteration converges. The first window after
+# `ω` changes is still measured against one at the old `ω`, whose lower level makes it read as
+# slow, so one window's raise is limited to a factor of `_RELAX_RAISE` in `2 - ω`. The imbalance,
+# its contraction and the steps are all ratios of marginals, so `ω` is invariant under rescaling
+# and the iterates are as covariant as the plain alternation's, up to roundoff.
 #
 # Relaxation amplifies roundoff in the marginals by about `1/(2 - ω)`, so `ω` is capped where
 # that amplification would reach `rtol`. Convergence is declared on the plain criterion, the row
@@ -1346,10 +1351,10 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
                 nstall = 0
                 if λ > ω - 1
                     μ2 = (λ + ω - 1)^2 / (ω^2 * λ)
-                    μ2 < 1 && (ω = max(ω, min(ωmax, 2 / (1 + sqrt(1 - μ2)))))
+                    μ2 < 1 && (ω = max(ω, min(ωmax, 2 - (2 - ω) / _RELAX_RAISE, 2 / (1 + sqrt(1 - μ2)))))
                 end
             end
-            rbest = min(rbest, rwin)
+            rbest = rwin
             rwin, nwin = T(Inf), 0
         end
     end
@@ -1360,14 +1365,15 @@ end
 # Plain rounds behind the first estimate of the contraction; the factor by which the log of the
 # contraction may grow from one estimate to the next and still count as steady; the largest `ω`
 # a plain estimate may set; the window, in rounds, over which a relaxed rate is measured, which
-# lengthens as `ω → 2` because the rate per round is at best `ω - 1`; the windows without progress
-# that halve `ω - 1`; the halvings a single relaxed step may try; and the largest relaxation
-# factor.
+# lengthens as `ω → 2` because the rate per round is at best `ω - 1`; the largest factor by which
+# one window may shrink `2 - ω`; the windows without progress that halve `ω - 1`; the halvings a
+# single relaxed step may try; and the largest relaxation factor.
 const _RELAX_NESTIMATE = 4
 const _RELAX_STEADY = 1.25
 const _RELAX_OMEGA_START = 1.5
 const _RELAX_WINDOW = 16
 const _RELAX_WINDOW_SCALE = 4.0
+const _RELAX_RAISE = 8
 const _RELAX_NSTALL = 4
 const _RELAX_NBACKTRACK = 4
 const _RELAX_OMEGA_MAX = 1.995
