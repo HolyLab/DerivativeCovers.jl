@@ -93,6 +93,67 @@
         end
     end
 
+    @testset "off the support, no scalar correction can tighten a magnitude cover" begin
+        pm, pp = pair(; nout = 4, m = 8, delta = 1.0e-3, sigma = 0.5, support = 3:6, seed = 2)
+        Jm, Jp = exact_jacobian(pm), exact_jacobian(pp)
+        kappa = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))
+        off = setdiff(1:8, 3:6)
+        @test all(==(1), kappa[off])
+        @test all(kappa[3:6] .> 10)
+        # At every off-support input some output is covered with no slack, so c*b fails to cover
+        # for any c < 1, and the on-support excess kappa cannot be traded away by a scalar.
+        cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(4))
+        bal = balance_cover(cm.Utilde; merge = MaxMerge(), arule = :geomean, start = :equal, rounds = nothing)
+        for (a, b) in ((cm.a, cm.b_max), (bal.a, bal.b)), j in off
+            @test minimum(a[k] * b[j] / abs(Jm[k, j]) for k in axes(Jm, 1)) <= GATE
+        end
+    end
+
+    @testset "signed products separate the pair; blind directions do not" begin
+        pm, pp = pair(; nout = 4, m = 8, delta = 1.0e-3, sigma = 0.5, support = 3:6, seed = 2)
+        jvp(p, v) = ForwardDiff.derivative(s -> p.r(p.x0 .+ s .* v), 0.0)
+        vjp(p, w) = ForwardDiff.gradient(x -> dot(w, p.r(x)), p.x0)
+        e1, e3 = zeros(8), zeros(8)
+        e1[1] = 1
+        e3[3] = 1
+        # A Jacobian-vector product along an input no quartet touches is blind to the sign; one
+        # along a support input is not.
+        @test jvp(pm, e1) ≈ jvp(pp, e1) rtol = 1.0e-10
+        @test maximum(abs, jvp(pp, e3)) > 10 * maximum(abs, jvp(pm, e3))
+        # Every column of the canceling Jacobian is proportional to the output scales q, so a
+        # vector-Jacobian product along any w orthogonal to q is blind, and one along q is not.
+        Jm = exact_jacobian(pm)
+        q = Jm[:, findfirst(!iszero, vec(Jm[1, :]))]
+        w = nullspace(q')[:, 1]
+        @test maximum(abs, vjp(pm, w) .- vjp(pp, w)) < 1.0e-10 * maximum(abs, vjp(pp, q))
+        @test maximum(abs, vjp(pp, q)) > 10 * maximum(abs, vjp(pm, q))
+    end
+
+    @testset "the sum/max gap is bounded by the outputs reaching each input" begin
+        # Equal output scales: the effective multiplicity is the output count itself.
+        pm, _ = pair(; nout = 5, m = 4, delta = 1.0e-3, sigma = 0.0, seed = 3)
+        cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(5))
+        @test cm.b_sum ./ cm.b_max ≈ fill(5, 8) rtol = 1.0e-12
+
+        # Windowed residuals: output k depends on x[k:k+w-1], so at most w outputs reach an input
+        # and b_sum <= w * b_max there.
+        rng = MersenneTwister(4)
+        n, w = 12, 3
+        nout = n - w + 1
+        coeff = ifelse.(rand(rng, nout, w) .< 0.5, -1.0, 1.0) .* (abs.(randn(rng, nout, w)) .+ 0.1)
+        r = xs -> map(1:nout) do k
+            acc = coeff[k, 1] * xs[k]
+            for l in 2:w
+                acc = acc + coeff[k, l] * xs[k + l - 1]
+            end
+            sin(acc) + acc^2 / 2
+        end
+        jc = cover_jacobian(WithDiagnostics(), r, randn(rng, n); a = ones(nout))
+        reach = vec(count(>(0), jc.Utilde; dims = 1))
+        @test maximum(reach) == w
+        @test all(jc.b_sum .<= reach .* jc.b_max .* GATE)
+    end
+
     @testset "single-path programs have no first-order cancellation" begin
         # Unique input→output paths make the surrogate equal |J| bit-for-bit: the abs sweep
         # multiplies and never adds two paths, and |a*b| == |a|*|b| exactly in floating point.
