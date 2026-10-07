@@ -85,6 +85,7 @@ include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
 include("intervals.jl")
+include("maxpath.jl")
 
 @testset "DerivativeCovers.jl" begin
 
@@ -171,7 +172,7 @@ include("intervals.jl")
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :VarianceMerge, :variance_surrogate,
-            :balance_cover, :tape_potentials,
+            :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
         )
         for sym in private
             @test isdefined(DerivativeCovers, sym)
