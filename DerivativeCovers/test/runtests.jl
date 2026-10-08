@@ -20,7 +20,8 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
     local_covers, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
-    MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate
+    MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate,
+    Curvature, NoCurvature, UnaryCurvature, BinaryCurvature, DenseCurvature
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
     rowcomponent, colcomponent
@@ -71,6 +72,7 @@ include("composites.jl")
 include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
+include("merges.jl")
 include("lattice.jl")
 include("forward.jl")
 include("nls.jl")
@@ -78,6 +80,7 @@ include("vectoroutput.jl")
 include("support.jl")
 include("jacobian.jl")
 include("covariant.jl")
+include("gauge.jl")
 include("gram.jl")
 include("jacobianconverse.jl")
 include("equilibrate.jl")

@@ -548,6 +548,83 @@
         @test marginal_weights(tc, oc, b) == c .* marginal_weights(t1, o1, b)
     end
 
+    @testset "the surrogate and the b-merges transform exactly" begin
+        # x -> d .* x and r -> c .* r send the surrogate to diag(c) * Ũ * diag(d)^-1. The first-order
+        # sweeps have no zero-value guard, so this holds at every point, bit-exactly for
+        # power-of-two factors. Wrappers on both sides give the compared tapes the same shape.
+        rbase = xs -> [
+            xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2],
+            exp(xs[1]) + xs[2] * xs[3], tanh(xs[1]) + xs[2] + xs[3],
+        ]
+        x0 = [0.6, -0.4, 0.9]
+        surrogate(r, x) = jacobian_surrogate(tape_function(r, x)...)
+        for (d, c, exact) in (
+                ([0.25, 4.0, 2.0], [2.0, 0.5, 8.0, 0.25], true),
+                ([1.0e-3, 7.3, 260.0], [3.7, 0.11, 42.0, 1.9], false),
+            )
+            Ue = surrogate(xs -> rbase(xs ./ ones(3)), x0)
+            Ud = surrogate(xs -> rbase(xs ./ d), d .* x0)
+            Uo = surrogate(xs -> ones(4) .* rbase(xs), x0)
+            Uc = surrogate(xs -> c .* rbase(xs), x0)
+            if exact
+                @test Ud == Ue ./ d'
+                @test Uc == c .* Uo
+            else
+                @test Ud ≈ Ue ./ d' rtol = 1.0e-12
+                @test Uc ≈ c .* Uo rtol = 1.0e-12
+            end
+        end
+
+        # With the output weights held fixed, every b-merge picks up exactly 1 ./ d.
+        d = [0.25, 4.0, 2.0]
+        te, oe = tape_function(xs -> rbase(xs ./ ones(3)), x0)
+        td, od = tape_function(xs -> rbase(xs ./ d), d .* x0)
+        jce = cover_jacobian(WithDiagnostics(), te, oe; a = ones(4))
+        jcd = cover_jacobian(WithDiagnostics(), td, od; a = ones(4))
+        @test jcd.b_sum == jce.b_sum ./ d
+        @test jcd.b_quad == jce.b_quad ./ d
+        @test jcd.b_max == jce.b_max ./ d
+        @test cover_jacobian_hybrid(td, od, 2; a = ones(4)).b ==
+            cover_jacobian_hybrid(te, oe, 2; a = ones(4)).b ./ d
+
+        # The marginal rule is invariant under a generic input rescaling to roundoff.
+        dg = [1.0e-3, 7.3, 260.0]
+        tg, og = tape_function(xs -> rbase(xs ./ dg), dg .* x0)
+        b = [0.7, 2.0, 0.1]
+        @test marginal_weights(tg, og, b ./ dg) ≈ marginal_weights(te, oe, b) rtol = 1.0e-12
+
+        # Sinkhorn balancing from the equal start: every product a_k*b_j and the round count are
+        # unchanged by a power-of-two input rescaling.
+        uni = (; targets = :uniform, start = :equal, rounds = nothing)
+        bale = balance_cover(te, oe; uni...)
+        bald = balance_cover(td, od; uni...)
+        @test bald.a .* bald.b' == bale.a .* (bale.b ./ d)'
+        @test bald.iters == bale.iters
+    end
+
+    @testset "output weightings that are not covariant" begin
+        # Weighting outputs by the residual magnitude |r_k| gives a = 0 at a zero-residual
+        # solution of a consistent least-squares problem, where J is not zero: no b covers.
+        rres = xs -> [xs[1] - 1.0, xs[1] * xs[2] - 2.0]
+        xsol = [1.0, 2.0]
+        @test all(iszero, rres(xsol))
+        @test jacobian_ratio(ForwardDiff.jacobian(rres, xsol), abs.(rres(xsol)), [1.0, 1.0]) == Inf
+
+        # The unweighted row sum a_k = sum_j Ũ_kj adds entries in the units of different inputs,
+        # so an input rescaling moves each output's weight by a different factor.
+        rdisj = xs -> [xs[1]^2, sin(xs[2]), exp(xs[3]), xs[1] * xs[2]]
+        x0 = [0.6, -0.4, 0.9]
+        d = [1.0e-3, 7.3, 260.0]
+        rowsum(r, x) = vec(sum(jacobian_surrogate(tape_function(r, x)...); dims = 2))
+        moved = rowsum(xs -> rdisj(xs ./ d), d .* x0) ./ rowsum(xs -> rdisj(xs ./ ones(3)), x0)
+        @test maximum(moved) / minimum(moved) > 10
+        # The marginal rule weights each entry by 1/b_j and is unmoved.
+        b = [0.7, 2.0, 0.1]
+        te, oe = tape_function(xs -> rdisj(xs ./ ones(3)), x0)
+        td, od = tape_function(xs -> rdisj(xs ./ d), d .* x0)
+        @test marginal_weights(td, od, b ./ d) ≈ marginal_weights(te, oe, b) rtol = 1.0e-12
+    end
+
     @testset "balance_cover: max-merge limit cycle fails fast to geomean" begin
         # This pattern has total support, but max-merge marginal balancing enters a limit cycle.
         # Stall detection should fail early and recommend the convergent geomean rule.

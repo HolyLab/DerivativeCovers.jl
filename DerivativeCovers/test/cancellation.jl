@@ -131,4 +131,72 @@
         @test resr.h_sum ≈ res.h_sum ./ d rtol = 1.0e-10
     end
 
+    @testset "magnitude methods pay the cancellation index — support $support" for support in (1:n, 1:3)
+        pc = Problems.cancellation(n; m, delta, aligned = false, support, rng = MersenneTwister(7))
+        pa = Problems.cancellation(n; m, delta, aligned = true, support, rng = MersenneTwister(7))
+        Hc, Ha = exact_hessian(pc), exact_hessian(pa)
+        tc, oc = tape_function(pc.f, pc.x0)
+        ta, oa = tape_function(pa.f, pa.x0)
+        rc = cover_hessian(WithDiagnostics(), tc, oc)
+
+        # The sign flip that cancels the Hessian is invisible to the elementwise bound, which
+        # matches the aligned Hessian on the diagonal.
+        @test diag(rc.B) ≈ diag(Ha) rtol = 1.0e-8
+        # The hybrid merge reads the same magnitudes as the other merges.
+        @test cover_hybrid(tc, oc, 4) == cover_hybrid(ta, oa, 4)
+
+        # A cover that cannot tell the variants apart must cover the aligned Hessian too, so on
+        # the canceling variant it exceeds the minimal cover sqrt.(diag(Hc)) by at least
+        # sqrt(kappa) on the support.
+        hstar = sqrt.(diag(Hc))
+        sqrtkappa = sqrt.(diag(Ha) ./ diag(Hc))
+        vc = cover_variance(tc, oc)
+        for h in (rc.h_sum, rc.h_quad, cover_hybrid(tc, oc, 4), vc.h_var)
+            @test all(h[support] .>= sqrtkappa[support] .* hstar[support] .* (1 - 1.0e-8))
+        end
+
+        # Hessian-vector products read signs. A probe along a coordinate no quartet touches sees
+        # identical products; a probe inside the support separates the variants.
+        for a in setdiff(1:n, support)
+            e = zeros(n)
+            e[a] = 1
+            @test hvp(tc, oc, e) ≈ hvp(ta, oa, e) rtol = 1.0e-10
+        end
+        e = zeros(n)
+        e[first(support)] = 1
+        @test norm(hvp(tc, oc, e) - hvp(ta, oa, e)) > 1.0e-3 * norm(hvp(tc, oc, e))
+    end
+
+    @testset "the spectral shrink reads signs" begin
+        pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
+        pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
+        Hc, Ha = exact_hessian(pc), exact_hessian(pa)
+        hc = cover_hessian(pc.f, pc.x0).h_sum
+        ha = cover_hessian(pa.f, pa.x0).h_sum
+        @test hc == ha
+        # On the canceling variant the scaled Hessian is far from saturated, so the shrink
+        # engages there and separates covers that the sum merge returns identically.
+        lc, la = scaled_spectral_radius(Hc, hc), scaled_spectral_radius(Ha, ha)
+        @test lc < la < 1
+        sc, sa = spectral_shrink(hc, lc), spectral_shrink(ha, la)
+        @test maximum(abs.(sc .- sa) ./ max.(sc, sa)) > 0.1
+        @test cover_ratio(Hc, sc) <= GATE
+        @test cover_ratio(Ha, sa) <= GATE
+    end
+
+    @testset "a recorded linear change of variables is the transported cover" begin
+        # If abs.(H) <= h*h', then t = abs.(inv(A))' * h covers the Hessian of g(y) = f(inv(A)*y).
+        # Recording inv(A)*y as linear nodes in front of f reproduces exactly that transport,
+        # even when A is the eigenbasis that diagonalizes the canceling Hessian.
+        pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
+        Hc = exact_hessian(pc)
+        A = permutedims(eigen(Symmetric(Hc)).vectors)
+        Ainv = inv(A)
+        g = ys -> pc.f([DerivativeCovers.linearnode(Ainv[a, :], ys) for a in 1:n])
+        hx = cover_hessian(pc.f, pc.x0).h_sum
+        hy = cover_hessian(g, A * pc.x0).h_sum
+        @test hy ≈ abs.(permutedims(Ainv)) * hx rtol = 1.0e-13
+        @test cover_ratio(permutedims(Ainv) * Hc * Ainv, hy) <= GATE
+    end
+
 end
