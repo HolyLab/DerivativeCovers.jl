@@ -33,14 +33,20 @@ separation(x, y) = abs(x - y)
 
 """
     check_values(t::Tape)
+    check_values(site::CoverSite, val, ds, cs)
 
 Throw if the values recorded on `t` show that the program left the domain of one of its
 elementals. [`tape_function`](@ref) calls this once recording finishes. Over numbers there is
 nothing to check, since a numeric elemental outside its domain raises an error or returns a
 non-finite value the cover checks report. A set-valued element type, whose elementals can instead
 return a result flagged as undefined on part of the set, extends this to look for that flag.
+
+The second form checks one elemental: its value `val`, its first partials `ds` and its second
+partials `cs`, with `site` naming it in the error. A propagation that keeps no tape, such as
+[`forward_cover`](@ref), calls it at each elemental.
 """
 check_values(t) = nothing
+check_values(site, val, ds, cs) = nothing
 
 """
     Tape{T}

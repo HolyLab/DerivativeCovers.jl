@@ -333,12 +333,13 @@ function unarynode(x::FVar{T, S, M, SM}, val, d, c) where {T, S, M, SM}
     ch = channels(x)
     ctx = ch.ctx
     dT = convert(T, d)
+    site = ElementalSite(convert(T, val), (value(x),))
+    check_values(site, site.val, (dT,), (c,))
     ad = magnitude(dT)
     g = dT .* ch.g
     G = ad .* ch.G
     sigma = ad * x.sigma
     if !iszero(magnitude(c))
-        site = ElementalSite(convert(T, val), (value(x),))
         G = add_atoms(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
     return FVar{T, S, M, SM}(val, sigma, x.live && !iszero(ad), ctx, g, G)
@@ -351,13 +352,14 @@ function binarynode(
     ctx = cx.ctx
     ctx === cy.ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
     a, b = convert(T, d1), convert(T, d2)
+    site = ElementalSite(convert(T, val), (value(x), value(y)))
+    check_values(site, site.val, (a, b), (c11, c12, c22))
     aa, ab = magnitude(a), magnitude(b)
     g = a .* cx.g .+ b .* cy.g
     G = aa .* cx.G .+ ab .* cy.G
     sigma = aa * x.sigma + ab * y.sigma
     if !(iszero(magnitude(c11)) && iszero(magnitude(c12)) && iszero(magnitude(c22)))
         C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
-        site = ElementalSite(convert(T, val), (value(x), value(y)))
         sl = (forward_scale(x), forward_scale(y))
         G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
@@ -460,7 +462,9 @@ forward pass cannot know how the output depends on the node it is at. The cover 
 
 The gradient is in the element type `T = float(eltype(x0))` and the cover in
 [`magtype`](@ref)`(T)`. As for [`cover_hessian`](@ref), `x0` may be a box of intervals: the
-gradient then encloses the gradient over the box and the cover holds at every point of it.
+gradient then encloses the gradient over the box and the cover holds at every point of it. An
+elemental evaluated outside its domain somewhere on the box is an error (see
+[`check_values`](@ref)).
 
 The second form returns the cover of any variable reached along the way, the propagation having
 maintained the invariant at every one of them, not only at the output.
