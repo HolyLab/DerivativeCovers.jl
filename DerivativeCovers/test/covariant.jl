@@ -998,6 +998,31 @@
         @test relaxed.iters < 2 * plain.iters
     end
 
+    @testset "overrelaxation: windows without progress return to plain rounds" begin
+        # No scaling meets the targets of the two 1×1 blocks: one row asks for 1.02 where its
+        # column supplies 1, and the other the reverse. Their row residual therefore settles at
+        # a fixed level, 0.02 in plain rounds and `0.02 / (2 - ω)` in relaxed ones. The 2×2 block
+        # contracts quickly from its badly scaled start, so the plain rounds estimate a small
+        # `ω`, about 1.1. Four windows at that `ω` show no progress, and one halving of `ω - 1`
+        # takes it below 1/16 of its cap, which ends the relaxation after round 84.
+        U = [1.0 0.35 0.0 0.0; 0.35 1.0 0.0 0.0; 0.0 0.0 1.0 0.0; 0.0 0.0 0.0 1.0]
+        r, c = [2.0, 2.0, 1.02, 1.0], [2.0, 2.0, 1.0, 1.02]
+        function reported_delta(maxiter)
+            msg = try
+                balance_cover(
+                    U; targets = (r, c), a0 = [1.0, 100.0, 1.0, 1.0], rounds = nothing, maxiter
+                )
+                ""
+            catch err
+                err isa ErrorException || rethrow()
+                err.msg
+            end
+            return parse(Float64, match(r"delta = (\S+) >", msg)[1])
+        end
+        @test reported_delta(80) > 0.022
+        @test reported_delta(88) ≈ 0.02
+    end
+
     @testset "overrelaxation: a step that would overshoot is shortened" begin
         step! = DerivativeCovers._relaxed_step!
         # From `x = 1000` toward `F = 1`, `ω = 1.99` in log space would land near 1e-3; the
