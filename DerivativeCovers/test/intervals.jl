@@ -286,4 +286,23 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
             x -> sqrt(x[1]) * x[2], interval.([0.0, 1.0], [2.0, 2.0])
         )
     end
+
+    @testset "a forward propagation checks each elemental's domain" begin
+        X = interval.([-1.0, 1.0], [2.0, 2.0])
+        @test_throws "leaves the domain of an elemental" forward_cover(x -> log(x[1]) + x[2], X)
+        @test_throws "leaves the domain of an elemental" forward_cover(x -> x[2] / x[1], X)
+        # Every partial of `x^2.5` is finite on the box, so only the decoration shows that the
+        # power is undefined on part of it.
+        @test_throws "leaves the domain of an elemental" forward_cover(x -> x[1]^2.5 * x[2], X)
+        @test_throws "leaves the domain of an elemental" cover_hessian(x -> x[1]^2.5 * x[2], X)
+        @test_throws "not differentiable everywhere on the box" forward_cover(
+            x -> sqrt(x[1]) * x[2], interval.([0.0, 1.0], [2.0, 2.0])
+        )
+        msg = try
+            forward_cover(x -> log(x[1]) + x[2], X)
+        catch err
+            sprint(showerror, err)
+        end
+        @test occursin("this elemental", msg) && occursin("operand values", msg)
+    end
 end
