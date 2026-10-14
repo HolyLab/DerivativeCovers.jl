@@ -148,7 +148,7 @@ include("maxpath.jl")
             :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
             :sensitivity_scales, :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
-            :magnitude, :magtype, :separation, :check_values,
+            :magnitude, :magtype, :separation, :decided_sign, :check_values,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
@@ -287,7 +287,7 @@ include("maxpath.jl")
             xs[1] * TVar(t2, o2)
         end
         # Elementals outside the supported set fail fast rather than silently linearizing.
-        @test_throws MethodError tape_function(x -> abs(x[1]), x0)
+        @test_throws MethodError tape_function(x -> sign(x[1]), x0)
     end
 
     # Node indices and scalar magnitudes are annotated no more narrowly than the sweeps need, so
@@ -357,6 +357,68 @@ include("maxpath.jl")
     @testset "a variable exponent needs a positive base" begin
         @test_throws "requires a positive base" cover_hessian(x -> x[1]^x[2], [-1.7, 2.0])
         @test_throws "requires a positive base" cover_hessian(x -> (-2.0)^x[1], [1.3])
+    end
+
+    @testset "absolute value" begin
+        @test DerivativeCovers.decided_sign(2.0) == 1
+        @test DerivativeCovers.decided_sign(-2.0) == -1
+        @test DerivativeCovers.decided_sign(-0.0) == 0
+        @test DerivativeCovers.decided_sign(NaN) == 0
+
+        # Where the sign is decided, abs is linear with slope ±1.
+        g = x -> abs(x[1]) * x[2]
+        for x0 in ([-1.3, 0.7], [1.3, 0.7])
+            res = cover_hessian(WithDiagnostics(), g, x0)
+            @test res.grad ≈ ForwardDiff.gradient(g, x0)
+            @test res.B ≈ abs.(ForwardDiff.hessian(g, x0))
+            @test forward_cover(g, x0).h_quad ≈ cover_hessian(WithDiagnostics(), g, x0).h_quad
+        end
+        # A constant operand folds.
+        gc = x -> abs(zero(eltype(x)) - 2) * x[1]
+        @test cover_hessian(gc, [0.4]).grad ≈ [2.0]
+
+        # At zero, a constant power p >= 2 records |r|^p as one node on r, whose Hessian is
+        # p(p-1)|r|^(p-2) [1 -1; -1 1]: zero for p > 2 and 2 [1 -1; -1 1] for p = 2.
+        x0 = [0.5, 0.5]
+        for p in (2, 3, 7 // 3, 2.5)
+            f = x -> abs(x[1] - x[2])^p + x[1] * x[2]
+            t, outidx = tape_function(f, x0)
+            @test nnodes(t) == 6        # two inputs, the difference, |r|^p, the product, the sum
+            H = (p == 2 ? 2 * [1 -1; -1 1] : zeros(2, 2)) + [0 1; 1 0]
+            @test [hvp(t, outidx, e) for e in ([1.0, 0.0], [0.0, 1.0])] ≈ [H[:, 1], H[:, 2]]
+            c = cover_hessian(f, x0)
+            @test c.grad ≈ [0.5, 0.5]
+            @test all(abs.(H) .<= c.h_sum * c.h_sum' .* (1 + 1.0e-12))
+            fc = forward_cover(f, x0)
+            @test fc.grad ≈ [0.5, 0.5]
+            @test all(abs.(H) .<= fc.h_quad * fc.h_quad' .* (1 + 1.0e-12))
+        end
+
+        # Every other use of abs at zero is refused, through each recorder.
+        z = [0.0, 1.0]
+        for f in (
+                x -> abs(x[1]) + x[2], x -> abs(x[1]) * x[2], x -> exp(abs(x[1])) * x[2],
+                x -> 2.0^abs(x[1]) + x[2], x -> sum(abs.(x)), x -> sum(abs, x[1:1]),
+                x -> dot(abs.(x), x), x -> dot(abs.(x[1:1]), x[1:1]) + x[2],
+                x -> x[2] * abs(x[1]), x -> abs(x[1]) * abs(x[1]) + x[2],
+                x -> dot(x, abs.(x)),
+            )
+            @test_throws "sign of its argument is not decided" cover_hessian(f, z)
+            @test_throws "sign of its argument is not decided" forward_cover(f, z)
+        end
+        # The vector recorders that catch an `UndecidedAbs` leave other abstractly typed vectors
+        # unsupported, as they were.
+        t, _ = tape_function(x -> x[1] + x[2], z)
+        xs = CoverVar{Float64}[TVar(t, 1), TVar(t, 2)]
+        @test_throws MethodError DerivativeCovers.linearnode([1.0, 2.0], xs)
+        @test_throws MethodError DerivativeCovers.dotnode(xs, xs)
+        # A typed literal obtained from one is a constant of the operand's backend.
+        a = abs(TVar(t, 1))
+        @test a isa DerivativeCovers.UndecidedAbs
+        @test zero(a) isa TVar{Float64} && isconstant(zero(a)) && value(zero(a)) == 0
+        @test_throws "unless p >= 2" cover_hessian(x -> abs(x[1])^1.5 + x[2], z)
+        @test_throws "unless p >= 2" forward_cover(x -> abs(x[1])^1 + x[2], z)
+        @test_throws "requires a positive base" cover_hessian(x -> abs(x[1])^x[2], z)
     end
 
     @testset "an already-tight pair needs no balancing" begin

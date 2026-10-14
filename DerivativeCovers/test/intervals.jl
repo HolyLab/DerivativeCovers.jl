@@ -12,6 +12,10 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test DerivativeCovers.magnitude(interval(-3.0, 2.0)) === 3.0
         @test DerivativeCovers.separation(interval(0.0, 1.0), interval(0.5, 2.0)) == 0
         @test DerivativeCovers.separation(interval(0.0, 1.0), interval(1.5, 2.0)) == 0.5
+        @test DerivativeCovers.decided_sign(interval(0.5, 2.0)) == 1
+        @test DerivativeCovers.decided_sign(interval(-2.0, -0.5)) == -1
+        @test DerivativeCovers.decided_sign(interval(-1.0, 2.0)) == 0
+        @test DerivativeCovers.decided_sign(interval(0.0, 2.0)) == 0
     end
 
     inner = v -> [v[1] * v[2], exp(v[1])]
@@ -33,6 +37,12 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         (
             "declared sub-map", x -> (y = submap(inner, [x[1], x[2]]); y[1] + tanh(y[2]) * x[3]),
             [0.7, -1.2, 0.5], [0.9, -1.0, 0.7],
+        ),
+        (
+            # The first two residuals change sign on the box, the third does not.
+            "abs", x -> abs((3 - 2x[1]) * x[1] - x[2] + 1)^(7 // 3) + abs(x[1] - x[2] + 0.9)^2 +
+                abs(x[2] - 2) * x[1],
+            [-0.3, 0.8], [0.2, 1.2],
         ),
     )
 
@@ -279,6 +289,9 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
     @testset "control flow the box cannot decide" begin
         X = interval.([-1.0, 1.0], [2.0, 2.0])
         @test_throws IntervalArithmetic.InconclusiveBooleanOperation cover_hessian(x -> x[1]^x[2], X)
+        @test_throws "sign of its argument is not decided" cover_hessian(x -> abs(x[1]) + x[2], X)
+        @test_throws "sign of its argument is not decided" forward_cover(x -> abs(x[1]) * x[2], X)
+        @test_throws "unless p >= 2" cover_hessian(x -> abs(x[1])^1.5 * x[2], X)
         @test_throws "leaves the domain of an elemental" cover_hessian(x -> log(x[1]) + x[2], X)
         @test_throws "leaves the domain of an elemental" tape_function(x -> 1 / x[1] + x[2], X)
         # Defined on the whole box, but not differentiable at its lower edge.
