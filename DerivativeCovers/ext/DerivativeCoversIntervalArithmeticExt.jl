@@ -3,9 +3,11 @@
 
 Covers over a box. Recording a program on `Interval` inputs, `tape_function(f, interval.(lo, hi))`,
 gives a `Tape{Interval{T}}` whose values and partials enclose those at every point of the box.
-`magnitude` of an interval is its largest absolute value (`mag`), so the covers the sweeps compute
-from such a tape are plain floating-point vectors that hold at every point of the box, and the
-gradient is an interval vector enclosing the gradient over the box.
+`magnitude` of an interval is its largest absolute value (`mag`), and `boundtype` is
+`DerivativeCovers.Upward`, so the sweeps round every sum, product and square root of magnitudes
+upward. The covers they compute from such a tape are plain floating-point vectors that hold at
+every point of the box, exactly rather than up to rounding, and the gradient is an interval vector
+enclosing the gradient over the box.
 
 Control flow in the program that the box does not decide, such as `x > 0` for an `x` whose
 interval contains zero, raises IntervalArithmetic's `InconclusiveBooleanOperation` while
@@ -28,6 +30,9 @@ using DerivativeCovers: DerivativeCovers, CoverSite, Tape, TapeSite, UnaryCurvat
 using IntervalArithmetic: Interval, decoration, inf, mag, sup, trv
 
 DerivativeCovers.magnitude(x::Interval) = mag(x)
+
+# Covers over a box hold at every point of it, so the sweeps round their bounds upward.
+DerivativeCovers.boundtype(::Type{Interval{F}}) where {F <: AbstractFloat} = DerivativeCovers.Upward{F}
 
 DerivativeCovers.decided_sign(x::Interval) = inf(x) > 0 ? 1 : sup(x) < 0 ? -1 : 0
 

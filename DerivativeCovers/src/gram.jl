@@ -43,8 +43,12 @@ cover of `Ũ'*W*Ũ` and costs one sweep channel per output, `O(m*L)`. Unweighted
 of [`cover_nls`](@ref); with `Ũ` in hand from a `WithDiagnostics` result, a diagonal weight gives
 it as `MatrixCovers.gramcover(Utilde, w)`.
 
-Like the package's other sweep-based covers, `s` carries the roundoff of the sweep without
-inflation, so the bound holds to a relative error of a few `eps` per node on the longest path.
+On a tape whose sweeps round upward (see [`boundtype`](@ref)), such as one recorded over a box of
+intervals, the seeds and the sweep round upward, and `v` is raised by the few units in the last
+place needed for `abs(W[k,l]) <= v[k]*v[l]` to hold exactly, so `s` covers `G` at every point of
+the box. On any other tape, `s` carries the roundoff of the sweep without inflation, like the
+package's other sweep-based covers, so the bound holds to a relative error of a few `eps` per node
+on the longest path.
 
 # Examples
 
@@ -69,17 +73,19 @@ julia> round.(DerivativeCovers.gramcover(t, outidxs, [1.0, 0.0, 4.0]); digits=4)
 gramcover(t::Tape, outidxs::AbstractVector{<:Integer}) =
     _output_sweep(t, outidxs, Iterators.repeated(1, length(outidxs)))
 
-gramcover(t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector) =
-    _output_sweep(t, outidxs, _diagonal_gram_seeds(outidxs, w))
+gramcover(t::Tape{T}, outidxs::AbstractVector{<:Integer}, w::AbstractVector) where {T} =
+    _output_sweep(t, outidxs, _diagonal_gram_seeds(T, outidxs, w))
 
 gramcover(t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
     gramcover(t, outidxs, W.diag)
 
 function gramcover(
-        t::Tape, outidxs::AbstractVector{<:Integer}, W::AbstractMatrix;
+        t::Tape{T}, outidxs::AbstractVector{<:Integer}, W::AbstractMatrix;
         v::AbstractVector = _default_gram_seeds(outidxs, W)
-    )
-    return _output_sweep(t, outidxs, _check_gram_seeds(outidxs, W, v))
+    ) where {T}
+    v = _check_gram_seeds(outidxs, W, v)
+    roundsup(T) && (v = _exact_gram_seeds(W, v))
+    return _output_sweep(t, outidxs, v)
 end
 
 """
@@ -103,9 +109,9 @@ function gramcover!(
 end
 
 # `v[k] = sqrt(abs(w[k]))`, so `v[k]^2` covers the diagonal weight `w[k]`.
-function _diagonal_gram_seeds(outidxs, w::AbstractVector)
+function _diagonal_gram_seeds(::Type{T}, outidxs, w::AbstractVector) where {T}
     _check_diagonal_weight(outidxs, w)
-    return (sqrt(abs(w[k])) for k in eachindex(w))
+    return (sqrt(tobound(T, abs(w[k]))) for k in eachindex(w))
 end
 
 function _check_diagonal_weight(outidxs, w::AbstractVector)
@@ -137,6 +143,24 @@ function _check_gram_weight(outidxs, W::AbstractMatrix)
         )
     )
     return nothing
+end
+
+# `v` raised, a unit in the last place at a time, until `abs(W[k,l]) <= v[k]*v[l]` holds in exact
+# arithmetic. A product rounded to nearest that exceeds the entry rounded upward proves it: were
+# the exact product below that representable entry, rounding could not carry it past.
+function _exact_gram_seeds(W::AbstractMatrix, v::AbstractVector)
+    v = float.(v)
+    U = Upward{eltype(v)}
+    for _ in 1:4
+        all(CartesianIndices(W)) do I
+            k, l = Tuple(I)
+            x = U(abs(W[I])).x
+            p = v[k] * v[l]
+            iszero(x) || p > x || (p == x && (_exactfactor(v[k]) || _exactfactor(v[l])))
+        end && return v
+        v = map(x -> iszero(x) ? x : nextfloat(x), v)
+    end
+    throw(ArgumentError("v could not be raised to satisfy abs(W[k,l]) <= v[k]*v[l] exactly"))
 end
 
 function _check_gram_seeds(outidxs, W::AbstractMatrix, v::AbstractVector)

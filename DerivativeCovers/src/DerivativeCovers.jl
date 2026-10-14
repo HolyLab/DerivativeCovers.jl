@@ -50,7 +50,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :constantnode, :atom_slots, :check_finite_partials, :submapnode,
             :split_scales, :split_block, :split_ratio, :guards_any_block, :sensitivity_scales,
             :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms, :CoverVar,
-            :constantvar, :tangent_channel, :forward_scale, :magnitude, :magtype, :separation,
+            :constantvar, :tangent_channel, :forward_scale, :magnitude, :magtype, :boundtype, :Upward, :separation,
             :decided_sign, :check_values
         )
     )
@@ -83,6 +83,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     eval(Expr(:public, :gramvariance, :gramvariance!))
 end
 
+include("rounding.jl")
 include("curvature.jl")
 include("tape.jl")
 include("overloads.jl")

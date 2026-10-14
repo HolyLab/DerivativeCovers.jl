@@ -238,7 +238,9 @@ Hessian, so covering them would only import the other slot's scale into a term t
 
 `rho`, `av` and the entries of `sl` are magnitudes, in `M = magtype(eltype(site))`. `rho` must be a
 `Vector{M}`: [`local_cover_slots`](@ref) asserts that type so that the sweeps, which call it once
-per node, need not box the result.
+per node, need not box the result. The entries `av*magnitude(C[i,j])` and the products that cover
+them are formed in [`boundtype`](@ref)`(eltype(site))`, so where that rounds upward the invariant
+holds exactly rather than up to rounding.
 
 The mutating form resizes `rho` to the elemental's slot count and fills it, returning whether
 there is a second-order term at all and leaving `rho` untouched when there is not. Every
@@ -278,7 +280,7 @@ cover_slots!(rho::Vector, ::NoCurvature, ratio, site, av, sl; check::Bool = true
 function cover_slots!(rho::Vector, C::DeclaredCurvature, ratio, site, av, sl; check::Bool = true)
     av == 0 && return false
     resize!(rho, length(C.s))
-    r = sqrt(av)
+    r = sqrt(tobound(eltype(site), av))
     for (i, s) in enumerate(C.s)
         rho[i] = r * s
     end
@@ -286,7 +288,7 @@ function cover_slots!(rho::Vector, C::DeclaredCurvature, ratio, site, av, sl; ch
 end
 
 function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; check::Bool = true)
-    c = av
+    c = tobound(eltype(site), av)
     c == 0 && return false
     q = C.q
     resize!(rho, 2q)
@@ -298,6 +300,10 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
         # contribution is exactly zero and neither slot carries weight.
         dead = dead_slot(s1) || dead_slot(s2)
         a, b = dead ? (zero(c), zero(c)) : split_block(ratio, zero(c), c, zero(c), s1, s2)
+        # With `a` fixed, `b >= c/a` rounded upward makes `a*b >= c` exactly.
+        if roundsup(eltype(site)) && !dead
+            b = max(oftype(c, b), c / a)
+        end
         if check
             check_finite_partials(site, av, (c,))
             # Allow for roundoff accumulated across the program, not just this comparison.
@@ -313,7 +319,7 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
 end
 
 function cover_slots!(rho::Vector, C::UnaryCurvature, ratio, site, av, sl; check::Bool = true)
-    c11 = av * magnitude(C.c)
+    c11 = tobound(eltype(site), av) * magnitude(C.c)
     c11 == 0 && return false
     check && check_finite_partials(site, av, (c11,))
     resize!(rho, 1)
@@ -323,6 +329,7 @@ end
 
 function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; check::Bool = true)
     M = magtype(eltype(site))
+    av = tobound(eltype(site), av)
     c11 = av * magnitude(C.c11)
     c12 = av * magnitude(C.c12)
     c22 = av * magnitude(C.c22)
@@ -339,6 +346,7 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     else
         rho1, rho2 = sqrt(c11), sqrt(c22)
     end
+    roundsup(eltype(site)) && ((rho1, rho2) = certify_block(c11, c12, c22, rho1, rho2, dead))
     if check
         check_finite_partials(site, av, (c11, c12, c22))
         rtol = sqrt(eps(M))
@@ -354,6 +362,16 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     rho[1] = rho1
     rho[2] = rho2
     return true
+end
+
+# Raise the pair `(rho1, rho2)` chosen for the block `[c11 c12; c12 c22]` until it covers the block
+# in upward-rounded arithmetic: `rho1 >= sqrt(c11)`, `rho2 >= sqrt(c22)`, and, unless a dead slot
+# empties the cross term, `rho2 >= c12/rho1` with `rho1` fixed, so `rho1*rho2 >= c12` exactly.
+function certify_block(c11, c12, c22, rho1, rho2, dead::Bool)
+    r1 = max(oftype(c11, rho1), sqrt(c11))
+    r2 = max(oftype(c22, rho2), sqrt(c22))
+    (dead || iszero(c12)) || (r2 = max(r2, c12 / r1))
+    return r1, r2
 end
 
 # The general form carries no fixed arity, and the rank-1 cover of a block larger than 2x2 is not

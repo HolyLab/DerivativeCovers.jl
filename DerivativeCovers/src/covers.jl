@@ -169,14 +169,14 @@ end
 Forward absolute sensitivities: `utilde[k][a] >= abs(∂v_k/∂x_a)`, obtained by propagating
 `utilde[k] = sum_{i in P_k} magnitude(∂φ_k/∂v_i) * utilde[i]` from `utilde[x_a] = e_a`. The bound
 follows from the triangle inequality over paths, and is tight when no path cancellation occurs.
-The entries are in [`magtype`](@ref) of the tape's element type.
+The entries are in [`boundtype`](@ref) of the tape's element type.
 
 Costs `O(n * L)` time and memory, so this is a diagnostic path: the sum merge is obtainable
 without it (see [`abs_reverse`](@ref)).
 """
 function sensitivities(t::Tape{T}) where {T}
     n, N = t.ninputs, nnodes(t)
-    utilde = [zeros(magtype(T), n) for _ in 1:N]
+    utilde = [zeros(boundtype(T), n) for _ in 1:N]
     for a in 1:n
         utilde[a][a] = 1
     end
@@ -280,11 +280,11 @@ cover. [`sensitivities`](@ref) for [`AbsoluteTangents`](@ref), the magnitudes of
 tangent_channel(::AbsoluteTangents, t::Tape) = sensitivities(t)
 tangent_channel(::SignedTangents, t::Tape) = signed_magnitudes(tangents(t))
 
-# Magnitudes of signed tangents. Only magnitudes enter the elementwise bound and the atoms, so
-# where they share the tangents' type they are reduced in place rather than copied, which holds the
-# signed channel to a single `n * L` array.
+# Magnitudes of signed tangents, in [`boundtype`](@ref). Only magnitudes enter the elementwise
+# bound and the atoms, so where they share the tangents' type they are reduced in place rather than
+# copied, which holds the signed channel to a single `n * L` array.
 function signed_magnitudes(u::AbstractVector{<:AbstractVector{T}}) where {T}
-    magtype(T) === T || return [map(magnitude, g) for g in u]
+    boundtype(T) === T || return [map(x -> tobound(T, magnitude(x)), g) for g in u]
     for g in u
         map!(magnitude, g, g)
     end
@@ -299,15 +299,16 @@ atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and th
 `h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
 
 `u[j]` must be nonnegative and dominate `abs.(∇v_j)` entrywise for the results to cover; both
-[`sensitivities`](@ref) and the magnitudes of [`tangents`](@ref) qualify. Which slots share an
-atom comes from [`atom_slots`](@ref), and the loop depends on its partitioning the slots: a slot
-in no atom would lose its contribution, one named twice would be counted twice.
+[`sensitivities`](@ref) and the magnitudes of [`tangents`](@ref) qualify. The merges are in
+[`boundtype`](@ref) of the tape's element type. Which slots share an atom comes from
+[`atom_slots`](@ref), and the loop depends on its partitioning the slots: a slot in no atom would
+lose its contribution, one named twice would be counted twice.
 
 Costs `O(n * L)` time and `O(n)` memory beyond `u`.
 """
 function merge_atoms(t::Tape{T}, rhos::AbstractVector, u::AbstractVector) where {T}
     n, N = t.ninputs, nnodes(t)
-    M = magtype(T)
+    M = boundtype(T)
     ssum = zeros(M, n)          # sum_k s_k
     ssq = zeros(M, n)           # sum over atoms of s_atom.^2
     sk = zeros(M, n)
@@ -337,9 +338,10 @@ end
 
 The elementwise bound
 `B = sum_k magnitude(vbar[k]) * sum_{i,j} magnitude(C^k[i,j]) * utilde_i * utilde_j'`, which
-satisfies `B >= abs.(H)` entrywise. Diagnostic only: `B` is `n × n`, and the two
-inequalities it discards — cancellation along paths (inside each `utilde`) and cancellation
-across elementals — are exactly the looseness this bound trades for its cost.
+satisfies `B >= abs.(H)` entrywise, in [`boundtype`](@ref) of the tape's element type.
+Diagnostic only: `B` is `n × n`, and the two inequalities it discards — cancellation along paths
+(inside each `utilde`) and cancellation across elementals — are exactly the looseness this bound
+trades for its cost.
 
 Each node's term is accumulated by [`bound_contribution!`](@ref), which every [`Curvature`](@ref)
 supplies in the form its structure allows. A [`DeclaredCurvature`](@ref) node contributes its
@@ -348,9 +350,9 @@ declaration.
 """
 function hessian_bound(t::Tape{T}, vbar::AbstractVector, utilde::AbstractVector) where {T}
     n, N = t.ninputs, nnodes(t)
-    B = zeros(magtype(T), n, n)
+    B = zeros(boundtype(T), n, n)
     for k in (n + 1):N
-        av = magnitude(vbar[k])
+        av = tobound(T, magnitude(vbar[k]))
         av == 0 && continue
         ps = t.parents[k]
         dispatchcurvature(t.Cs[k], T) do C
@@ -837,9 +839,15 @@ one extra `O(L)` forward sweep, once. [`guards_any_block`](@ref) answers which c
 without running a cover.
 """
 function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
-    value_bounds_split(c11, c12, c22, s1.value, s2.value, ratio) &&
-        return balanced_split(c11, c12, c22, s1.value, s2.value)
-    return balanced_split(c11, c12, c22, declared_scale(s1), declared_scale(s2))
+    # The split only picks a member of the family; an upward-rounded bound need not reach it, and
+    # the cover is made to hold afterwards (see `cover_slots!`).
+    c11, c12, c22 = plainvalue(c11), plainvalue(c12), plainvalue(c22)
+    z1, z2 = plainvalue(s1.value), plainvalue(s2.value)
+    value_bounds_split(c11, c12, c22, z1, z2, plainvalue(ratio)) &&
+        return balanced_split(c11, c12, c22, z1, z2)
+    return balanced_split(
+        c11, c12, c22, plainvalue(declared_scale(s1)), plainvalue(declared_scale(s2))
+    )
 end
 
 """
@@ -850,7 +858,8 @@ Per-node rank-1 covers. For node `k`, `rhos[k][i] >= 0` satisfies
 except at
 entries a [`dead_slot`](@ref) empties; nodes with no second-order contribution get an empty
 `rhos[k]`. `theta[j] = sum_k rhos[k][i]` collects the weight each node receives as a parent, which
-seeds the reverse sweep of [`abs_reverse`](@ref).
+seeds the reverse sweep of [`abs_reverse`](@ref); it is in [`boundtype`](@ref) of the tape's
+element type, so the sweep it seeds rounds as the tape asks.
 
 Each node's cover comes from [`cover_slots`](@ref), dispatching on its [`Curvature`](@ref). A
 [`DeclaredCurvature`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings its
@@ -866,11 +875,10 @@ function local_covers(
         scales = nothing, ratio = nothing
     ) where {T}
     N = nnodes(t)
-    M = magtype(T)
     r = split_ratio(ratio, T)
     sc = split_scales(scales, t)
-    rhos = [M[] for _ in 1:N]
-    theta = zeros(M, N)
+    rhos = [magtype(T)[] for _ in 1:N]
+    theta = zeros(boundtype(T), N)
     for k in (t.ninputs + 1):N
         rho = local_cover_slots(r, t, k, magnitude(vbar[k]), sc; check)
         rho === nothing && continue
@@ -973,6 +981,9 @@ One reverse sweep in absolute-value arithmetic:
 With `theta` from [`local_covers`](@ref), `abar[1:t.ninputs]` is the sum-merge cover — the whole
 merge in a single gradient-cost sweep, because `sum_k s_k = sum_j theta[j] * utilde_j` is linear
 in the seeds.
+
+The sweep computes in the element type of `theta`, so seeds in [`boundtype`](@ref) give a sweep
+that rounds as the tape asks.
 """
 abs_reverse(t::Tape, theta::AbstractVector) = _reverse_sweep(_absslot, t, theta)
 
@@ -1060,6 +1071,9 @@ The gradient is in the tape's element type `T` and the covers in [`magtype`](@re
 be a type whose values stand for sets, such as `Interval{Float64}` from IntervalArithmetic.jl:
 recording `f` over a box `x0 = interval.(lo, hi)` then gives covers (here `Vector{Float64}`) that
 hold at every point of the box, and a gradient whose entries enclose the gradient over the box.
+The sweeps over such a tape round every sum, product and square root upward (see
+[`boundtype`](@ref)), so the covers hold exactly; on a tape of points they hold up to the rounding
+of the sweeps.
 Control flow in `f` that the box does not decide, such as a comparison between overlapping
 intervals, raises an error, as does an elemental evaluated outside its domain somewhere on the box
 (see [`check_values`](@ref)).
@@ -1124,11 +1138,11 @@ function cover_hessian(
     n = t.ninputs
     vbar = adjoints(t, outidx)
     u = tangent_channel(channel, t)
-    B = hessian_bound(t, vbar, u)
+    B = tomag(T, hessian_bound(t, vbar, u))
     rhos, theta = local_covers(t, vbar; check, scales, ratio)
 
-    h_sum, h_quad = merge_atoms(t, rhos, u)
-    h_sum_rev = abs_reverse(t, theta)[1:n]
+    h_sum, h_quad = tomag.(T, merge_atoms(t, rhos, u))
+    h_sum_rev = tomag(T, abs_reverse(t, theta)[1:n])
 
     if check
         # These computations share most operations, so their roundoff errors are correlated.
@@ -1177,7 +1191,7 @@ function cover_hessian(
     r = split_ratio(ratio, T)
     sc = split_scales(scales, t)
     vbar = zeros(T, N)
-    abar = zeros(magtype(T), N)
+    abar = zeros(boundtype(T), N)
     qbar = zeros(magtype(T), N)
     vbar[outidx] = 1
     for k in N:-1:1
@@ -1200,7 +1214,7 @@ function cover_hessian(
             qbar[p] += d^2 * qk
         end
     end
-    return HessianCover(vbar[1:n], abar[1:n], sqrt.(qbar[1:n]))
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
 end
 
 function cover_hessian(
@@ -1276,7 +1290,7 @@ function cover_lattice(
     vbar = adjoints(t, outidx)
     # Seeded at the output alone and carrying no rho weights, the absolute reverse sweep returns
     # the path sum that abs.(vbar) would equal if no adjoint path cancelled.
-    seed = zeros(M, N)
+    seed = zeros(boundtype(T), N)
     seed[outidx] = 1
     acheck = abs_reverse(t, seed)
 
@@ -1288,16 +1302,16 @@ function cover_lattice(
     grad = copy(w[outidx])
     w = signed_magnitudes(w)
 
-    B = hessian_bound(t, vbar, utilde)
-    B_signed = hessian_bound(t, vbar, w)
+    B = tomag(T, hessian_bound(t, vbar, utilde))
+    B_signed = tomag(T, hessian_bound(t, vbar, w))
 
     rhos_signed, theta = local_covers(t, vbar; check, scales, ratio)
     rhos_abs, _ = local_covers(t, acheck; check, scales, ratio)
 
-    h_sum, h_quad = merge_atoms(t, rhos_signed, utilde)
-    h_sum_absadj, h_quad_absadj = merge_atoms(t, rhos_abs, utilde)
-    h_sum_signed, h_quad_signed = merge_atoms(t, rhos_signed, w)
-    h_sum_forward, h_quad_forward = merge_atoms(t, rhos_abs, w)
+    h_sum, h_quad = tomag.(T, merge_atoms(t, rhos_signed, utilde))
+    h_sum_absadj, h_quad_absadj = tomag.(T, merge_atoms(t, rhos_abs, utilde))
+    h_sum_signed, h_quad_signed = tomag.(T, merge_atoms(t, rhos_signed, w))
+    h_sum_forward, h_quad_forward = tomag.(T, merge_atoms(t, rhos_abs, w))
 
     if check
         rtol = eps(M)^(3 // 4)
@@ -1305,13 +1319,13 @@ function cover_lattice(
         # their roundoff scales with the size of the terms rather than of the result: a coordinate
         # that cancels to zero still absorbs the error of the largest path reaching it. That
         # scale is `utilde[outidx]`, floored at one to keep the comparison absolute near zero.
-        gscale = utilde[outidx]
+        gscale = tomag(T, utilde[outidx])
         grad_rev = view(vbar, 1:n)
         s, q = worst_severity(@. separation(grad, grad_rev) / (rtol * max(gscale, one(M))))
         s > 1 &&
             error("forward-sweep gradient mismatch at input $q: forward=$(grad[q]) reverse=$(vbar[q])")
         # These two share most operations, so their roundoff errors are correlated.
-        h_sum_rev = abs_reverse(t, theta)[1:n]
+        h_sum_rev = tomag(T, abs_reverse(t, theta)[1:n])
         s, q = worst_severity(@. abs(h_sum - h_sum_rev) / (rtol * max(h_sum, one(M))))
         s > 1 &&
             error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")

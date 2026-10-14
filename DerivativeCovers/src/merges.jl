@@ -90,7 +90,8 @@ still has them spread across channels. Which atoms share a channel remains a mat
 they appear in.
 
 With `rhos` from [`local_covers`](@ref), column `j` collects exactly the seeds that
-[`abs_reverse`](@ref) propagates into the group partial sums.
+[`abs_reverse`](@ref) propagates into the group partial sums. `Theta` is in [`boundtype`](@ref) of
+the tape's element type.
 """
 function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:Integer}) where {T}
     N = nnodes(t)
@@ -98,7 +99,7 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:
         throw(DimensionMismatch("groups has length $(length(groups)), expected $N (one per node)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
     G = maximum(groups)
-    Theta = zeros(magtype(T), G, N)
+    Theta = zeros(boundtype(T), G, N)
     for k in (t.ninputs + 1):N
         rho = rhos[k]
         isempty(rho) && continue
@@ -115,7 +116,7 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, ngroups::Integer) where {
     N = nnodes(t)
     # Channels beyond the atom count would stay empty, so the sweep need not carry them.
     G = max(1, min(Int(ngroups), natoms(t)))
-    Theta = zeros(magtype(T), G, N)
+    Theta = zeros(boundtype(T), G, N)
     a = 0
     for k in (t.ninputs + 1):N
         rho = rhos[k]
@@ -138,8 +139,8 @@ end
 Vector-mode form of [`abs_reverse`](@ref): each row of `Theta` is an independent seed vector over
 the nodes (columns), and all rows are propagated in one traversal. `Abar[:, a]` for an input `a`
 holds that input's value for every channel. The seeds are nonnegative magnitudes, as
-[`group_seeds`](@ref) returns them in [`magtype`](@ref) of the tape's element type, and `Abar`
-holds them in their floating-point type.
+[`group_seeds`](@ref) returns them in [`boundtype`](@ref) of the tape's element type, and the
+sweep computes in their type.
 """
 function abs_reverse(t::Tape, Theta::AbstractMatrix)
     size(Theta, 2) == nnodes(t) ||
@@ -213,12 +214,12 @@ end
 
 # Accept precomputed adjoints so callers such as cover_nls can reuse their gradient sweep.
 function _cover_hybrid(
-        t::Tape, vbar::AbstractVector, spec;
+        t::Tape{T}, vbar::AbstractVector, spec;
         check::Bool = true, scales = nothing, ratio = nothing
-    )
+    ) where {T}
     rhos, _ = local_covers(t, vbar; check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, rhos, spec))
-    return [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs]
+    return tomag(T, [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs])
 end
 
 function cover_hybrid(f, x0::AbstractVector, spec; check::Bool = true, scales = nothing, ratio = nothing)
