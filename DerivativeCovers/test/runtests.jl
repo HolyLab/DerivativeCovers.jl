@@ -400,10 +400,22 @@ include("maxpath.jl")
                 x -> abs(x[1]) + x[2], x -> abs(x[1]) * x[2], x -> exp(abs(x[1])) * x[2],
                 x -> 2.0^abs(x[1]) + x[2], x -> sum(abs.(x)), x -> sum(abs, x[1:1]),
                 x -> dot(abs.(x), x), x -> dot(abs.(x[1:1]), x[1:1]) + x[2],
+                x -> x[2] * abs(x[1]), x -> abs(x[1]) * abs(x[1]) + x[2],
+                x -> dot(x, abs.(x)),
             )
             @test_throws "sign of its argument is not decided" cover_hessian(f, z)
             @test_throws "sign of its argument is not decided" forward_cover(f, z)
         end
+        # The vector recorders that catch an `UndecidedAbs` leave other abstractly typed vectors
+        # unsupported, as they were.
+        t, _ = tape_function(x -> x[1] + x[2], z)
+        xs = CoverVar{Float64}[TVar(t, 1), TVar(t, 2)]
+        @test_throws MethodError DerivativeCovers.linearnode([1.0, 2.0], xs)
+        @test_throws MethodError DerivativeCovers.dotnode(xs, xs)
+        # A typed literal obtained from one is a constant of the operand's backend.
+        a = abs(TVar(t, 1))
+        @test a isa DerivativeCovers.UndecidedAbs
+        @test zero(a) isa TVar{Float64} && isconstant(zero(a)) && value(zero(a)) == 0
         @test_throws "unless p >= 2" cover_hessian(x -> abs(x[1])^1.5 + x[2], z)
         @test_throws "unless p >= 2" forward_cover(x -> abs(x[1])^1 + x[2], z)
         @test_throws "requires a positive base" cover_hessian(x -> abs(x[1])^x[2], z)
