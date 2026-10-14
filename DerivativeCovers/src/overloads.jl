@@ -2,7 +2,7 @@
 # use. They are written against [`CoverVar`](@ref) and reach a backend only through the recorders
 # `unarynode`, `binarynode`, `dotnode` and `linearnode`, so one table serves every backend.
 
-import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs2, adjoint,
+import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs, abs2, adjoint,
     transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 # The in-place rules below extend LinearAlgebra's generic product entry points, which are reached
@@ -182,6 +182,75 @@ function sqrt(x::CoverVar)
     return unarynode(x, sqrt(v), 0.5 * v^(-0.5), -0.25 * v^(-1.5))
 end
 abs2(x::CoverVar) = isconstant(x) ? constantvar(typeof(x), value(x)^2) : unarynode(x, value(x)^2, 2 * value(x), 2)
+
+# --- absolute value ---
+# Where the sign of the operand is decided, `abs` is linear with slope ±1. Where it is not, the
+# operand reaches the kink at zero, where `abs` has no derivative, and `abs` returns an
+# `UndecidedAbs` instead of recording a node. The only elemental that accepts one is a constant
+# power `p >= 2`, which records `|x|^p` as a single node on the operand: that composite is twice
+# differentiable at zero, with bounded partials on any set containing it. Every other use raises a
+# `DomainError`.
+function abs(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), abs(value(x)))
+    v = value(x)
+    s = decided_sign(v)
+    return iszero(s) ? UndecidedAbs(x) : unarynode(x, abs(v), s, 0)
+end
+
+"""
+    UndecidedAbs(x::CoverVar)
+
+`abs(x)` for a non-constant `x` whose sign is not decided (see [`decided_sign`](@ref)). It records
+nothing. A constant power `UndecidedAbs(x)^p` with `p >= 2` records `|x|^p` as one node on `x`;
+every recorder throws a `DomainError` when handed one.
+"""
+struct UndecidedAbs{T, V <: CoverVar{T}} <: CoverVar{T}
+    x::V
+end
+
+value(a::UndecidedAbs) = abs(value(a.x))
+isconstant(::UndecidedAbs) = false
+constantvar(::Type{<:UndecidedAbs{T, V}}, c::Real) where {T, V} = constantvar(V, c)
+
+@noinline undecided_abs(a::UndecidedAbs) = throw(
+    DomainError(
+        value(a.x),
+        "abs is not differentiable where the sign of its argument is not decided; there it is " *
+            "accepted only as the base of a constant power p >= 2"
+    )
+)
+
+unarynode(a::UndecidedAbs, val, d, c) = undecided_abs(a)
+binarynode(a::UndecidedAbs, ::CoverVar, args...) = undecided_abs(a)
+binarynode(::CoverVar, a::UndecidedAbs, args...) = undecided_abs(a)
+binarynode(a::UndecidedAbs, ::UndecidedAbs, args...) = undecided_abs(a)
+# A vector holding an `UndecidedAbs` has an element type no backend's vector recorders accept.
+function linearnode(coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:CoverVar})
+    i = findfirst(x -> x isa UndecidedAbs, xs)
+    i === nothing && throw(MethodError(linearnode, (coeffs, xs)))
+    return undecided_abs(xs[i])
+end
+function dotnode(ws::AbstractVector{<:CoverVar}, xs::AbstractVector{<:CoverVar})
+    for v in (ws, xs)
+        i = findfirst(x -> x isa UndecidedAbs, v)
+        i === nothing || return undecided_abs(v[i])
+    end
+    throw(MethodError(dotnode, (ws, xs)))
+end
+
+function ^(a::UndecidedAbs, p::Real)
+    p >= 2 || throw(
+        DomainError(
+            p, "abs(x)^p is not twice differentiable at x = 0 unless p >= 2, and the sign of " *
+                "x is not decided ($(value(a.x)))"
+        )
+    )
+    x = a.x
+    v = value(x)
+    m = abs(v)
+    return unarynode(x, m^p, p * v * m^(p - 2), p * (p - 1) * m^(p - 2))
+end
+^(a::UndecidedAbs, p::Integer) = invoke(^, Tuple{UndecidedAbs, Real}, a, p)
 
 # --- inner products and matrix-vector products ---
 # Variable-variable products use inner-product nodes; constant coefficients use linear nodes.

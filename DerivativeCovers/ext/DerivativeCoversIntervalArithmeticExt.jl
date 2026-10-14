@@ -9,9 +9,10 @@ gradient is an interval vector enclosing the gradient over the box.
 
 Control flow in the program that the box does not decide, such as `x > 0` for an `x` whose
 interval contains zero, raises IntervalArithmetic's `InconclusiveBooleanOperation` while
-recording. An elemental evaluated outside its domain on part of the box, such as `log` of an
-interval containing zero, does not raise in IntervalArithmetic; it returns an interval decorated
-`trv`. `check_values` looks for that decoration on every recorded value, first partial and unary
+recording. `abs` of an interval containing zero is accepted only as the base of a constant power
+`p >= 2` (see [`DerivativeCovers.decided_sign`](@ref)). An elemental evaluated outside its domain
+on part of the box, such as `log` of an interval containing zero, does not raise in
+IntervalArithmetic; it returns an interval decorated `trv`. `check_values` looks for that decoration on every recorded value, first partial and unary
 or binary second partial, and throws a `DomainError` naming the first node that carries it.
 `forward_cover`, which keeps no tape, makes the same check at each elemental as it reaches it.
 
@@ -27,6 +28,8 @@ using DerivativeCovers: DerivativeCovers, CoverSite, Tape, TapeSite, UnaryCurvat
 using IntervalArithmetic: Interval, decoration, inf, mag, sup, trv
 
 DerivativeCovers.magnitude(x::Interval) = mag(x)
+
+DerivativeCovers.decided_sign(x::Interval) = inf(x) > 0 ? 1 : sup(x) < 0 ? -1 : 0
 
 # The gap between two intervals, zero when they overlap.
 DerivativeCovers.separation(x::Interval, y::Interval) =

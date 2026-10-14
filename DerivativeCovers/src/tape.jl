@@ -32,6 +32,18 @@ to compare two computations of the same gradient.
 separation(x, y) = abs(x - y)
 
 """
+    decided_sign(x)
+
+`1` if `x` is positive, `-1` if it is negative, and `0` otherwise: at zero, and for a value whose
+sign cannot be determined, such as `NaN`. A type whose values stand for sets extends this to return
+`1` or `-1` only when every member of the set has that sign, so that a set containing zero, or
+members of both signs, gives `0`.
+
+`abs` of a program variable uses this to decide whether the kink of `abs` at zero is reached.
+"""
+decided_sign(x) = x > 0 ? 1 : x < 0 ? -1 : 0
+
+"""
     check_values(t::Tape)
     check_values(site::CoverSite, val, ds, cs)
 
