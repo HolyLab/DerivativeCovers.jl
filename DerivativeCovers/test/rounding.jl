@@ -51,6 +51,11 @@ using DerivativeCovers: Upward, boundtype
         @test zero(Upward{Float64}) === Upward(0.0)
         @test one(Upward{Float64}) === Upward(1.0)
         @test max(Upward(1.0), Upward(2.0)) === Upward(2.0)
+        @test isless(Upward(1.0), Upward(2.0)) && !isless(Upward(2.0), Upward(1.0))
+        # Narrowing rounds upward; mixed precisions promote to the wider.
+        x32 = Upward{Float32}(Upward(0.1))
+        @test x32 isa Upward{Float32} && exact(x32) >= exact(0.1)
+        @test Upward(1.0f0) + Upward(0.5) isa Upward{Float64}
         @test Upward(1.0) < 2 && Upward(2.0) == 2
         @test sprint(show, Upward(1.5)) == "1.5"
     end

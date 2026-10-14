@@ -363,6 +363,13 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test covers_exactly(J' * Diagonal(R.(w)) * J, gramcover(t, outidxs, w))
         W = [0.1 0.3 0.0 0.2; 0.3 1.1 0.6 0.0; 0.0 0.6 0.7 0.15; 0.2 0.0 0.15 0.3]
         @test covers_exactly(J' * R.(W) * J, gramcover(t, outidxs, W))
+        # Seeds whose products round to the weights exactly but fall short of them in exact
+        # arithmetic must be raised before they seed the sweep.
+        v = [0.1, 0.3, 0.7, 1.1]
+        Wv = v .* v'
+        @test any(R(v[k]) * R(v[l]) < R(Wv[k, l]) for k in 1:4, l in 1:4)
+        @test covers_exactly(J' * R.(Wv) * J, gramcover(t, outidxs, Wv; v))
+        @test_throws "could not be raised" DerivativeCovers._exact_gram_seeds([1.0;;], [0.0])
     end
 
     @testset "a thin box reproduces the point cover — $name" for (name, f, lo, _) in box_programs
