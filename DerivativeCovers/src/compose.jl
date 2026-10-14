@@ -19,6 +19,9 @@ rescaling of either factor.
 
 Equality holds entrywise for sign-definite rank-1 factors covered exactly; in general the rule
 pays the same signed-cancellation looseness as any magnitude-level bound on a product.
+
+The arithmetic is that of the inputs' element type. Pass them as [`Upward`](@ref) vectors for a
+composite that holds exactly rather than up to rounding, as covers over a box should.
 """
 function compose_jacobian_cover(
         a2::AbstractVector, b2::AbstractVector,
@@ -49,7 +52,8 @@ The result covers `∇²f` at every `x` where all four inputs hold. At a single 
 magnitudes qualify as `gamma`. For a cover over a set of points, such as a box, each input must
 hold over the whole set: `(a, b)` and `S` at every `x` in it, and `hg` and `gamma` at every
 `F(x)`; the [`magnitude`](@ref)s of an interval gradient enclosing `∂g/∂y` over the set qualify as
-`gamma`.
+`gamma`. The arithmetic is that of the inputs' element type; pass them as [`Upward`](@ref) vectors
+for a composite that holds exactly rather than up to rounding, as covers over a box should.
 
 The chain rule `∇²f = J_F'*∇²g*J_F + Σ_k (∂g/∂y_k)*∇²F_k` bounds entrywise as
 `abs.(∇²f) <= (a⋅hg)² * b*b' + Σ_k gamma[k] * S[k,:]*S[k,:]'` — a sum of rank-1 magnitude atoms

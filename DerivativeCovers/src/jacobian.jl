@@ -13,15 +13,17 @@ The `m × n` surrogate of absolute sensitivities of the outputs `outidxs` with r
 inputs of `t`: `Utilde[k, j] ≥ |J_kj|`, tight when no signed path cancellation occurs between
 output `k` and input `j`. Formed by one `m`-channel absolute-value reverse sweep seeded at the
 output nodes (see [`abs_reverse`](@ref)), so it costs `O(m*L)` — a diagnostic, like the Hessian
-bound `B`. A repeated entry in `outidxs` yields an identical row.
+bound `B`. A repeated entry in `outidxs` yields an identical row. The sweep runs in
+[`boundtype`](@ref) of the tape's element type and the result is returned in its
+[`magtype`](@ref).
 """
 function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
     m, N = length(outidxs), nnodes(t)
-    Theta = zeros(magtype(T), m, N)
+    Theta = zeros(boundtype(T), m, N)
     for (k, o) in enumerate(outidxs)
         Theta[k, o] += 1
     end
-    return abs_reverse(t, Theta)[:, 1:t.ninputs]
+    return tomag(T, abs_reverse(t, Theta)[:, 1:t.ninputs])
 end
 
 """
@@ -156,9 +158,12 @@ function cover_jacobian(
     _check_surrogate_support(t, outidxs, Utilde, li)
     M = magtype(T)
     # scaled[k, j] = Ũ_kj / a_k, and zero on a dead output, whose row is zero anyway.
-    scaled = [w.a[k] > 0 ? Utilde[k, j] / w.a[k] : zero(M) for k in 1:m, j in 1:n]
-    b_quad = sqrt.(vec(sum(abs2, scaled; dims = 1)))
-    b_max = vec(maximum(scaled; dims = 1))
+    scaled = [
+        w.a[k] > 0 ? tobound(T, Utilde[k, j]) / w.a[k] : zero(boundtype(T))
+            for k in 1:m, j in 1:n
+    ]
+    b_quad = tomag(T, sqrt.(vec(sum(abs2, scaled; dims = 1))))
+    b_max = tomag(T, vec(maximum(scaled; dims = 1)))
 
     if check
         rtol = eps(M)^(2 // 3)
@@ -188,10 +193,11 @@ cover_jacobian(r, x0::AbstractVector; kwargs...) =
 
 # Output weights and their sum merge, without forming the surrogate. Explicit weights replace the
 # balancing construction outright, so naming a start or a round count alongside them asks for two
-# incompatible things.
-function _jacobian_weights(t::Tape, outidxs, start, rounds, a, li::LiveInfo)
+# incompatible things. Where the sweeps round upward, `b` is the sum merge swept afresh from the
+# final `a`, so that no step after that sweep, such as a regauge, rounds it.
+function _jacobian_weights(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where {T}
     aw, b, roots, nties = _jacobian_a(t, outidxs, start, rounds, a, li)
-    b === nothing && (b = _sum_merge_b(t, outidxs, aw, li))
+    (b === nothing || roundsup(T)) && (b = _sum_merge_b(t, outidxs, aw, li))
     _check_cover_factors(aw, b, li)
     return (; a = aw, b, roots, nties)
 end
@@ -278,13 +284,13 @@ function cover_jacobian_hybrid(
     a = first(_jacobian_a(t, outidxs, start, rounds, a, li))
 
     G = maximum(groups)
-    Theta = zeros(magtype(T), G, N)
+    Theta = zeros(boundtype(T), G, N)
     for (k, o) in enumerate(outidxs)
         # A dead output seeds nothing: its sensitivities are zero whatever weight it carries.
-        a[k] > 0 && (Theta[groups[k], o] += 1 / a[k])
+        a[k] > 0 && (Theta[groups[k], o] += inv(tobound(T, a[k])))
     end
     Abar = abs_reverse(t, Theta)              # G × N, group column-sums of Ũ/a at the inputs
-    b = [maximum(view(Abar, :, j)) for j in 1:n]
+    b = tomag(T, [maximum(view(Abar, :, j)) for j in 1:n])
     _check_cover_factors(a, b, li)
 
     if check
@@ -852,19 +858,20 @@ function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, slot::F = _absslot) 
             )
         )
     end
-    seeds = (a[k] > 0 ? inv(a[k]) : zero(a[k]) for k in eachindex(a))
+    seeds = (a[k] > 0 ? inv(tobound(T, a[k])) : zero(boundtype(T)) for k in eachindex(a))
     return _output_sweep(t, outidxs, seeds, slot)
 end
 
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
 # output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
-# and the seeds of a repeated output node add, as its repeated rows of `Ũ` do.
-_output_sweep(t::Tape, outidxs, seeds, slot::F = _absslot) where {F} =
-    _reverse_sweep(slot, t, _output_seeds(t, outidxs, seeds))[1:t.ninputs]
+# and the seeds of a repeated output node add, as its repeated rows of `Ũ` do. The sweep runs in
+# `boundtype(T)` and the result is returned in `magtype(T)`.
+_output_sweep(t::Tape{T}, outidxs, seeds, slot::F = _absslot) where {T, F} =
+    tomag(T, _reverse_sweep(slot, t, _output_seeds(t, outidxs, seeds))[1:t.ninputs])
 
 # Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; repeated nodes add.
 function _output_seeds(t::Tape{T}, outidxs, seeds) where {T}
-    theta = zeros(magtype(T), nnodes(t))
+    theta = zeros(boundtype(T), nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
         theta[o] += sk
     end

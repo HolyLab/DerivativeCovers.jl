@@ -47,7 +47,7 @@ function staged_channels(t, outidx)
     n = t.ninputs
     rhos, theta = local_covers(t, adjoints(t, outidx))
     abar, qbar = dependency_sweep(t, theta, variance_seeds(t, rhos))
-    return abar[1:n], sqrt.(qbar[1:n])
+    return DerivativeCovers.plainvalue.(abar[1:n]), sqrt.(qbar[1:n])
 end
 
 # `U2[k, j]` sums, over the paths from input `j` to output `k`, the squared path product: the
@@ -87,6 +87,7 @@ include("equilibrate.jl")
 include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
+include("rounding.jl")
 include("intervals.jl")
 include("maxpath.jl")
 

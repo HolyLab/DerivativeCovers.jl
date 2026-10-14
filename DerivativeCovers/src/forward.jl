@@ -37,7 +37,7 @@ split at, whether each local cover is verified, and the scratch a node writes th
 assembling its cover.
 
 `S` is the storage of the signed tangent channel, one entry of `T` per input, and `SM` that of the
-cover channel, one entry of `M =` [`magtype`](@ref)`(T)` per input. [`forward_cover`](@ref) derives
+cover channel, one entry of `M =` [`boundtype`](@ref)`(T)` per input. [`forward_cover`](@ref) derives
 both from the point it is given, so a `Vector` input propagates in `Vector`s and a `StaticVector`
 input in `StaticVector`s. `zerotangent` and `zerochannel` are zeros of the two storages, which
 fresh channels are copied from; the input variables share `zerochannel` as their cover channel. `scratch` is
@@ -61,7 +61,7 @@ mutable struct ForwardContext{T, S <: AbstractVector{T}, M, SM <: AbstractVector
 end
 
 function ForwardContext{T}(ratio, check, zerotangent::AbstractVector{T}, zerochannel::AbstractVector) where {T}
-    M = magtype(T)
+    M = boundtype(T)
     return ForwardContext{T, typeof(zerotangent), M, typeof(zerochannel)}(
         ratio, check, zerotangent, zerochannel, zero(zerochannel), M[]
     )
@@ -72,7 +72,7 @@ end
 
 The two vector channels an [`FVar`](@ref) carries beyond its value and its declared scale: the
 signed tangent `g = ∇v` (storage `S`, entries `T`), and the squared cover `G` (storage `SM`,
-entries `M =` [`magtype`](@ref)`(T)`) maintaining `sqrt.(G) * sqrt.(G)' >= magnitude.(∇²v)`
+entries `M =` [`boundtype`](@ref)`(T)`) maintaining `sqrt.(G) * sqrt.(G)' >= magnitude.(∇²v)`
 entrywise.
 
 `G` is squared rather than rooted because the recursion that maintains it is *linear* in the
@@ -95,11 +95,11 @@ end
 A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
 [`CoverVar`](@ref) backend.
 
-`S` and `SM` are the storage of the tangent and cover channels, and `M =` [`magtype`](@ref)`(T)`
-the type of the cover and of the declared scale (see [`ForwardContext`](@ref)). `M` and `SM`
-follow from `T` and `S`, so `FVar{T, S}` names the variable type as well. A constant carries the
-storage too, because generic numerical code builds typed literals from `eltype`, which is all it
-has to reach the backend by.
+`S` and `SM` are the storage of the tangent and cover channels, and `M =` [`boundtype`](@ref)`(T)`
+the type the cover and the declared scale are propagated in (see [`ForwardContext`](@ref)). `M`
+and `SM` follow from `T` and `S`, so `FVar{T, S}` names the variable type as well. A constant
+carries the storage too, because generic numerical code builds typed literals from `eltype`, which
+is all it has to reach the backend by.
 
 For each variable, the propagation holds the value, the signed tangent `∇v`, a squared cover of
 `∇²v` (see [`ForwardChannels`](@ref)), the scalar declared scale `sigma` the split falls back
@@ -129,7 +129,7 @@ end
 # A constant. Its storage is named rather than defaulted: a constant of the wrong storage combines
 # with nothing in the propagation that produced it.
 function FVar{T, S}(val) where {T, S}
-    M = magtype(T)
+    M = boundtype(T)
     return FVar{T, S, M, channeltype(S, M)}(val)
 end
 
@@ -462,7 +462,8 @@ forward pass cannot know how the output depends on the node it is at. The cover 
 
 The gradient is in the element type `T = float(eltype(x0))` and the cover in
 [`magtype`](@ref)`(T)`. As for [`cover_hessian`](@ref), `x0` may be a box of intervals: the
-gradient then encloses the gradient over the box and the cover holds at every point of it. An
+gradient then encloses the gradient over the box and the cover holds at every point of it, the
+propagation rounding its bounds upward (see [`boundtype`](@ref)). An
 elemental evaluated outside its domain somewhere on the box is an error (see
 [`check_values`](@ref)).
 
@@ -522,7 +523,7 @@ function forward_cover(
     length(x0) == 0 &&
         throw(ArgumentError("cannot propagate a cover through a program with no inputs"))
     w = check_input_scales(scales, length(x0))
-    M = magtype(T)
+    M = boundtype(T)
     z = channel_zero(x0, T)
     zm = channel_zero(x0, M)
     S, SM = typeof(z), typeof(zm)

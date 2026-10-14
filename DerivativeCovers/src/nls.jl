@@ -222,8 +222,9 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     vbar = adjoints(t, outidx)
     rhos, _ = local_covers(t, vbar; check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, rhos, groups))
-    h = [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n]
-    h_gn = [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n]
+    T = eltype(t)
+    h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n])
+    h_gn = tomag(T, [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n])
     h_var_gn = gramvariance(t, residx)
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var_gn)
 end

@@ -278,6 +278,93 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test cover_norm([interval(-1.0, 0.0), interval(1.0)], [0.0, 1.0]) === Inf
     end
 
+    @testset "boundtype" begin
+        @test DerivativeCovers.boundtype(Interval{Float64}) === DerivativeCovers.Upward{Float64}
+    end
+
+    # On a box of zero width the exact derivatives are rational, so a cover that falls short of
+    # them by rounding is caught exactly rather than within a tolerance. `c` converts a constant of
+    # the program: `identity` on the tape, `Rational{BigInt}` for the exact reference.
+    R(x) = Rational{BigInt}(x)
+    covers_exactly(H, h) = all(abs(H[i, j]) <= R(h[i]) * R(h[j]) for i in axes(H, 1), j in axes(H, 2))
+    dominates_exactly(J, a, b) =
+        all(abs(J[k, j]) <= R(a[k]) * R(b[j]) for k in axes(J, 1), j in axes(J, 2))
+    exact_programs = (
+        ("ten atoms", (x, c) -> sum(c(0.1) * x[1]^2 for _ in 1:10), [1.0]),
+        ("one atom, 0.1", (x, c) -> c(0.1) * x[1]^2, [1.0]),
+        ("one atom, 0.15", (x, c) -> c(0.15) * x[1]^2, [1.0]),
+        ("one atom, 0.6", (x, c) -> c(0.6) * x[1]^2, [1.0]),
+        ("one atom, 1.1", (x, c) -> c(1.1) * x[1]^2, [1.0]),
+        (
+            "products", (x, c) -> c(0.3) * x[1] * x[2] + c(1.1) * x[2]^3 + c(0.7) * x[1]^2 * x[3],
+            [0.1, 0.7, 1.3],
+        ),
+        ("dot", (x, c) -> c(0.1) * dot(x[1:2], x[3:4])^2 + c(0.3) * x[1] * x[4], [0.3, 0.7, 1.1, 0.9]),
+    )
+
+    @testset "covers over a box hold exactly — $name" for (name, f, x0) in exact_programs
+        X = interval.(x0)
+        fi = x -> f(x, identity)
+        H = ForwardDiff.hessian(x -> f(x, R), R.(x0))
+        c = cover_hessian(fi, X)
+        d = cover_hessian(WithDiagnostics(), fi, X)
+        ds = cover_hessian(WithDiagnostics(), fi, X; channel = SignedTangents())
+        lat = cover_lattice(fi, X)
+        @test covers_exactly(H, c.h_sum)
+        @test covers_exactly(H, cover_variance(fi, X).h_sum)
+        for e in (d, ds)
+            @test all(abs.(H) .<= R.(e.B))
+            @test covers_exactly(H, e.h_sum)
+            @test covers_exactly(H, e.h_quad)
+            @test covers_exactly(H, e.h_sum_rev)
+        end
+        @test all(abs.(H) .<= R.(lat.B)) && all(abs.(H) .<= R.(lat.B_signed))
+        for fld in (
+                :h_sum, :h_quad, :h_sum_absadj, :h_quad_absadj,
+                :h_sum_signed, :h_quad_signed, :h_sum_forward, :h_quad_forward,
+            )
+            @test covers_exactly(H, getfield(lat, fld))
+        end
+        @test covers_exactly(H, cover_hybrid(fi, X, 2))
+        @test covers_exactly(H, forward_cover(fi, X).h_quad)
+    end
+
+    @testset "Jacobian and least-squares covers over a box hold exactly" begin
+        r = (x, c) -> [
+            c(0.1) * x[1] * x[2], c(1.1) * x[2]^2 + c(0.3) * x[3], c(0.7) * x[1] * x[3]^2,
+            c(0.6) * x[3]^2,
+        ]
+        x0 = [0.3, 0.7, 1.3]
+        X = interval.(x0)
+        ri = x -> r(x, identity)
+        J = ForwardDiff.jacobian(x -> r(x, R), R.(x0))
+        for kw in ((;), (; start = :equal), (; rounds = 0), (; a = [0.1, 1.1, 0.7, 0.3]))
+            jc = cover_jacobian(ri, X; kw...)
+            @test dominates_exactly(J, jc.a, jc.b_sum)
+            jd = cover_jacobian(WithDiagnostics(), ri, X; kw...)
+            @test dominates_exactly(J, jd.a, jd.b_sum)
+            @test dominates_exactly(J, jd.a, jd.b_quad)
+            @test dominates_exactly(J, jd.a, jd.b_max)
+            @test all(abs.(J) .<= R.(jd.Utilde))
+        end
+        for G in 1:4
+            hy = cover_jacobian_hybrid(ri, X, G)
+            @test dominates_exactly(J, hy.a, hy.b)
+        end
+        loss = (x, c) -> sum(abs2, r(x, c)) / 2
+        H = ForwardDiff.hessian(x -> loss(x, R), R.(x0))
+        for nc in (cover_nls(ri, X), cover_nls(WithDiagnostics(), ri, X))
+            @test covers_exactly(H, nc.h)
+            @test covers_exactly(J' * J, nc.h_gn)
+        end
+        t, outidxs = tape_function(ri, X)
+        @test covers_exactly(J' * J, gramcover(t, outidxs))
+        w = [0.1, -1.1, 0.3, 0.7]
+        @test covers_exactly(J' * Diagonal(R.(w)) * J, gramcover(t, outidxs, w))
+        W = [0.1 0.3 0.0 0.2; 0.3 1.1 0.6 0.0; 0.0 0.6 0.7 0.15; 0.2 0.0 0.15 0.3]
+        @test covers_exactly(J' * R.(W) * J, gramcover(t, outidxs, W))
+    end
+
     @testset "a thin box reproduces the point cover — $name" for (name, f, lo, _) in box_programs
         c64 = cover_hessian(f, lo)
         c = cover_hessian(f, interval.(lo))

@@ -66,14 +66,17 @@ check_values(site, val, ds, cs) = nothing
 A Wengert tape recorded while a function runs on [`TVar`](@ref) inputs, holding its values and
 partials in the element type `T`. `eltype(t)` reports `T`: it is the working precision of the whole
 construction, and a value or weight a caller supplies is converted into it. Signed results such as
-gradients are returned in `T`; covers and other nonnegative bounds are computed and returned in
-[`magtype`](@ref)`(T)`, which is `T` itself for a real floating-point type.
+gradients are returned in `T`; covers and other nonnegative bounds are returned in
+[`magtype`](@ref)`(T)`, which is `T` itself for a real floating-point type, and computed in
+[`boundtype`](@ref)`(T)`.
 
 `T` may be a type whose values stand for sets of numbers, such as an interval type from
 IntervalArithmetic.jl. The values and partials recorded over a box then enclose those at every
 point of the box, [`magnitude`](@ref) takes the largest absolute value over each set, and the
-covers computed from the tape hold everywhere on the box. Program control flow that the set does
-not decide, such as a comparison between overlapping intervals, raises an error while recording.
+covers computed from the tape hold everywhere on the box: the sweeps round their bounds upward
+(see [`boundtype`](@ref)), so this holds exactly rather than up to rounding. Program control flow
+that the set does not decide, such as a comparison between overlapping intervals, raises an error
+while recording.
 
 The first `ninputs` nodes represent the function inputs. Later nodes are appended in topological
 order, so every parent precedes its child. Node `k` stores its value `vals[k]`, parent indices
