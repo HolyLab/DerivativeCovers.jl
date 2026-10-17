@@ -115,7 +115,9 @@ CoverLattice{T}(grad, B, rest...) where {T} = CoverLattice{T, magtype(T)}(grad, 
     adjoints(t::Tape, outidx::Integer) -> vbar
 
 Reverse-mode adjoints `vbar[k] = ∂v_outidx/∂v_k` for every node of `t`. The gradient of the
-program with respect to its inputs is `vbar[1:t.ninputs]`.
+program with respect to its inputs is `vbar[1:t.ninputs]`, and
+[`cover_hessian`](@ref)`(CoverOnly(), t, vbar)` computes the Hessian cover from these adjoints
+without propagating them again.
 """
 function adjoints(t::Tape{T}, outidx::Integer) where {T}
     N = nnodes(t)
@@ -1035,6 +1037,7 @@ const CoverMode = Union{CoverOnly, WithDiagnostics}
 """
     cover_hessian([mode], t::Tape, outidx::Integer; check=true, scales=nothing, ratio=nothing, channel=AbsoluteTangents())
     cover_hessian([mode], f, x0::AbstractVector; check=true, scales=nothing, ratio=nothing, channel=AbsoluteTangents())
+    cover_hessian(CoverOnly(), t::Tape, vbar::AbstractVector; check=true, scales=nothing, ratio=nothing)
 
 Compute a certified rank-1 cover of a scalar function's Hessian.
 
@@ -1100,6 +1103,10 @@ contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the variance channel of
 [`cover_variance`](@ref): a scale, not a cover.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
+
+Passing the node adjoints `vbar = `[`adjoints`](@ref)`(t, outidx)` in place of `outidx` runs the
+same sweep without the signed channel, for a caller that already holds the adjoints of a reverse
+pass. It returns the same [`HessianCover`](@ref) bit for bit, with `grad = vbar[1:ninputs]`.
 
 # `WithDiagnostics()`
 
@@ -1179,21 +1186,45 @@ function cover_hessian(
         ::CoverOnly, t::Tape{T}, outidx::Integer; check::Bool = true,
         scales = nothing, ratio = nothing, channel::TangentChannel = AbsoluteTangents()
     ) where {T}
-    channel isa AbsoluteTangents || throw(
-        ArgumentError(
-            "CoverOnly cannot merge over $(nameof(typeof(channel))): its single sweep exists " *
-                "because the absolute-tangent sum merge is linear in its seeds and collapses " *
-                "into one reverse sweep, and a signed channel takes magnitudes inside the merge, " *
-                "where nothing collapses. That channel costs O(n*L); ask for WithDiagnostics()"
-        )
-    )
+    check_cover_only_channel(channel)
     n, N = t.ninputs, nnodes(t)
-    r = split_ratio(ratio, T)
-    sc = split_scales(scales, t)
     vbar = zeros(T, N)
+    vbar[outidx] = 1
+    abar, qbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+end
+
+function cover_hessian(
+        ::CoverOnly, t::Tape{T}, vbar::AbstractVector; check::Bool = true,
+        scales = nothing, ratio = nothing, channel::TangentChannel = AbsoluteTangents()
+    ) where {T}
+    check_cover_only_channel(channel)
+    n, N = t.ninputs, nnodes(t)
+    axes(vbar) == (Base.OneTo(N),) || throw(
+        DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
+    )
+    abar, qbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+end
+
+check_cover_only_channel(channel::TangentChannel) = channel isa AbsoluteTangents || throw(
+    ArgumentError(
+        "CoverOnly cannot merge over $(nameof(typeof(channel))): its single sweep exists " *
+            "because the absolute-tangent sum merge is linear in its seeds and collapses " *
+            "into one reverse sweep, and a signed channel takes magnitudes inside the merge, " *
+            "where nothing collapses. That channel costs O(n*L); ask for WithDiagnostics()"
+    )
+)
+
+# The reverse sweep of `CoverOnly`, returning the absolute and variance channels `(abar, qbar)`.
+# With `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the
+# adjoints into it alongside the two channels. With `Val(false)`, `vbar` holds finished adjoints
+# and is only read. Both forms perform the same channel operations in the same order, so they
+# return identical channels whenever the adjoints agree.
+function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Bool) where {propagate, T}
+    N = nnodes(t)
     abar = zeros(boundtype(T), N)
     qbar = zeros(magtype(T), N)
-    vbar[outidx] = 1
     for k in N:-1:1
         vk, ak, qk = vbar[k], abar[k], qbar[k]
         ps = t.parents[k]
@@ -1205,16 +1236,17 @@ function cover_hessian(
                 qbar[p] += rho[i]^2
             end
         end
-        (iszero(avk) && ak == 0 && qk == 0) && continue
+        # Without adjoint propagation, a node whose channels are both zero has nothing to send.
+        ((!propagate || iszero(avk)) && ak == 0 && qk == 0) && continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
-            vbar[p] += ds[i] * vk
+            propagate && (vbar[p] += ds[i] * vk)
             d = magnitude(ds[i])
             abar[p] += d * ak
             qbar[p] += d^2 * qk
         end
     end
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+    return abar, qbar
 end
 
 function cover_hessian(

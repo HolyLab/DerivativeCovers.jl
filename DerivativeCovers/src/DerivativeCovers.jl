@@ -51,7 +51,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :split_scales, :split_block, :split_ratio, :guards_any_block, :sensitivity_scales,
             :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms, :CoverVar,
             :constantvar, :tangent_channel, :forward_scale, :magnitude, :magtype, :boundtype, :Upward, :separation,
-            :decided_sign, :check_values
+            :decided_sign, :check_values, :adjoints
         )
     )
     # The second-partial forms a node may carry, and the operations the sweeps perform on them.
