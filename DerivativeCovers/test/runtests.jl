@@ -149,7 +149,7 @@ include("maxpath.jl")
             :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
             :sensitivity_scales, :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms,
             :CoverVar, :constantvar, :tangent_channel, :forward_scale,
-            :magnitude, :magtype, :separation, :decided_sign, :check_values,
+            :magnitude, :magtype, :separation, :decided_sign, :check_values, :adjoints,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
@@ -170,7 +170,7 @@ include("maxpath.jl")
         # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
         private = (
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
-            :group_seeds, :adjoints, :sensitivities, :tangents, :abs_reverse, :abs_forward,
+            :group_seeds, :sensitivities, :tangents, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,

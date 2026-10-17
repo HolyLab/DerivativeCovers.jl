@@ -1,7 +1,7 @@
 # Recording over a box of intervals: covers hold at every point of the box, and the gradient
 # encloses the gradient there.
 
-using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, mid
+using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, isequal_interval, mid
 
 @testset "interval element type" begin
 
@@ -370,6 +370,16 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, m
         @test any(R(v[k]) * R(v[l]) < R(Wv[k, l]) for k in 1:4, l in 1:4)
         @test covers_exactly(J' * R.(Wv) * J, gramcover(t, outidxs, Wv; v))
         @test_throws "could not be raised" DerivativeCovers._exact_gram_seeds([1.0;;], [0.0])
+    end
+
+    @testset "the sweep from adjoints matches the full sweep — $name" for (name, f, lo, hi) in box_programs
+        t, outidx = tape_function(f, interval.(lo, hi))
+        c = cover_hessian(CoverOnly(), t, DerivativeCovers.adjoints(t, outidx))
+        pr = cover_hessian(CoverOnly(), t, outidx)
+        @test c isa HessianCover{Interval{Float64}, Float64}
+        @test all(isequal_interval.(c.grad, pr.grad))
+        @test c.h_sum == pr.h_sum
+        @test c.h_var == pr.h_var
     end
 
     @testset "a thin box reproduces the point cover — $name" for (name, f, lo, _) in box_programs
