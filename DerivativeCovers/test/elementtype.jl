@@ -212,8 +212,8 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
 
     @testset "a result type named by the element type alone fills in the cover type" begin
         v = Float32[1, 2]
-        @test NLSCover{Float32}(v, v, v, v, 2) isa NLSCover{Float32, Float32}
-        @test NLSDiagnostics{Float32}(v, v, v, v, Float32[1 2; 3 4], 2) isa
+        @test NLSCover{Float32}(v, v, v, v, v, 2) isa NLSCover{Float32, Float32}
+        @test NLSDiagnostics{Float32}(v, v, v, v, v, Float32[1 2; 3 4], 2) isa
             NLSDiagnostics{Float32, Float32}
         @test VarianceCover{Float32}(v, v, v, v) isa VarianceCover{Float32, Float32}
         @test HessianCover{Float32}(v, v, v) isa HessianCover{Float32, Float32}
