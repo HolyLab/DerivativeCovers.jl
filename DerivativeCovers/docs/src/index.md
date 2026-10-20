@@ -208,7 +208,9 @@ ratio of two scale references. Parent values are the reference wherever they car
 keeps the cover exactly covariant under a rescaling of the inputs and costs nothing beyond what
 the sweep already reads. At the blocks where they carry none — a vanishing value meeting a
 degenerate feasible segment — no covariant local choice exists at all, and the declared input
-scales stand in.
+scales stand in. A quotient whose numerator vanishes, or a power whose exponent does, reaches
+such a block only at the zero itself: on the approach the split stays covariant but grows without
+bound, and at the zero the cover drops to the finite one the declared scales give.
 
 Two keywords on every cover entry point state that fallback: `scales`, one strictly positive
 entry per input (`nothing` means unit scales, asserting that the inputs share units), and `ratio`,

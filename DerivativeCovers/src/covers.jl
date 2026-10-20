@@ -430,10 +430,17 @@ that carries the information and the ratio is unavailable:
   - `z1 == z2 == 0`, for any block.
 
 A multiplication node with a vanishing operand has `c11 == c22 == 0` and meets all three at
-once. Among the elementals of `overloads.jl` it is the only source of the first and third:
-`c22 == 0` otherwise requires `x^y` at `x == 1`, and `^` rejects a nonpositive base, so it
-never presents a vanishing `z1`. The second is also reached by `x^y` at a zero exponent, where
-`c11 == 0` and `z2 == 0` while `c22 > 0`.
+once. Among the other elementals of `overloads.jl`, a quotient `u/w` meets the first at `u == 0`,
+since `c22 = 2u/w^3` vanishes with the numerator, and `x^y` meets the second at a zero exponent,
+where `c11 == 0` and `z2 == 0` while `c22 > 0`.
+
+The continuity above is continuity in the values with the block held fixed. At those two
+elementals the block moves with the value: the diagonal entry that bounds the feasible segment is
+proportional to the vanishing value, so the endpoint the clamp settles on moves too, and the seed
+of the slot whose value vanishes grows like `|value|^(-1/2)`. The split stays covariant and
+valid, but the cover grows without bound as the value approaches zero while the derivatives it
+covers stay finite, and at the zero itself the block falls into the families above and the
+cover jumps to a finite one.
 
 These zero-reference cases concern the value channel, and they are exactly the ones
 [`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there,
@@ -507,12 +514,18 @@ split_fallback(lo, hi, c12, z1, z2) = sqrt(lo * hi)
 Whether the value pair `(z1, z2)` fixes the split of the block `[c11 c12; c12 c22]`.
 
 [`balanced_split`](@ref) aims at `sqrt(c12*z2/z1)` and clamps it to the feasible segment
-`[sqrt(c11), c12/sqrt(c22)]`, so a pair carrying no scale is harmless wherever the endpoint it runs
-toward is positive and finite: the clamp supplies the answer, and both endpoints are covariant.
-What is left is the pair of cases where that endpoint is degenerate as well — `c22 == 0` puts the
-upper endpoint at infinity, `c11 == 0` puts the lower one at zero — together with two vanishing
-values, which leave the ratio `z2/z1` undefined whatever the block. `ratio` is how lopsided a pair
-must be to count as carrying no scale.
+`[sqrt(c11), c12/sqrt(c22)]`, so a pair carrying no scale still yields a covariant split wherever
+the endpoint it runs toward is positive and finite: the clamp supplies the answer, and both
+endpoints are covariant. What is left is the pair of cases where that endpoint is degenerate as
+well — `c22 == 0` puts the upper endpoint at infinity, `c11 == 0` puts the lower one at zero —
+together with two vanishing values, which leave the ratio `z2/z1` undefined whatever the block.
+`ratio` is how lopsided a pair must be to count as carrying no scale.
+
+The test compares `z1` and `z2` directly, which is not invariant when the two parents carry
+different units, so it is applied only where no covariant split exists. In particular a block
+whose bounding diagonal entry is proportional to the vanishing value — a quotient's numerator, a
+power's exponent — has its split fixed by the values until the value is exactly zero, and that
+split grows without bound on the approach; see [`balanced_split`](@ref).
 """
 function value_bounds_split(c11, c12, c22, z1, z2, ratio)
     (z1 == 0 && z2 == 0) && return false
@@ -821,11 +834,11 @@ end
 
 The member of the block's cover family the split selects, from the two channels each slot carries.
 
-Parent values fix the split covariantly and continuously except at blocks where a vanishing value
-meets a degenerate feasible segment, and there no covariant local choice exists at all: the
-equalizing point runs to an endpoint that is itself zero or infinite. So the values are read
-wherever they carry a usable scale and the declared input scales stand in wherever they do not,
-which keeps covariance where it is attainable and asks for units only where it is not.
+Parent values fix the split covariantly except at blocks where a vanishing value meets a degenerate
+feasible segment, and there no covariant local choice exists at all: the equalizing point runs to
+an endpoint that is itself zero or infinite. So the values are read wherever they carry a usable
+scale and the declared input scales stand in wherever they do not, which keeps covariance where it
+is attainable and asks for units only where it is not.
 [`value_bounds_split`](@ref) is the test and `ratio` its threshold; see [`split_ratio`](@ref).
 
 The guard compares two differently scaled quantities and is therefore not itself invariant: a
