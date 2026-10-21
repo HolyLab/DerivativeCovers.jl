@@ -2,6 +2,8 @@
 DerivativeCoverProblems = "37db61e4-0844-41b4-bf47-3d76f271524d"
 DerivativeCovers = "b3df4d26-329c-4856-95c3-f070459abeb7"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+IntervalArithmetic = "d1acc4aa-44c8-5952-acd4-ba5d80a2a253"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MatrixCovers = "727e6139-ff52-4636-a344-ed1d23e73ffc"
 
 [sources]
@@ -10,4 +12,6 @@ DerivativeCovers = {path = ".."}
 
 [compat]
 Documenter = "1.17.0"
+IntervalArithmetic = "1"
+LinearAlgebra = "1"
 MatrixCovers = "1"

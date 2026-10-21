@@ -1,19 +1,150 @@
 ```@meta
 CurrentModule = DerivativeCovers
-DocTestSetup = quote
-    using DerivativeCovers
-end
 ```
 
 # DerivativeCovers
 
-```@docs
-DerivativeCovers
+DerivativeCovers computes rank-one bounds on the magnitudes of the entries of a
+program's Hessian or Jacobian, without forming either matrix. For a scalar
+function `f` whose Hessian at `x0` is `H`, a *Hessian cover* is a nonnegative
+vector `h` satisfying
+
+```math
+|H_{ij}| \;\le\; h_i\, h_j \quad \text{for all } i, j.
 ```
+
+For a vector-valued function whose Jacobian at `x0` is `J`, a *Jacobian cover*
+is a pair of nonnegative vectors `a` and `b` satisfying
+``|J_{kj}| \le a_k\, b_j`` for all `k`, `j`.
+
+These are the covers of
+[MatrixCovers](https://github.com/HolyLab/MatrixCovers.jl), which computes them
+from an explicit matrix. Forming a Hessian takes ``O(nL)`` work for a program
+with `n` inputs and `L` operations. DerivativeCovers records the program once
+and computes a Hessian cover from the recording in ``O(L)`` work, a small
+multiple of the cost of the gradient, which it returns as well.
+
+The bound is *certified*: it holds for the exact derivatives at `x0`, up to the
+floating-point rounding of the computation. When the program is recorded over
+intervals, the bound holds at every point of the box, with no rounding caveat
+(see [Covers over a box](@ref)).
+
+## Why covers?
+
+Covers provide the natural scales of an optimization problem. The variables of
+a problem often have different units, and many quantities used by optimization
+algorithms depend on the choice of those units. Changing the units of the
+variables, `x → D*x` for a positive diagonal `D`, changes the Hessian to
+`inv(D)*H*inv(D)`, and the cover changes with it, `h → inv(D)*h`. Quantities
+formed by dividing by the cover are therefore independent of the units.
+
+Consider fitting a decaying exponential to data. The two parameters, an
+amplitude and a time constant in seconds, differ in size by six orders of
+magnitude:
+
+```jldoctest decay
+julia> using DerivativeCovers, LinearAlgebra
+
+julia> ts = [0.0, 0.001, 0.002, 0.004, 0.008];    # sample times, in seconds
+
+julia> ys = 2000 .* exp.(-ts ./ 0.003);            # amplitude 2000, time constant 3 ms
+
+julia> loss(p) = sum((p[1] * exp(-ts[i] / p[2]) - ys[i])^2 for i in eachindex(ts)) / 2;
+
+julia> p0 = [1800.0, 0.0035];
+
+julia> c = cover_hessian(loss, p0);
+
+julia> round.(c.h_sum; sigdigits=4)
+2-element Vector{Float64}:
+ 3.118
+ 1.123e6
+
+julia> round.(c.grad; sigdigits=4)
+2-element Vector{Float64}:
+ -246.8
+    3.456e6
+```
+
+[`cover_hessian`](@ref) returns the gradient `c.grad` along with the cover
+`c.h_sum`. Is this gradient large? Its norm is dominated by the derivative with
+respect to the time constant, and that derivative is large only because the
+time constant is expressed in seconds. Expressing it in milliseconds instead
+shrinks the gradient norm a thousandfold, while the problem is unchanged:
+
+```jldoctest decay
+julia> loss_ms(q) = loss([q[1], q[2] / 1000]);   # time constant in milliseconds
+
+julia> q0 = [1800.0, 3.5];
+
+julia> cms = cover_hessian(loss_ms, q0);
+
+julia> round.(cms.h_sum; sigdigits=4)
+2-element Vector{Float64}:
+    3.118
+ 1123.0
+
+julia> round(norm(c.grad) / norm(cms.grad); sigdigits=4)
+997.5
+```
+
+The cover changed exactly as the units did. The gradient measured relative to
+the cover, `norm(g ./ h)`, does not depend on the units of the parameters, so
+a convergence test based on it does not either (see [`Diagnostics.cover_norm`](@ref DerivativeCovers.Diagnostics.cover_norm)):
+
+```jldoctest decay
+julia> norm(c.grad ./ c.h_sum) ≈ norm(cms.grad ./ cms.h_sum)
+true
+```
+
+The cover was computed without forming the Hessian. For this small problem we
+can form it from Hessian-vector products ([`hvp`](@ref)) and confirm the bound:
+
+```jldoctest decay
+julia> H = reduce(hcat, [hvp(loss, p0, e) for e in eachcol(Matrix(1.0I, 2, 2))]);
+
+julia> all(abs.(H) .<= c.h_sum .* c.h_sum')
+true
+```
+
+Dividing the Hessian by the cover removes the scaling. The condition number of
+`H` reflects the units more than the problem; that of the scaled Hessian does
+not:
+
+```jldoctest decay
+julia> round(cond(H); sigdigits=2)
+7.0e10
+
+julia> Hhat = H ./ (c.h_sum .* c.h_sum');
+
+julia> round(cond(Hhat); sigdigits=2)
+5.6
+```
+
+[Using a cover](@ref) describes these and other uses.
+
+## Which function to use
+
+| Function | Bounds | Cost | Certified |
+|---|---|---|---|
+| [`cover_hessian`](@ref) | Hessian of a scalar function | ``O(L)`` | `h_sum` yes; `h_var` no |
+| [`cover_hessian`](@ref)`(WithDiagnostics(), …)` | adds a tighter cover `h_quad` and an elementwise bound | ``O(nL)`` time, ``O(n^2)`` memory | yes |
+| [`cover_hybrid`](@ref) | Hessian, between `h_sum` and `h_quad` | ``O(GL)`` for `G` groups | yes |
+| [`forward_cover`](@ref) | Hessian, without recording the program | ``O(nL)`` time, ``O(n)`` memory per live variable | yes |
+| [`cover_variance`](@ref) | `h_sum`, plus an estimate of how much it overlaps | ``O(L)`` | `h_sum` only |
+| [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(GL)``, with `G = m` residual channels by default | `h`, `h_gn` yes; `h_var`, `h_var_gn` no |
+| [`cover_jacobian`](@ref) | Jacobian of a vector-valued function | a few ``O(L)`` sweeps | yes |
+| [`cover_jacobian_hybrid`](@ref) | Jacobian, tighter than the default | ``O(GL)`` for `G` groups | yes |
+| [`cover_lattice`](@ref) | four variants of the Hessian cover, for analysis | ``O(nL)`` | yes |
+
+For most uses, [`cover_hessian`](@ref) and [`cover_jacobian`](@ref) are the
+place to start. The ``O(L)`` cover `h_sum` can be loose when many paths through
+the program reconverge; [Computing covers](@ref) describes the options that
+trade cost for tightness, and [Tightness](@ref) describes how to measure it.
 
 ## Installation
 
-DerivativeCovers is not yet registered. Install it directly from its subdirectory in the
+DerivativeCovers is not yet registered. Install it from its subdirectory in the
 repository:
 
 ```julia
@@ -21,232 +152,21 @@ using Pkg
 Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="DerivativeCovers")
 ```
 
-## Quick start
+## Organization of this manual
 
-Call [`cover_hessian`](@ref) with a scalar function and an evaluation point:
-
-```jldoctest quickstart
-julia> f(x) = exp(x[1]) + sum(x[i] * x[i+1] for i in 1:length(x)-1);
-
-julia> x0 = [0.5, -1.2, 0.3, 0.8];
-
-julia> c = cover_hessian(f, x0);
-
-julia> round.(c.h_sum; digits=4)
-4-element Vector{Float64}:
- 2.8332
- 1.1455
- 3.633
- 0.6124
-```
-
-The result contains a nonnegative vector `h` such that
-`abs(H[i,j]) <= h[i] * h[j]` for every entry of the Hessian `H`. The Hessian itself is never
-formed. The same reverse sweep also computes the gradient:
-
-```jldoctest quickstart
-julia> round.(c.grad; digits=4)
-4-element Vector{Float64}:
-  0.4487
-  0.8
- -0.4
-  0.3
-```
-
-This computation takes one forward pass and one paired reverse sweep: `O(L)` work for a tape
-of length `L`. Use [`cover_jacobian`](@ref) for vector-valued functions, [`cover_nls`](@ref) for
-nonlinear least-squares objectives, and [`cover_variance`](@ref) for the cheaper, uncertified
-variance estimate.
-
-## Using a cover
-
-If `h` covers a Hessian `H`, then `h[i] * h[j]` bounds `abs(H[i,j])`, `norm(h)^2` bounds the
-spectral radius, and `h .* (h' * abs.(d))` bounds `abs.(H * d)`. The package can also compute
-exact matrix-free products with [`hvp`](@ref), [`jvp`](@ref), and [`vjp`](@ref), each in one
-additional sweep.
-
-Two options control the result:
-
-- **Cost versus tightness.** [`cover_hybrid`](@ref) and
-  [`cover_jacobian_hybrid`](@ref) divide contributions into `G` groups. Larger `G` usually gives
-  a tighter cover and costs `O(G * L)`.
-- **How local covers are scaled.** Some nodes admit a family of equally valid rank-1 covers, and
-  [`split_block`](@ref) chooses among them from the magnitudes of the parent values. Where those
-  carry no scale it falls back on declared input scales; the `scales` and `ratio` keywords are
-  what state them. See [Splitting a local cover](@ref).
-
-Utilities such as [`cover_ratio`](@ref), [`tightness`](@ref), and [`equilibrate`](@ref) are
-public but not exported. Call them with the `DerivativeCovers.` prefix; see
-[Quantities and extension points](@ref).
-
-## Studying a cover
-
-Pass [`WithDiagnostics`](@ref) to [`cover_hessian`](@ref) to inspect the elementwise bound `B`
-and alternative merges:
-
-```jldoctest quickstart
-julia> d = cover_hessian(WithDiagnostics(), f, x0);
-
-julia> round(DerivativeCovers.cover_ratio(d.B, d.h_sum); digits=4)
-0.4495
-```
-
-Diagnostics cost `O(n * L)` time and `O(n^2)` memory because they form an explicit matrix.
-They are therefore opt-in.
-
-A cover loses tightness whenever absolute-value arithmetic prevents cancellation. This can happen
-in two channels: tangents carry an input's influence forward, while adjoints carry the output's
-sensitivity backward. [`cover_lattice`](@ref) computes covers for all four combinations of signed
-and absolute channels, making the cost of each choice visible for a given program:
-
-```jldoctest
-julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
-
-julia> lat = cover_lattice(g, [0.4, 1.5]);
-
-julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)   # what the tangent signs buy
-2-element Vector{Float64}:
- 0.222
- 1.0
-
-julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)   # what the adjoint signs buy
-2-element Vector{Float64}:
- 0.362
- 0.364
-```
-
-Here `d` cancels along the two paths from `x[1]`, and `u` reaches the output along paths with
-opposite adjoint signs, so both channels lose information.
-
-The [Diagnostics](@ref) module can perturb a cover in controlled ways and measure the effect on
-downstream computations. The companion `DerivativeCoverProblems` package provides the
-[Problem families](@ref) used in these experiments.
-
-## How this documentation is organized
-
-The reference is divided by API status:
-
-- This page lists exported names.
-- [Quantities and extension points](@ref) lists public, unexported names. These are part of the
-  supported API and require the `DerivativeCovers.` prefix.
-- [Internals](@ref) lists implementation details, which may change without notice.
-
-## Recording a program
-
-```@docs
-Tape
-TVar
-tape_function
-```
-
-## Propagating a cover forward
-
-A cover can also be propagated forward without a tape. Each variable carries its value, its
-signed tangent, and a squared cover of its own Hessian; the last quantity directly gives the
-output's cover. Working memory is `O(n)` per *live* variable rather than per recorded operation, so
-the cost does not grow with the length of the program.
-
-This reaches a specific corner of the sign lattice: every tangent sign is kept and every adjoint
-sign is discarded, because a forward pass cannot know how the output depends on its current
-variable. This corner is *incomparable* with the result from [`cover_hessian`](@ref), which keeps
-adjoint signs and discards tangent signs. Which result is tighter depends on the program.
-
-The channels are stored in whatever the starting point is made of. Pass a `StaticVector` and they
-become static too, so no operation allocates and the whole propagation costs a fixed amount of
-memory however long the program is; pass a `Vector` and each operation allocates its channels. The
-static form is for a handful of inputs, since it compiles for the exact input count.
-
-```@docs
-FVar
-forward_cover
-```
-
-## Cover entry points
-
-At the same `O(n*L)` cost, the tangent channel distinguishes the covers below. By default,
-`cover_hessian` merges an absolute-value bound on the tangents, allowing its sum merge to collapse
-into a single `O(L)` reverse sweep. [`SignedTangents`](@ref) instead gives the tightest cover the
-package computes. It is tighter than the default at every coordinate and discards only
-cancellation *between* elementals. Its cost is `O(n*L)` because taking magnitudes inside the merge
-leaves nothing for a reverse sweep to collapse.
-
-```@docs
-cover_hessian
-cover_jacobian
-cover_nls
-cover_variance
-cover_hybrid
-cover_jacobian_hybrid
-cover_lattice
-```
-
-## Selecting what `cover_hessian` and `cover_nls` return
-
-```@docs
-CoverOnly
-WithDiagnostics
-```
-
-## Result types
-
-```@docs
-HessianCover
-HessianDiagnostics
-ForwardCover
-CoverLattice
-JacobianCover
-JacobianDiagnostics
-NLSCover
-NLSDiagnostics
-VarianceCover
-```
-
-## Splitting a local cover
-
-Some second-derivative blocks admit a family of covers, and the split selects one member from the
-ratio of two scale references. Parent values are the reference wherever they carry a scale, which
-keeps the cover exactly covariant under a rescaling of the inputs and costs nothing beyond what
-the sweep already reads. At the blocks where they carry none — a vanishing value meeting a
-degenerate feasible segment — no covariant local choice exists at all, and the declared input
-scales stand in. A quotient whose numerator vanishes, or a power whose exponent does, reaches
-such a block only at the zero itself: on the approach the split stays covariant but grows without
-bound, and at the zero the cover drops to the finite one the declared scales give.
-
-Two keywords on every cover entry point state that fallback: `scales`, one strictly positive
-entry per input (`nothing` means unit scales, asserting that the inputs share units), and `ratio`,
-how lopsided a value pair must be before it counts as carrying no scale. Neither affects validity.
-`guards_any_block` answers whether a given program consults them at all — on one that does not,
-the cover is exactly covariant with `scales` held fixed and no extra sweep is run.
-
-```@docs
-DerivativeCovers.split_block
-DerivativeCovers.split_ratio
-DerivativeCovers.guards_any_block
-DerivativeCovers.sensitivity_scales
-DerivativeCovers.value_bounds_split
-DerivativeCovers.balanced_split
-DerivativeCovers.split_fallback
-```
-
-## Tangent channels
-
-```@docs
-TangentChannel
-AbsoluteTangents
-SignedTangents
-```
-
-## Matrix-free products
-
-```@docs
-hvp
-hvp!
-jvp
-jvp!
-vjp
-vjp!
-```
-
-```@index
-Pages = ["index.md"]
-```
+- [Computing covers](@ref) describes each kind of cover and its cost.
+- [Using a cover](@ref) shows what a cover bounds and how it enters numerical
+  algorithms.
+- [Scale covariance](@ref) states when a cover transforms exactly with the
+  units of the inputs.
+- [Tightness](@ref) describes how to measure a cover's looseness and where it
+  comes from.
+- [Covers over a box](@ref) extends the bounds from a point to a box of
+  inputs.
+- [Programs and new operations](@ref) describes what a program may contain and
+  how to add operations.
+- The reference pages list the public API:
+  [Computing and using covers](@ref), the [Extension interface](@ref), the
+  [`DerivativeCovers.Diagnostics`](@ref) module, and the companion package
+  [DerivativeCoverProblems](@ref). Names that are public but not exported, such
+  as `cover_ratio`, are called with the `DerivativeCovers.` prefix.

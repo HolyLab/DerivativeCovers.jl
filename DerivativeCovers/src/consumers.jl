@@ -11,8 +11,8 @@
     cover_norm(g, h) -> r
 
 Norm of the gradient `g` measured in the metric of the cover `h`, `norm(g ./ h)`. This is the
-scale-invariant convergence test: it is dimensionless (each `g[i]/h[i]` divides a gradient by a
-curvature scale) and unchanged when the variables are rescaled.
+scale-invariant convergence test: it is unchanged when the variables are rescaled, since each
+`g[i]/h[i]` has the units of the square root of the objective, whatever the units of `x[i]`.
 
 A cover coordinate may be exactly zero, which says the Hessian ignores that input. The norm is
 then `Inf` if `g[i]` is nonzero — no step along `i` is justified by curvature, so the test cannot
