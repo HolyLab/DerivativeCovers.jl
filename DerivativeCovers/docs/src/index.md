@@ -67,10 +67,11 @@ julia> round.(c.grad; sigdigits=4)
 ```
 
 [`cover_hessian`](@ref) returns the gradient `c.grad` along with the cover
-`c.h_sum`. Is this gradient large? Its norm is dominated by the derivative with
-respect to the time constant, and that derivative is large only because the
-time constant is expressed in seconds. Expressing it in milliseconds instead
-shrinks the gradient norm a thousandfold, while the problem is unchanged:
+`c.h_sum`. The two entries of each have different units: the first entry of
+the gradient is in units of the loss per unit of amplitude, and the second in
+units of the loss per second. Expressing the time constant in milliseconds
+instead of seconds changes the second entry of both the gradient and the cover
+by a factor of 1000, while leaving the problem unchanged:
 
 ```jldoctest decay
 julia> loss_ms(q) = loss([q[1], q[2] / 1000]);   # time constant in milliseconds
@@ -79,46 +80,59 @@ julia> q0 = [1800.0, 3.5];
 
 julia> cms = cover_hessian(loss_ms, q0);
 
-julia> round.(cms.h_sum; sigdigits=4)
+julia> round.(cms.h_sum ./ c.h_sum; sigdigits=4)
 2-element Vector{Float64}:
-    3.118
- 1123.0
+ 1.0
+ 0.001
 
-julia> round(norm(c.grad) / norm(cms.grad); sigdigits=4)
-997.5
+julia> round.(cms.grad ./ c.grad; sigdigits=4)
+2-element Vector{Float64}:
+ 1.0
+ 0.001
 ```
 
-The cover changed exactly as the units did. The gradient measured relative to
-the cover, `norm(g ./ h)`, does not depend on the units of the parameters, so
-a convergence test based on it does not either (see [`Diagnostics.cover_norm`](@ref DerivativeCovers.Diagnostics.cover_norm)):
+The cover changed exactly as the units did, so the gradient measured relative
+to the cover, `g ./ h`, did not change at all:
 
 ```jldoctest decay
-julia> norm(c.grad ./ c.h_sum) ≈ norm(cms.grad ./ cms.h_sum)
+julia> c.grad ./ c.h_sum ≈ cms.grad ./ cms.h_sum
 true
 ```
+
+Each entry of `g ./ h` has the units of the square root of the loss, whatever
+the units of its parameter, so its entries can be compared with one another
+and combined into a norm (see
+[`Diagnostics.cover_norm`](@ref DerivativeCovers.Diagnostics.cover_norm)). The
+entries of `g` itself cannot: a sum such as `sum(abs2, g)` adds quantities with
+different units, and which entry dominates it depends on the choice of units.
 
 The cover was computed without forming the Hessian. For this small problem we
 can form it from Hessian-vector products ([`hvp`](@ref)) and confirm the bound:
 
 ```jldoctest decay
-julia> H = reduce(hcat, [hvp(loss, p0, e) for e in eachcol(Matrix(1.0I, 2, 2))]);
+julia> E = eachcol(Matrix(1.0I, 2, 2));
+
+julia> H = reduce(hcat, [hvp(loss, p0, e) for e in E]);
 
 julia> all(abs.(H) .<= c.h_sum .* c.h_sum')
 true
 ```
 
-Dividing the Hessian by the cover removes the scaling. The condition number of
-`H` reflects the units more than the problem; that of the scaled Hessian does
-not:
+The same reasoning applies to the Hessian. Dividing it by the cover gives a
+matrix `Hhat` whose entries lie in `[-1, 1]` and do not depend on the units:
 
 ```jldoctest decay
-julia> round(cond(H); sigdigits=2)
-7.0e10
-
 julia> Hhat = H ./ (c.h_sum .* c.h_sum');
 
-julia> round(cond(Hhat); sigdigits=2)
-5.6
+julia> round.(Hhat; digits=3)
+2×2 Matrix{Float64}:
+ 0.205  0.072
+ 0.072  0.073
+
+julia> Hms = reduce(hcat, [hvp(loss_ms, q0, e) for e in E]);
+
+julia> Hms ./ (cms.h_sum .* cms.h_sum') ≈ Hhat
+true
 ```
 
 [Using a cover](@ref) describes these and other uses.
