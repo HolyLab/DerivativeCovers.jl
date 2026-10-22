@@ -10,7 +10,7 @@ DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); 
 DocMeta.setdocmeta!(DerivativeCoverProblems, :DocTestSetup, :(using DerivativeCoverProblems); recursive=true)
 
 makedocs(;
-    modules=[DerivativeCovers, DerivativeCovers.Diagnostics, DerivativeCoverProblems],
+    modules=[DerivativeCovers, DerivativeCoverProblems],
     authors="Tim Holy <tim.holy@gmail.com> and contributors",
     sitename="DerivativeCovers.jl",
     checkdocs=:all,
@@ -30,7 +30,6 @@ makedocs(;
         "Reference" => [
             "Computing and using covers" => "reference/covers.md",
             "Extension interface" => "reference/extending.md",
-            "Diagnostics" => "reference/diagnostics.md",
             "DerivativeCoverProblems" => "reference/problems.md",
         ],
         "Internals" => "internals.md",

@@ -1,5 +1,4 @@
 using DerivativeCovers
-using DerivativeCovers.Diagnostics
 # Load the unregistered sibling package directly; test targets cannot declare path dependencies.
 include(
     joinpath(
@@ -10,9 +9,8 @@ include(
 using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
-using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms, cover_ratio,
-    bound_ratio, tightness, jacobian_ratio, jacobian_representability,
-    jacobian_minimax, scaled_spectral_radius, scaled_singular_value, equilibrate,
+using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
+    scaled_spectral_radius, scaled_singular_value, equilibrate,
     cover_hybrid, cover_jacobian_hybrid,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
@@ -23,7 +21,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     Curvature, NoCurvature, UnaryCurvature, BinaryCurvature, DenseCurvature
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
-    rowcomponent, colcomponent
+    rowcomponent, colcomponent, max_coverage_ratio
 using Aqua
 using ExplicitImports
 using ForwardDiff
@@ -166,8 +164,6 @@ include("maxpath.jl")
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
-            :cover_ratio, :bound_ratio, :tightness, :jacobian_ratio,
-            :jacobian_representability, :jacobian_minimax,
             :scaled_spectral_radius, :scaled_singular_value, :equilibrate,
             :cover_hybrid, :cover_jacobian_hybrid,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
@@ -203,20 +199,6 @@ include("maxpath.jl")
                 :ncomponents, :rowcomponent, :colcomponent,
             )
             @test !Base.isexported(DerivativeCovers, sym)
-        end
-
-        # The study instruments live in their own namespace, reached by
-        # `using DerivativeCovers.Diagnostics`, and are not re-exported by the parent.
-        diagnostics = (
-            :InflationPattern, :UniformInflation, :LognormalInflation,
-            :SpikeInflation, :RampInflation, :inflation_shape, :inflation_factors,
-            :inflate, :anisotropy, :cover_norm, :stopping_index, :stopping_shift,
-            :regularized_step, :regularization_bias, :psd_shift, :psd_excess,
-            :cover_cg, :step_degradation,
-        )
-        for sym in diagnostics
-            @test Base.isexported(DerivativeCovers.Diagnostics, sym)
-            @test !isdefined(DerivativeCovers, sym)
         end
     end
 
@@ -445,7 +427,7 @@ include("maxpath.jl")
 
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
-        @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
+        @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(f, x0)) <= GATE
     end
 
     @testset "a tiny cross term is still off-diagonal" begin
@@ -468,7 +450,7 @@ include("maxpath.jl")
         f = x -> (prod(x) - 1)^2
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test all(isfinite, res.h_sum)
-        @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
+        @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(f, x0)) <= GATE
         @test all(isfinite, cover_hessian(f, x0).h_sum)
 
         # Deeper still, where the adjoints themselves approach the subnormal range.
@@ -516,11 +498,11 @@ include("maxpath.jl")
     @testset "covering chain — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)
-        @test bound_ratio(H, res.B) <= GATE                  # abs.(H) <= B
+        @test all(abs.(H) .<= GATE .* res.B)                  # abs.(H) <= B
         for h in (res.h_sum, res.h_quad)
             @test all(>=(0), h)
-            @test cover_ratio(res.B, h) <= GATE              # B <= h*h'
-            @test cover_ratio(H, h) <= GATE                  # abs.(H) <= h*h'
+            @test max_coverage_ratio(h, res.B) <= GATE              # B <= h*h'
+            @test max_coverage_ratio(h, H) <= GATE                  # abs.(H) <= h*h'
         end
         # The quadrature merge is never looser than the sum merge, coordinatewise.
         @test all(res.h_quad .<= res.h_sum .* GATE)
@@ -539,7 +521,7 @@ include("maxpath.jl")
         @test res.h_sum ≈ abs.(WQ)
         @test res.h_quad ≈ abs.(WQ)
         H = ForwardDiff.hessian(quad_factored(WQ), XQ)
-        @test cover_ratio(H, res.h_sum) ≈ 1
+        @test max_coverage_ratio(res.h_sum, H) ≈ 1
     end
 
     @testset "elementwise bound on the cancellation pair" begin
@@ -786,7 +768,7 @@ include("maxpath.jl")
             xdeg = [z1, 1.0]
             res = cover_hessian(WithDiagnostics(), fdeg, xdeg)
             @test res.h_sum == [1.0, 1.0]
-            @test cover_ratio(ForwardDiff.hessian(fdeg, xdeg), res.h_sum) <= GATE
+            @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(fdeg, xdeg)) <= GATE
         end
         # Reading the values there instead sends the cover to `1e10` and moves it by `sqrt(3)`
         # between the two points above.
@@ -835,7 +817,7 @@ include("maxpath.jl")
         xwide = [0.0, 0.0]
         Hwide = [0.0 1.0; 1.0 0.0]
         @test cover_hessian(WithDiagnostics(), fwide, xwide).h_sum == [1.0, 1.0]
-        @test cover_ratio(Hwide, cover_hessian(WithDiagnostics(), fwide, xwide).h_quad) <= GATE
+        @test max_coverage_ratio(cover_hessian(WithDiagnostics(), fwide, xwide).h_quad, Hwide) <= GATE
         @test forward_cover(fwide, xwide).h_quad == [1.0, 1.0]
 
         # `guards_any_block` predicts which case a tape is in without running a cover. It may
@@ -904,7 +886,7 @@ include("maxpath.jl")
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
         resdead = cover_hessian(WithDiagnostics(), fdead, xd)
-        @test cover_ratio(Hd, resdead.h_sum) <= GATE
+        @test max_coverage_ratio(resdead.h_sum, Hd) <= GATE
         @test resdead.h_sum ≈ [sqrt(6.0), 0.0]
         @test resdead.h_quad ≈ [sqrt(6.0), 0.0]
         @test cover_hybrid(fdead, xd, 1) ≈ [sqrt(6.0), 0.0]
@@ -915,14 +897,14 @@ include("maxpath.jl")
         fung = x -> cos(x[1]) * x[2]
         xu = [0.0, 3.0]
         resung = cover_hessian(WithDiagnostics(), fung, xu)
-        @test cover_ratio(ForwardDiff.hessian(fung, xu), resung.h_sum) <= GATE
+        @test max_coverage_ratio(resung.h_sum, ForwardDiff.hessian(fung, xu)) <= GATE
         @test resung.h_sum ≈ [sqrt(3.0), 0.0]
 
         # The converse: a vanishing value with a live tangent keeps its weight, since the block's
         # off-diagonal entry is in the Hessian and has to be covered.
         xlivecos = [pi / 2, 3.0]
         reslive = cover_hessian(WithDiagnostics(), fung, xlivecos)
-        @test cover_ratio(ForwardDiff.hessian(fung, xlivecos), reslive.h_sum) <= GATE
+        @test max_coverage_ratio(reslive.h_sum, ForwardDiff.hessian(fung, xlivecos)) <= GATE
         @test all(>(0), reslive.h_sum)
 
         # A term switched off by a zero coefficient contributes nothing to the Hessian, so it
@@ -930,7 +912,7 @@ include("maxpath.jl")
         fbeta = b -> (x -> (b * x[1]^2) * (x[2] + x[2]^2)^2 + x[1] * x[2])
         xb = [1.5, 2.0]
         resbeta = cover_hessian(WithDiagnostics(), fbeta(0.0), xb)
-        @test cover_ratio(ForwardDiff.hessian(fbeta(0.0), xb), resbeta.h_sum) <= GATE
+        @test max_coverage_ratio(resbeta.h_sum, ForwardDiff.hessian(fbeta(0.0), xb)) <= GATE
         @test resbeta.h_sum ≈ cover_hessian(WithDiagnostics(), x -> x[1] * x[2], xb).h_sum
         @test resbeta.h_quad ≈ cover_hessian(WithDiagnostics(), x -> x[1] * x[2], xb).h_quad
 
@@ -948,7 +930,7 @@ include("maxpath.jl")
         fdot = x -> dot([x[1]^2, x[2]], [x[3], x[4]])
         xdot = [0.0, 1.0, 2.0, 3.0]
         resdot = cover_hessian(WithDiagnostics(), fdot, xdot)
-        @test cover_ratio(ForwardDiff.hessian(fdot, xdot), resdot.h_sum) <= GATE
+        @test max_coverage_ratio(resdot.h_sum, ForwardDiff.hessian(fdot, xdot)) <= GATE
         # The `(x[1]^2, x[3])` pair is dead at `xdot`, so `x[3]` carries no weight at all and the
         # remaining pair is covered exactly.
         @test resdot.h_sum[3] == 0
@@ -1009,8 +991,8 @@ include("maxpath.jl")
         @test nv.h_gn == ns.h_gn
         @test nv.grad == ns.grad
         let H = ForwardDiff.hessian(x -> 0.5 * sum(abs2, Fsub(x)), xp)
-            @test cover_ratio(H, nv.h) <= GATE
-            @test cover_ratio(H, ns.h) <= GATE
+            @test max_coverage_ratio(nv.h, H) <= GATE
+            @test max_coverage_ratio(ns.h, H) <= GATE
         end
 
         # A forward propagation carries both scale references itself, so it splits by the same
@@ -1030,8 +1012,8 @@ include("maxpath.jl")
             )
             for h in (res.h_sum, res.h_quad)
                 @test all(>=(0), h)
-                @test cover_ratio(res.B, h) <= GATE
-                @test cover_ratio(H, h) <= GATE
+                @test max_coverage_ratio(h, res.B) <= GATE
+                @test max_coverage_ratio(h, H) <= GATE
             end
             @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
             # The one-group hybrid reproduces the sum merge whatever the split.
@@ -1097,8 +1079,8 @@ include("maxpath.jl")
             )
             h = cover_hybrid(t, outidx, groups)
             @test all(>=(0), h)
-            @test cover_ratio(H, h) <= GATE                  # valid for any partition
-            @test cover_ratio(res.B, h) <= GATE
+            @test max_coverage_ratio(h, H) <= GATE                  # valid for any partition
+            @test max_coverage_ratio(h, res.B) <= GATE
             # Bracketed by the two extremes it interpolates.
             @test all(res.h_quad .<= h .* GATE)
             @test all(h .<= res.h_sum .* GATE)
@@ -1202,9 +1184,9 @@ include("maxpath.jl")
         vc = cover_hessian(reconvergent_diamond, [0.4, -0.9])
         @test H ≈ [9.0 -3.0; -3.0 1.0]
         @test res.h_quad ≈ [3.0, 1.0]
-        @test cover_ratio(H, res.h_quad) ≈ 1
+        @test max_coverage_ratio(res.h_quad, H) ≈ 1
         @test vc.h_var ≈ [sqrt(5.0), 1.0]
-        @test cover_ratio(H, vc.h_var) ≈ 9 / 5     # the (1,1) entry is no longer covered
+        @test max_coverage_ratio(vc.h_var, H) ≈ 9 / 5     # the (1,1) entry is no longer covered
     end
 
     @testset "variance channel counts each parent slot as its own path" begin
@@ -1289,9 +1271,9 @@ include("maxpath.jl")
 
         # Every entry of the scaled Hessian is bounded by its spectral norm.
         lambda = scaled_spectral_radius(H, h)
-        @test lambda >= cover_ratio(H, h) * (1 - 1.0e-12)
+        @test lambda >= max_coverage_ratio(h, H) * (1 - 1.0e-12)
 
-        @test cover_ratio(H, sqrt(lambda) .* h) <= GATE       # rescaling by the norm stays valid
+        @test max_coverage_ratio(sqrt(lambda) .* h, H) <= GATE       # rescaling by the norm stays valid
 
         # The matrix-free estimate approaches the exact norm from below, where it applies at all:
         # a coordinate the Hessian ignores gets a zero cover, which the power iteration rejects.
@@ -1328,28 +1310,6 @@ include("maxpath.jl")
         )
     end
 
-    @testset "metrics" begin
-        H = [4.0 -2.0; -2.0 1.0]
-        @test cover_ratio(H, [2.0, 1.0]) ≈ 1
-        @test cover_ratio(H, [4.0, 2.0]) ≈ 0.25
-        @test cover_ratio(H, [0.0, 1.0]) == Inf
-        @test cover_ratio(zeros(2, 2), [0.0, 0.0]) == 0     # nothing to cover
-
-        B = [4.0 2.0; 2.0 2.0]
-        @test bound_ratio(H, B) ≈ 1                         # attained on the (1,1) entry
-        @test cover_ratio(B, [2.0, 1.0]) ≈ 2                # B[2,2] = 2 exceeds h[2]^2 = 1
-
-        mx, gm, nextra = tightness([2.0, 8.0, 1.0], [1.0, 2.0, 0.0])
-        @test mx ≈ 4
-        @test gm ≈ sqrt(2 * 4)
-        @test nextra == 1
-        @test all(isnan, tightness([1.0], [0.0])[1:2])
-
-        @test_throws DimensionMismatch cover_ratio(H, [1.0])
-        @test_throws DimensionMismatch bound_ratio(H, zeros(3, 3))
-        @test_throws DimensionMismatch tightness([1.0], [1.0, 2.0])
-    end
-
     # The generated problems are the substrate of the growth and tolerance studies, so what is
     # tested here is that each family is the function it claims to be, has the graph structure it
     # claims to have, and stays within the covering chain.
@@ -1382,10 +1342,10 @@ include("maxpath.jl")
         H = ForwardDiff.hessian(p.f, p.x0)
         res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         @test res.grad ≈ ForwardDiff.gradient(p.f, p.x0)
-        @test bound_ratio(H, res.B) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
         for h in (res.h_sum, res.h_quad, cover_hybrid(p.f, p.x0, 3))
             @test all(>=(0), h)
-            @test cover_ratio(H, h) <= GATE
+            @test max_coverage_ratio(h, H) <= GATE
         end
     end
 
@@ -1511,240 +1471,6 @@ include("maxpath.jl")
         @test_throws ArgumentError quadratic(4; form = :bogus)
         @test_throws ArgumentError deep_composition(4; width = 0)
         @test_throws ArgumentError random_dag(4; sharing = 1.5)
-    end
-
-    @testset "every pattern inflates its worst coordinate to exactly the peak" begin
-        n, peak = 12, 4.0
-        patterns = [UniformInflation(), LognormalInflation(), SpikeInflation(5), RampInflation()]
-        for p in patterns
-            f = inflation_factors(p, n, peak)
-            @test length(f) == n
-            @test all(x -> 1 <= x <= peak, f)
-            @test maximum(f) ≈ peak
-            # A peak of 1 is the identity distortion, whatever the shape.
-            @test inflation_factors(p, n, 1.0) ≈ ones(n)
-        end
-        @test_throws ArgumentError inflation_factors(UniformInflation(), n, 0.5)
-    end
-
-    @testset "each pattern realizes the profile it names" begin
-        n, peak = 16, 10.0
-
-        f = inflation_factors(UniformInflation(), n, peak)
-        @test f ≈ fill(peak, n)
-        @test anisotropy(f) ≈ 0 atol = 1.0e-12
-
-        f = inflation_factors(SpikeInflation(3), n, peak)
-        @test f[3] ≈ peak
-        @test f[setdiff(1:n, 3)] ≈ ones(n - 1)
-        @test anisotropy(f) ≈ log(peak) * (1 - 1 / n)
-        @test_throws BoundsError inflation_factors(SpikeInflation(n + 1), n, peak)
-
-        f = inflation_factors(RampInflation(), n, peak)
-        @test issorted(f)
-        @test f[1] ≈ 1
-        @test f[end] ≈ peak
-        @test anisotropy(f) ≈ log(peak) / 2 atol = 0.05
-        @test inflation_factors(RampInflation(), 1, peak) ≈ [peak]
-
-        f = inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(3))
-        @test f ≈ inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(3))
-        @test f != inflation_factors(LognormalInflation(), n, peak; rng = MersenneTwister(4))
-        # Its head is more concentrated than a ramp's: the bulk of a normal draw sits well below
-        # its maximum, and the gap widens with n.
-        big = 256
-        lgn = inflation_factors(LognormalInflation(), big, peak; rng = MersenneTwister(3))
-        @test anisotropy(lgn) > anisotropy(inflation_factors(RampInflation(), big, peak))
-    end
-
-    @testset "an inflated cover is still a cover" begin
-        p = quadratic(6; form = :entrywise, rng = MersenneTwister(7))
-        H = exact_hessian(p)
-        h = cover_hessian(WithDiagnostics(), p.f, p.x0).h_sum
-        @test cover_ratio(H, h) <= 1
-
-        for pat in (UniformInflation(), LognormalInflation(), SpikeInflation(2), RampInflation())
-            f = inflation_factors(pat, h, 3.0; rng = MersenneTwister(8))
-            hd = inflate(h, f)
-            # Inflation can only weaken the bound, never break it...
-            @test cover_ratio(H, hd) <= cover_ratio(H, h)
-            @test cover_ratio(H, hd) <= 1
-            # ...and the looseness it adds is exactly the factors that were asked for.
-            @test hd ./ h ≈ f
-            @test tightness(hd, h)[1] ≈ maximum(f)
-        end
-
-        @test inflate(UniformInflation(), h, 2.5) ≈ 2.5 .* h
-        @test_throws ArgumentError inflate(h, fill(0.5, length(h)))
-        @test_throws DimensionMismatch inflate(h, ones(length(h) + 1))
-    end
-
-    @testset "inflation leaves a zero cover coordinate at zero" begin
-        # A cover of a Hessian that ignores an input has an exactly-zero coordinate there; no
-        # multiplicative distortion can loosen a bound that is already exact.
-        H = [2.0 1.0 0.0; 1.0 3.0 0.0; 0.0 0.0 0.0]
-        h = [2.0, 2.0, 0.0]
-        @test cover_ratio(H, h) <= 1
-
-        f = inflation_factors(LognormalInflation(), h, 5.0; rng = MersenneTwister(9))
-        hd = inflate(h, f)
-        @test hd[3] == 0
-        @test cover_ratio(H, hd) <= 1
-        @test tightness(hd, h)[3] == 0          # no coordinate the reference leaves at zero
-    end
-
-    @testset "inflation follows the cover's axes" begin
-        h = [1.0, 2.0, 3.0, 4.0, 5.0]
-        v = view(h, 2:4)
-        f = inflation_factors(RampInflation(), v, 4.0)
-        @test axes(f) == axes(v)
-        @test f ≈ [1.0, 2.0, 4.0]
-        @test inflate(v, f) ≈ [2.0, 6.0, 16.0]
-        @test inflation_shape(SpikeInflation(2), v) ≈ [0.0, 1.0, 0.0]
-        @test_throws BoundsError inflation_shape(SpikeInflation(4), v)
-    end
-
-    @testset "the convergence test is scale-invariant" begin
-        g, h = [3.0, 4.0], [1.0, 2.0]
-        @test cover_norm(g, h) ≈ sqrt(13)
-        D = Diagonal([1.0e3, 1.0e-4])
-        @test cover_norm(D * g, D * h) ≈ cover_norm(g, h)
-        @test cover_norm(2 * g, 2 * h) ≈ cover_norm(g, h)     # objective scaling f -> c*f
-        # A dead coordinate: no curvature to divide by.
-        @test cover_norm([1.0, 0.0], [0.0, 3.0]) == Inf
-        @test cover_norm([0.0, 3.0], [0.0, 3.0]) ≈ 1
-        @test_throws DimensionMismatch cover_norm([1.0], [1.0, 2.0])
-    end
-
-    @testset "an inflated cover stops the run early" begin
-        # A gradient halving each iteration, against a cover held fixed along the path.
-        grads = [[2.0^-k, 0.0] for k in 0:10]
-        covers = [ones(2) for _ in 0:10]
-        dcovers = [inflate(UniformInflation(), h, 4.0) for h in covers]
-        tol = 0.1
-        # 2^-k <= 0.1 first at k = 4, and 2^-k <= 0.4 (the inflated test) first at k = 2.
-        @test stopping_index(grads, covers, tol) == 5
-        @test stopping_index(grads, dcovers, tol) == 3
-        s = stopping_shift(grads, covers, dcovers, tol)
-        @test s.k_ref == 5 && s.k_dist == 3
-        @test s.shift == 2
-        @test s.overshoot ≈ 0.25 / tol      # the true cover-norm where the run declared success
-        @test stopping_shift(grads, covers, covers, tol).shift == 0
-        @test stopping_index(grads, covers, 1.0e-9) === nothing
-        @test_throws "never fires" stopping_shift(grads, covers, dcovers, 1.0e-9)
-    end
-
-    @testset "regularization bias" begin
-        A, g = Matrix(1.0I, 2, 2), [1.0, 1.0]
-        h, hd = [1.0, 1.0], [2.0, 1.0]
-        @test regularized_step(A, g, h, 1.0) ≈ [-0.5, -0.5]
-        @test regularized_step(A, g, hd, 1.0) ≈ [-0.2, -0.5]    # diag(5, 2) \ (-g)
-        @test regularization_bias(A, g, h, hd, 1.0) ≈ 0.3 / (0.5 * sqrt(2))
-        @test regularization_bias(A, g, h, h, 1.0) == 0
-        @test regularized_step(A, g, h, 0.0) ≈ A \ (-g)
-        @test_throws ArgumentError regularized_step(A, g, h, -1.0)
-    end
-
-    @testset "regularization bias is scale-invariant" begin
-        rng = MersenneTwister(7)
-        A = Symmetric(randn(rng, 5, 5)) |> Matrix
-        g = randn(rng, 5)
-        h = abs.(randn(rng, 5)) .+ 0.5
-        hd = inflate(LognormalInflation(), h, 8.0; rng)
-        b = regularization_bias(A, g, h, hd, 0.5)
-        # Variables: x -> D*x sends g -> D*g, A -> D*A*D, and any cover h -> D*h.
-        D = Diagonal([1.0e3, 1.0e-2, 1.0, 7.0, 1.0e-4])
-        @test regularization_bias(D * A * D, D * g, D * h, D * hd, 0.5) ≈ b
-        # Objective: f -> c*f sends g -> c*g, A -> c*A, h -> sqrt(c)*h.
-        c = 100.0
-        @test regularization_bias(c * A, c * g, sqrt(c) * h, sqrt(c) * hd, 0.5) ≈ b
-    end
-
-    @testset "PSD boost feels anisotropy only" begin
-        A = [1.0 0.0; 0.0 -1.0]
-        @test psd_shift(A, [1.0, 1.0]) ≈ 1
-        @test psd_shift(A, [2.0, 1.0]) ≈ 1          # scaling coordinate 1 cannot fix coordinate 2
-        @test psd_shift(Matrix(1.0I, 2, 2), [3.0, 0.5]) == 0
-
-        uni = psd_excess(A, [1.0, 1.0], [2.0, 2.0])
-        @test uni.tau_ref ≈ 1 && uni.tau_dist ≈ 0.25
-        @test uni.excess ≈ [1.0, 1.0]               # tau*Diagonal(h.^2) is unchanged by h -> c*h
-
-        spike = psd_excess(A, [1.0, 1.0], [10.0, 1.0])
-        @test spike.tau_dist ≈ 1
-        @test spike.excess ≈ [100.0, 1.0]           # the untouched coordinate is shifted 100x too hard
-
-        psd = psd_excess(Matrix(1.0I, 2, 2), [1.0, 1.0], [10.0, 1.0])
-        @test psd.tau_ref == 0 && psd.tau_dist == 0 && psd.excess ≈ [1.0, 1.0]
-
-        @test_throws "strictly positive" psd_shift(A, [0.0, 1.0])
-        @test_throws "symmetric" psd_shift([1.0 2.0; 3.0 4.0], [1.0, 1.0])
-    end
-
-    @testset "the PSD shift is the minimal one" begin
-        rng = MersenneTwister(11)
-        for _ in 1:5
-            A = Matrix(Symmetric(randn(rng, 6, 6)))
-            h = exp.(randn(rng, 6))                 # a wide range of curvature scales
-            tau = psd_shift(A, h)
-            @test tau > 0                           # a random symmetric matrix is indefinite
-            @test eigmin(Symmetric(A + tau * Diagonal(h .^ 2))) > -1.0e-10
-            @test eigmin(Symmetric(A + 0.99tau * Diagonal(h .^ 2))) < 0
-        end
-    end
-
-    @testset "cover-preconditioned CG" begin
-        A = Matrix(Diagonal([1.0, 4.0, 9.0]))
-        b = [1.0, 1.0, 1.0]
-        h = [1.0, 2.0, 3.0]                         # the exact cover of this A
-        exact = cover_cg(A, b, h)
-        @test exact.x ≈ A \ b
-        @test exact.iters == 1                      # the scaled system is the identity
-
-        # Uniform inflation rescales the metric without reshaping it: still one iteration.
-        @test cover_cg(A, b, inflate(UniformInflation(), h, 5.0)).iters == 1
-        # A spike leaves the scaled system with two distinct eigenvalues.
-        spiked = cover_cg(A, b, inflate(SpikeInflation(1), h, 10.0))
-        @test spiked.iters == 2
-        @test spiked.x ≈ A \ b
-
-        @test_throws "strictly positive" cover_cg(A, b, [0.0, 2.0, 3.0])
-
-        # An indefinite A gives a direction of nonpositive curvature; without the guard the
-        # division by it would fill x and the whole history with NaN.
-        Aneg = Matrix(Diagonal([1.0, -4.0, 9.0]))
-        @test_throws "nonpositive curvature" cover_cg(Aneg, b, h)
-        @test_throws ArgumentError cover_cg(Aneg, b, h)
-        # A singular direction is caught on the same test.
-        @test_throws "nonpositive curvature" cover_cg(zeros(3, 3), b, h)
-    end
-
-    @testset "cover quality is step quality under a truncated CG" begin
-        rng = MersenneTwister(3)
-        M = randn(rng, 12, 12)
-        A = M * M' + 12I                            # symmetric positive definite
-        g = randn(rng, 12)
-        h = sqrt.(diag(A))                          # a cover of a diagonally dominant A
-        hd = inflate(LognormalInflation(), h, 1.0e4; rng)
-
-        # Preconditioning moves the path, not the fixed point: given iterations enough, both runs
-        # reach the target, and the loose cover pays for it in iterations.
-        long = step_degradation(A, g, h, hd; maxiter = 40)
-        @test long.error_ref < 1.0e-6 && long.error_dist < 1.0e-6
-        @test long.iters_dist > long.iters_ref
-
-        # On the usual budget of one iteration per coordinate the loose cover simply fails to
-        # deliver a step: it does not reach the target, and its final iterate is orders of
-        # magnitude further from exact than the reference run's. The gap between the two runs is
-        # the property; where each lands in absolute terms depends on the draw.
-        budget = step_degradation(A, g, h, hd)
-        @test budget.iters_ref == long.iters_ref
-        @test budget.iters_dist === nothing
-        @test budget.error_dist > 1.0e3 * budget.error_ref
-
-        # Uniform inflation is invisible here too: only the shape of the metric steers CG.
-        uni = step_degradation(A, g, h, inflate(UniformInflation(), h, 50.0); maxiter = 4)
-        @test uni.error_dist ≈ uni.error_ref
     end
 
 end

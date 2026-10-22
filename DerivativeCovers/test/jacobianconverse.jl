@@ -54,8 +54,8 @@
         U = jacobian_surrogate(tape_function(pm.r, pm.x0)...)
         Jp = exact_jacobian(pp)
         @test U ≈ abs.(Jp) rtol = 1.0e-12
-        @test jacobian_representability(U) ≈ 1 rtol = 1.0e-10
-        @test jacobian_minimax(U).excess ≈ 1 rtol = 1.0e-8
+        sv = svdvals(U)
+        @test sv[2] <= 1.0e-10 * sv[1]
     end
 
     @testset "the floor: balanced max-merge pays exactly kappa, sum merge multiplies by q-mass" begin

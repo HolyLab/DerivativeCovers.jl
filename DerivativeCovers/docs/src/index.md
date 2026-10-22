@@ -101,8 +101,7 @@ true
 
 Each entry of `g ./ h` has the units of the square root of the loss, whatever
 the units of its parameter, so its entries can be compared with one another
-and combined into a norm (see
-[`Diagnostics.cover_norm`](@ref DerivativeCovers.Diagnostics.cover_norm)). The
+and combined into a norm. The
 entries of `g` itself cannot: a sum such as `sum(abs2, g)` adds quantities with
 different units, and which entry dominates it depends on the choice of units.
 
@@ -178,7 +177,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 - [Programs and new operations](@ref) describes what a program may contain and
   how to add operations.
 - The reference pages list the public API:
-  [Computing and using covers](@ref), the [Extension interface](@ref), the
-  [`DerivativeCovers.Diagnostics`](@ref) module, and the companion package
-  [DerivativeCoverProblems](@ref). Names that are public but not exported, such
-  as `cover_ratio`, are called with the `DerivativeCovers.` prefix.
+  [Computing and using covers](@ref), the [Extension interface](@ref), and the
+  companion package [DerivativeCoverProblems](@ref). Names that are public but
+  not exported, such as `equilibrate`, are called with the `DerivativeCovers.`
+  prefix.

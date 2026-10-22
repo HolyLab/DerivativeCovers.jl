@@ -15,9 +15,7 @@ and stays covariant when those are rescaled alongside, `scales -> D*scales`;
 [`guards_any_block`](@ref) says whether a given program is in that case.
 
 `using DerivativeCovers` imports the main entry points and result types. Public utilities such as
-`cover_ratio`, `tightness`, and `equilibrate` are not exported; call them with the
-`DerivativeCovers.` prefix. The [`DerivativeCovers.Diagnostics`](@ref) submodule provides tools
-for studying how cover looseness affects downstream algorithms.
+`equilibrate` are not exported; call them with the `DerivativeCovers.` prefix.
 """
 module DerivativeCovers
 
@@ -25,7 +23,7 @@ using LinearAlgebra: Diagonal, diag, dot, norm, opnorm
 using Random: AbstractRNG, Xoshiro
 using SparseArrays: SparseArrays, AbstractSparseVector
 using StaticArrays: StaticMatrix, StaticVector, similar_type
-using MatrixCovers: SupportComponents, initialize_cover, iscover, symcover
+using MatrixCovers: SupportComponents, initialize_cover, iscover, max_coverage_ratio, symcover
 import MatrixCovers: support_components, gramcover, gramcover!
 
 # Main entry points and result types.
@@ -61,14 +59,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :CoverSite, :TapeSite, :site_label, :site_values
         )
     )
-    # Ratios, bounds, and rescalings defined on a cover from any source.
-    eval(
-        Expr(
-            :public, :cover_ratio, :bound_ratio, :tightness, :jacobian_ratio,
-            :jacobian_representability, :jacobian_minimax,
-            :scaled_spectral_radius, :scaled_singular_value, :equilibrate
-        )
-    )
+    # Norms and rescalings of a matrix normalized by its cover.
+    eval(Expr(:public, :scaled_spectral_radius, :scaled_singular_value, :equilibrate))
     # Covers that merge in groups, interpolating between the sum and quadrature merges.
     eval(Expr(:public, :cover_hybrid, :cover_jacobian_hybrid))
     # Adapters between the result types and the functions that take bare vectors.
@@ -92,7 +84,6 @@ include("merges.jl")
 include("variance.jl")
 include("maxpath.jl")
 include("spectral.jl")
-include("metrics.jl")
 include("nls.jl")
 # `covariant.jl` defines `LiveInfo`, which appears in `jacobian.jl` method signatures.
 include("support.jl")
@@ -102,6 +93,5 @@ include("gram.jl")
 include("equilibrate.jl")
 include("compose.jl")
 include("show.jl")
-include("diagnostics.jl")
 
 end

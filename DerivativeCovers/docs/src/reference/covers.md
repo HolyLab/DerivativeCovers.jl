@@ -5,7 +5,7 @@ CurrentModule = DerivativeCovers
 # Computing and using covers
 
 Names that are public but not exported are part of the supported API; call
-them with the module prefix, for example `DerivativeCovers.cover_ratio`.
+them with the module prefix, for example `DerivativeCovers.equilibrate`.
 
 ```@index
 Pages = ["covers.md"]
@@ -68,15 +68,9 @@ vjp!
 adjoints
 ```
 
-## Measuring and using covers
+## Using covers
 
 ```@docs
-cover_ratio
-bound_ratio
-tightness
-jacobian_ratio
-jacobian_representability
-jacobian_minimax
 scaled_spectral_radius
 scaled_singular_value
 equilibrate

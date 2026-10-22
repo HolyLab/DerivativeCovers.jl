@@ -48,9 +48,9 @@
         H = exact_hessian(p)
         t, outidx = tape_function(p.f, p.x0)
         res = cover_hessian(WithDiagnostics(), t, outidx)
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
-        @test cover_ratio(H, cover_hybrid(t, outidx, 4)) <= GATE
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
+        @test max_coverage_ratio(cover_hybrid(t, outidx, 4), H) <= GATE
     end
 
     @testset "closed forms" begin
@@ -109,8 +109,8 @@
         @test rc.h_quad == ra.h_quad
 
         Hc = exact_hessian(pc)
-        @test cover_ratio(Hc, rc.h_sum) <= GATE
-        @test cover_ratio(Hc, rc.h_quad) <= GATE
+        @test max_coverage_ratio(rc.h_sum, Hc) <= GATE
+        @test max_coverage_ratio(rc.h_quad, Hc) <= GATE
     end
 
     @testset "argument errors" begin
@@ -180,8 +180,8 @@
         @test lc < la < 1
         sc, sa = sqrt(lc) .* hc, sqrt(la) .* ha
         @test maximum(abs.(sc .- sa) ./ max.(sc, sa)) > 0.1
-        @test cover_ratio(Hc, sc) <= GATE
-        @test cover_ratio(Ha, sa) <= GATE
+        @test max_coverage_ratio(sc, Hc) <= GATE
+        @test max_coverage_ratio(sa, Ha) <= GATE
     end
 
     @testset "a recorded linear change of variables is the transported cover" begin
@@ -196,7 +196,7 @@
         hx = cover_hessian(pc.f, pc.x0).h_sum
         hy = cover_hessian(g, A * pc.x0).h_sum
         @test hy ≈ abs.(permutedims(Ainv)) * hx rtol = 1.0e-13
-        @test cover_ratio(permutedims(Ainv) * Hc * Ainv, hy) <= GATE
+        @test max_coverage_ratio(hy, permutedims(Ainv) * Hc * Ainv) <= GATE
     end
 
 end

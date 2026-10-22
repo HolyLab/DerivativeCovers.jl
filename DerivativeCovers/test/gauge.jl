@@ -208,7 +208,7 @@
             for k in (:grad, :B, :h_sum, :h_quad, :h_var)
                 @test getproperty(pg, k) == getproperty(pd, k)
             end
-            @test cover_ratio(Hd, pg.h_sum) <= GATE
+            @test max_coverage_ratio(pg.h_sum, Hd) <= GATE
         end
     end
 
@@ -225,13 +225,13 @@
             @test ForwardDiff.hessian(f, x0) == H
             h = cover_hessian(f, x0).h_sum
             @test h[1] ≈ sqrt(2 / z1) rtol = 1.0e-12
-            @test cover_ratio(H, h) <= GATE
+            @test max_coverage_ratio(h, H) <= GATE
             push!(h1, h[1])
         end
         h0 = cover_hessian(x -> (x[1] - 1.0) * x[2], x0).h_sum
         @test all(isfinite, h0)
         @test h0[1] < last(h1)
-        @test cover_ratio(H, h0) <= GATE
+        @test max_coverage_ratio(h0, H) <= GATE
     end
 
     @testset "the guard fires at a structural zero and nowhere else" begin

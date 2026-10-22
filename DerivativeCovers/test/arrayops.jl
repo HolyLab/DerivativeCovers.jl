@@ -122,9 +122,9 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         H = ForwardDiff.hessian(scaled_sumabs2, x0)
         res = cover_hessian(WithDiagnostics(), scaled_sumabs2, x0)
         @test res.grad ≈ ForwardDiff.gradient(scaled_sumabs2, x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
     end
 
@@ -145,9 +145,9 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
 
         H = ForwardDiff.hessian(sum_prim, x0)
-        @test bound_ratio(H, rp.B) <= GATE
-        @test cover_ratio(H, rp.h_sum) <= GATE
-        @test cover_ratio(H, rp.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* rp.B)
+        @test max_coverage_ratio(rp.h_sum, H) <= GATE
+        @test max_coverage_ratio(rp.h_quad, H) <= GATE
 
         # A sum of n TVars records as one linear node: n inputs plus that one node.
         t, _ = tape_function(z -> sum(z), x0)
@@ -172,9 +172,9 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             H = ForwardDiff.hessian(f, x0)
             res = cover_hessian(WithDiagnostics(), f, x0)
             @test res.grad ≈ ForwardDiff.gradient(f, x0)
-            @test bound_ratio(H, res.B) <= GATE
-            @test cover_ratio(H, res.h_sum) <= GATE
-            @test cover_ratio(H, res.h_quad) <= GATE
+            @test all(abs.(H) .<= GATE .* res.B)
+            @test max_coverage_ratio(res.h_sum, H) <= GATE
+            @test max_coverage_ratio(res.h_quad, H) <= GATE
         end
 
         @testset "parity with scalarized twin" begin
@@ -208,8 +208,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             res_d = cover_hessian(WithDiagnostics(), f, x0u)
             res_t = cover_hessian(WithDiagnostics(), softmax_taped_prim(C0_5), x0u)
 
-            @test cover_ratio(H, res_t.h_sum) <= GATE
-            @test cover_ratio(H, res_t.h_quad) <= GATE
+            @test max_coverage_ratio(res_t.h_sum, H) <= GATE
+            @test max_coverage_ratio(res_t.h_quad, H) <= GATE
             @test all(res_d.h_sum .<= res_t.h_sum .* (1 + 1.0e-9))
             @test all(res_d.h_quad .<= res_t.h_quad .* (1 + 1.0e-9))
             ratio = maximum(res_t.h_sum ./ res_d.h_sum)
@@ -236,9 +236,9 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             H = ForwardDiff.hessian(f, x0)
             res = cover_hessian(WithDiagnostics(), f, x0)
             @test res.grad ≈ ForwardDiff.gradient(f, x0)
-            @test bound_ratio(H, res.B) <= GATE
-            @test cover_ratio(H, res.h_sum) <= GATE
-            @test cover_ratio(H, res.h_quad) <= GATE
+            @test all(abs.(H) .<= GATE .* res.B)
+            @test max_coverage_ratio(res.h_sum, H) <= GATE
+            @test max_coverage_ratio(res.h_quad, H) <= GATE
         end
 
         @testset "parity with scalarized twin" begin
@@ -271,8 +271,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             H = ForwardDiff.hessian(fe, x0)
             res = cover_hessian(WithDiagnostics(), fe, x0)
             @test res.grad ≈ ForwardDiff.gradient(fe, x0)
-            @test cover_ratio(H, res.h_sum) <= GATE
-            @test cover_ratio(H, res.h_quad) <= GATE
+            @test max_coverage_ratio(res.h_sum, H) <= GATE
+            @test max_coverage_ratio(res.h_quad, H) <= GATE
         end
 
         @testset "errors" begin
@@ -311,7 +311,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @testset "$name" for (name, f, fd, z0) in cases
                 res = cover_hessian(WithDiagnostics(), f, z0)
                 @test res.grad ≈ ForwardDiff.gradient(fd, z0)
-                @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+                @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(fd, z0)) <= GATE
                 @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
             end
         end
@@ -362,7 +362,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             ]
             res = cover_hessian(WithDiagnostics(), f, z0)
             @test res.grad ≈ ForwardDiff.gradient(fd, z0)
-            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(fd, z0)) <= GATE
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
@@ -410,7 +410,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             ]
             res = cover_hessian(WithDiagnostics(), f, z0)
             @test res.grad ≈ ForwardDiff.gradient(fd, z0)
-            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(fd, z0)) <= GATE
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
@@ -495,7 +495,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             ]
             res = cover_hessian(WithDiagnostics(), f, z0)
             @test res.grad ≈ ForwardDiff.gradient(fd, z0)
-            @test cover_ratio(ForwardDiff.hessian(fd, z0), res.h_sum) <= GATE
+            @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(fd, z0)) <= GATE
             @test res.h_sum == cover_hessian(WithDiagnostics(), fd, z0).h_sum
         end
 
@@ -578,7 +578,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
                 return sum(abs2, y)
             end
             @test cover_hessian(fmul, x0).grad ≈ ForwardDiff.gradient(fref, x0)
-            @test cover_ratio(ForwardDiff.hessian(fref, x0), cover_hessian(fmul, x0).h_sum) <=
+            @test max_coverage_ratio(cover_hessian(fmul, x0).h_sum, ForwardDiff.hessian(fref, x0)) <=
                 GATE
 
             # A destination laid out over other axes than the product's is a mismatch, not a
@@ -612,7 +612,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             rp = cover_hessian(WithDiagnostics(), fprim, v0)
             rc = cover_hessian(WithDiagnostics(), fscalar, v0)
 
-            @test cover_ratio(ForwardDiff.hessian(fprim, v0), rp.h_sum) <= GATE
+            @test max_coverage_ratio(rp.h_sum, ForwardDiff.hessian(fprim, v0)) <= GATE
             @test rp.grad ≈ rc.grad rtol = 1.0e-12
             @test rp.B ≈ rc.B rtol = 1.0e-12
             @test rp.h_sum ≈ rc.h_sum rtol = 1.0e-12

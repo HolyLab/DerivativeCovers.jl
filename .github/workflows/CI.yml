@@ -99,4 +99,4 @@ jobs:
           using DerivativeCoverProblems
           DocMeta.setdocmeta!(DerivativeCovers, :DocTestSetup, :(using DerivativeCovers); recursive=true)
           DocMeta.setdocmeta!(DerivativeCoverProblems, :DocTestSetup, :(using DerivativeCoverProblems); recursive=true)
-          doctest(abspath("docs/src"), [DerivativeCovers, DerivativeCovers.Diagnostics, DerivativeCoverProblems])
+          doctest(abspath("docs/src"), [DerivativeCovers, DerivativeCoverProblems])

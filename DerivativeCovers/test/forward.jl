@@ -43,7 +43,7 @@ const FORWARD_SPLITS = (
         for kw in FORWARD_SPLITS
             fc = forward_cover(f, x0; kw...)
             @test all(>=(0), fc.h_quad)
-            @test cover_ratio(H, fc.h_quad) <= GATE
+            @test max_coverage_ratio(fc.h_quad, H) <= GATE
         end
     end
 
@@ -73,7 +73,7 @@ const FORWARD_SPLITS = (
         )
         @test captured[].sigma == 0
         @test !DerivativeCovers.dead_slot(DerivativeCovers.forward_scale(captured[]))
-        @test cover_ratio(ForwardDiff.hessian(f, x0), fc.h_quad) <= GATE
+        @test max_coverage_ratio(fc.h_quad, ForwardDiff.hessian(f, x0)) <= GATE
         @test fc.h_quad ≈ forward_corner(f, x0; scales = w) rtol = FORWARD_RTOL
 
         # The slots a tangent really does empty are dropped by both backends alike.
@@ -86,7 +86,7 @@ const FORWARD_SPLITS = (
         @testset "$name" for (name, fd, xd) in deadprograms
             fc = forward_cover(fd, xd)
             @test fc.h_quad ≈ forward_corner(fd, xd) rtol = FORWARD_RTOL
-            @test cover_ratio(ForwardDiff.hessian(fd, xd), fc.h_quad) <= GATE
+            @test max_coverage_ratio(fc.h_quad, ForwardDiff.hessian(fd, xd)) <= GATE
         end
     end
 
@@ -100,7 +100,7 @@ const FORWARD_SPLITS = (
         forward_cover(outer, x0)
         mid = forward_cover(captured[])
         @test mid.grad ≈ ForwardDiff.gradient(inner, x0) rtol = FORWARD_RTOL
-        @test cover_ratio(ForwardDiff.hessian(inner, x0), mid.h_quad) <= GATE
+        @test max_coverage_ratio(mid.h_quad, ForwardDiff.hessian(inner, x0)) <= GATE
     end
 
     @testset "the split keywords are checked as the tape's are" begin
@@ -133,7 +133,7 @@ const FORWARD_SPLITS = (
         fc = forward_cover(deep, x0)
         @test all(isfinite, fc.h_quad)
         @test fc.grad ≈ ForwardDiff.gradient(deep, x0) rtol = FORWARD_RTOL
-        @test cover_ratio(ForwardDiff.hessian(deep, x0), fc.h_quad) <= GATE
+        @test max_coverage_ratio(fc.h_quad, ForwardDiff.hessian(deep, x0)) <= GATE
     end
 
     @testset "inputs share the context's zero cover channel — $name" for

@@ -16,7 +16,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test nls.h ≈ nls.h_gn
         @test nls.Utilde ≈ [1.0 2.0]
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
-        @test cover_ratio(H, nls.h) <= GATE
+        @test max_coverage_ratio(nls.h, H) <= GATE
     end
 
     @testset "nonlinear residuals: validity and separation" begin
@@ -35,8 +35,8 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test nls.m == m
         @test nls.grad ≈ ForwardDiff.gradient(f, x0)
         # Full cover of the whole Hessian, Gauss–Newton cover of JᵀJ, with h_gn beneath h.
-        @test cover_ratio(H, nls.h) <= GATE
-        @test cover_ratio(J' * J, nls.h_gn) <= GATE
+        @test max_coverage_ratio(nls.h, H) <= GATE
+        @test max_coverage_ratio(nls.h_gn, J' * J) <= GATE
         @test all(nls.h_gn .<= nls.h .* GATE)
         # The residual sensitivities dominate |J| entrywise.
         @test all(nls.Utilde .>= abs.(J) .- 1.0e-12)
@@ -56,7 +56,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         # A linear residual has no ∑ rₖ∇²rₖ term, so the full cover collapses onto the GN cover.
         @test nls.h ≈ nls.h_gn
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
-        @test cover_ratio(H, nls.h) <= GATE
+        @test max_coverage_ratio(nls.h, H) <= GATE
     end
 
     @testset "hybrid parity and independent Ũ" begin
@@ -88,14 +88,14 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         coarse = cover_nls(WithDiagnostics(), rmap, x0; ngroups = 3)
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
         J = ForwardDiff.jacobian(rmap, x0)
-        @test cover_ratio(H, coarse.h) <= GATE
+        @test max_coverage_ratio(coarse.h, H) <= GATE
         # Summing residual atoms within a group before quadrature can only inflate either cover.
         @test all(coarse.h .>= fine.h .- 1.0e-12)
         @test all(coarse.h_gn .>= fine.h_gn .- 1.0e-12)
         # Both covers come from the same channels, so grouping costs the Gauss-Newton cover too,
         # and it still covers JᵀJ.
         @test coarse.h_gn != fine.h_gn
-        @test cover_ratio(J' * J, coarse.h_gn) <= GATE
+        @test max_coverage_ratio(coarse.h_gn, J' * J) <= GATE
         @test all(coarse.h_gn .<= coarse.h .* GATE)
         # `ngroups` beyond the residual count is the per-residual partition.
         @test cover_nls(rmap, x0; ngroups = m).h_gn == fine.h_gn

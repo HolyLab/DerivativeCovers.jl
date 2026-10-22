@@ -21,7 +21,7 @@
         # Every merge covers J, for the default a = ones.
         for b in (jc.b_sum, jc.b_quad, jc.b_max)
             @test all(>=(0), b)
-            @test jacobian_ratio(J, jc.a, b) <= GATE
+            @test max_coverage_ratio(jc.a, b, J) <= GATE
         end
         # The ℓ¹ ≥ ℓ² ≥ ℓ∞ chain, coordinatewise.
         @test all(jc.b_max .<= jc.b_quad .* GATE)
@@ -42,7 +42,7 @@
         @test cover_jacobian_hybrid(t, outidxs, 1; a = jc.a).b ≈ jc.b_sum
         @test cover_jacobian_hybrid(t, outidxs, jc.m; a = jc.a).b ≈ jc.b_max
         hyb = cover_jacobian_hybrid(t, outidxs, 2; a = jc.a).b
-        @test jacobian_ratio(J, jc.a, hyb) <= GATE
+        @test max_coverage_ratio(jc.a, hyb, J) <= GATE
         @test all(jc.b_max .<= hyb .* GATE)
         @test all(hyb .<= jc.b_sum .* GATE)
     end
@@ -65,7 +65,7 @@
         a = [2.0, 0.5, 3.0]
         jc = cover_jacobian(WithDiagnostics(), r, x0; a)
         for b in (jc.b_sum, jc.b_quad, jc.b_max)
-            @test jacobian_ratio(J, a, b) <= GATE
+            @test max_coverage_ratio(a, b, J) <= GATE
         end
         # Reweighting a rescales the surrogate rows but not the covering property.
         @test jc.b_max ≈ vec(maximum(jc.Utilde ./ a; dims = 1))
@@ -94,111 +94,7 @@
         jc = cover_jacobian(WithDiagnostics(), r, x0; a = ones(3))
         @test jc.m == 3
         @test jc.Utilde[1, :] == jc.Utilde[2, :]        # identical rows for the aliased output
-        @test jacobian_ratio(J, jc.a, jc.b_max) <= GATE
-    end
-
-    @testset "jacobian_ratio" begin
-        J = [1.0 2.0; 3.0 0.0]
-        @test jacobian_ratio(J, [1.0, 3.0], [1.0, 2.0]) ≈ 1        # a = [1,3], b = [1,2] is exact
-        @test jacobian_ratio(J, [2.0, 6.0], [2.0, 4.0]) ≈ 0.25     # doubling both sides
-        @test jacobian_ratio(J, [1.0, 1.0], [0.0, 5.0]) == Inf     # J[1,1] over a vanishing product
-        @test jacobian_ratio(zeros(2, 2), [1.0, 1.0], [1.0, 1.0]) == 0
-        @test_throws DimensionMismatch jacobian_ratio(J, [1.0], [1.0, 2.0])
-    end
-
-    @testset "jacobian_representability lower-bounds any rank-1 cover" begin
-        rng = MersenneTwister(3)
-        # A rank-1 magnitude matrix is covered exactly, so the forced excess is 1.
-        u, v = exp.(randn(rng, 5)), exp.(randn(rng, 3))
-        @test jacobian_representability(u * v') ≈ 1
-
-        # A 2×2 block: excess ≥ √defect, defect = (M₁₁M₂₂)/(M₁₂M₂₁).
-        M = [1.0 2.0; 3.0 10.0]
-        @test jacobian_representability(M) ≈ sqrt((1.0 * 10.0) / (2.0 * 3.0))
-
-        # Two disjoint blocks force a large rank-1 fill: rows/cols across blocks give defect 1/ε².
-        eps = 0.01
-        B = [1.0 1.0 eps eps; 1.0 1.0 eps eps; eps eps 1.0 1.0; eps eps 1.0 1.0]
-        @test jacobian_representability(B) ≈ 1 / eps
-
-        # It is a genuine lower bound: no rank-1 cover of M can beat it.
-        Mr = exp.(randn(rng, 6, 4))
-        rep = jacobian_representability(Mr)
-        excess(a, b) = maximum((a[k] * b[j]) / Mr[k, j] for k in 1:6, j in 1:4)
-        jc = cover_jacobian(WithDiagnostics(), xs -> Mr * xs, zeros(4); a = ones(6), check = false)
-        # Mr*xs has Jacobian Mr (all entries positive), so its b_max cover has excess ≥ rep.
-        @test rep <= excess(jc.a, jc.b_max) * (1 + 1.0e-8)
-
-        @test_throws "nonnegative" jacobian_representability([1.0 -2.0; 3.0 4.0])
-    end
-
-    @testset "jacobian_minimax is the exact minimax rank-1 cover" begin
-        rng = MersenneTwister(5)
-
-        # Reference: the optimal excess is the max over bipartite support cycles of the
-        # alternating geometric mean, enumerable outright at these sizes.
-        function brute_minimax(M)
-            m, n = size(M)
-            best = 0.0
-            for r in 2:min(m, n)
-                for rows in Iterators.product(fill(1:m, r)...),
-                        cols in Iterators.product(fill(1:n, r)...)
-
-                    (allunique(rows) && allunique(cols)) || continue
-                    all(M[rows[i], cols[i]] > 0 for i in 1:r) || continue
-                    all(M[rows[i], cols[mod1(i + 1, r)]] > 0 for i in 1:r) || continue
-                    v = sum(
-                        log(M[rows[i], cols[i]]) - log(M[rows[i], cols[mod1(i + 1, r)]])
-                            for i in 1:r
-                    ) / r
-                    best = max(best, v)
-                end
-            end
-            return exp(best)
-        end
-
-        for trial in 1:12
-            m, n = rand(rng, 2:4), rand(rng, 2:4)
-            M = exp.(3 .* randn(rng, m, n))
-            trial > 6 && (M .*= rand(rng, m, n) .< 0.7)
-            mm = jacobian_minimax(M)
-            # Valid, attains the enumerated optimum, and is never beaten by the 2×2 bound.
-            @test jacobian_ratio(M, mm.a, mm.b) <= GATE
-            @test mm.excess ≈ brute_minimax(M) rtol = 1.0e-8
-            @test mm.excess >= jacobian_representability(M) / GATE
-        end
-
-        # Rank-1 magnitudes are covered exactly; a tree-support pattern too (no cycles at all).
-        u, v = exp.(randn(rng, 4)), exp.(randn(rng, 5))
-        @test jacobian_minimax(u * v').excess ≈ 1
-        T = [2.0 5.0 0.0; 0.0 3.0 7.0]
-        mmT = jacobian_minimax(T)
-        @test mmT.excess ≈ 1
-        @test jacobian_ratio(T, mmT.a, mmT.b) <= GATE
-
-        # On the 2×2 block matrix the 2-cycle bound is the whole story.
-        eps = 0.01
-        B = [1.0 1.0 eps eps; 1.0 1.0 eps eps; eps eps 1.0 1.0; eps eps 1.0 1.0]
-        @test jacobian_minimax(B).excess ≈ 1 / eps rtol = 1.0e-8
-
-        # A 3-cycle can dominate every 2-cycle: all 2×2 defects of C are mild, the 6-cycle is not.
-        C = [1.0 1.0e3 0.0; 0.0 1.0 1.0e3; 1.0e3 0.0 1.0]
-        @test jacobian_representability(C) ≈ 1        # no row pair shares two columns
-        @test jacobian_minimax(C).excess ≈ 1.0e3 rtol = 1.0e-8
-
-        # Zero rows and columns get exact zeros; the excess ignores them.
-        Z = [0.0 0.0 0.0; 0.0 2.0 4.0; 0.0 4.0 2.0]
-        mmZ = jacobian_minimax(Z)
-        @test mmZ.a[1] == 0 && mmZ.b[1] == 0
-        @test mmZ.excess ≈ 2.0 rtol = 1.0e-8
-
-        # Diagonal rescaling moves the pair covariantly and leaves the excess invariant.
-        M = exp.(2 .* randn(rng, 5, 4))
-        C2, D2 = exp2.(rand(rng, -10:10, 5)), exp2.(rand(rng, -10:10, 4))
-        @test jacobian_minimax(C2 .* M .* D2').excess ≈ jacobian_minimax(M).excess rtol = 1.0e-9
-
-        @test_throws "nonnegative" jacobian_minimax([1.0 -2.0; 3.0 4.0])
-        @test_throws "atol must be positive" jacobian_minimax([1.0 2.0; 3.0 4.0]; atol = 0)
+        @test max_coverage_ratio(jc.a, jc.b_max, J) <= GATE
     end
 
     @testset "cover_jacobian rejects a scalar program" begin
@@ -234,8 +130,8 @@
             a = marginal_weights(t, outidxs, b)
             @test a ≈ marginal_weights(U, b)                       # tape path = matrix path
             @test a ≈ vec(sum(U ./ b'; dims = 2))
-            @test jacobian_ratio(J, a, b) <= GATE                  # every (marginal a, b) covers
-            @test jacobian_ratio(U, a, b) <= GATE
+            @test max_coverage_ratio(a, b, J) <= GATE                  # every (marginal a, b) covers
+            @test max_coverage_ratio(a, b, U) <= GATE
         end
         @test_throws DimensionMismatch marginal_weights(t, outidxs, [1.0, 2.0])
         @test_throws "nonnegative" marginal_weights(t, outidxs, [1.0, -1.0, 1.0])
@@ -268,8 +164,8 @@
             J = ForwardDiff.jacobian(r, x0)
 
             bal = balance_cover(t, outidxs; conv...)
-            @test jacobian_ratio(J, bal.a, bal.b) <= GATE
-            @test jacobian_ratio(U, bal.a, bal.b) <= GATE
+            @test max_coverage_ratio(bal.a, bal.b, J) <= GATE
+            @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
             @test bal.delta <= 1.0e-10
 
             # The tape path is the matrix path applied to the surrogate. The two forms start from
@@ -282,17 +178,17 @@
             # merge — needs no convergence and covers.
             bdef = balance_cover(t, outidxs)
             @test bdef.iters == 4
-            @test jacobian_ratio(U, bdef.a, bdef.b) <= GATE
-            @test jacobian_ratio(J, bdef.a, bdef.b) <= GATE
+            @test max_coverage_ratio(bdef.a, bdef.b, U) <= GATE
+            @test max_coverage_ratio(bdef.a, bdef.b, J) <= GATE
 
             # Every iterate of the alternation is a valid cover: replay it from the pieces.
             a = ones(length(outidxs))
             b = vec(sum(U ./ a; dims = 1))
             for _ in 1:5
                 a = marginal_weights(t, outidxs, b)
-                @test jacobian_ratio(U, a, b) <= GATE              # after the a-step
+                @test max_coverage_ratio(a, b, U) <= GATE              # after the a-step
                 b = vec(sum(U ./ a; dims = 1))
-                @test jacobian_ratio(U, a, b) <= GATE              # after the b-step
+                @test max_coverage_ratio(a, b, U) <= GATE              # after the b-step
             end
 
             # Stationarity: one more full round changes every product by at most ~rtol.
@@ -309,8 +205,8 @@
                     (; merge = MaxMerge(), arule = :geomean, rounds = nothing),
                 )
                 balv = balance_cover(t, outidxs; kwargs...)
-                @test jacobian_ratio(U, balv.a, balv.b) <= GATE
-                @test jacobian_ratio(J, balv.a, balv.b) <= GATE
+                @test max_coverage_ratio(balv.a, balv.b, U) <= GATE
+                @test max_coverage_ratio(balv.a, balv.b, J) <= GATE
             end
         end
     end
@@ -362,8 +258,8 @@
                 (; targets = :flow, rounds = nothing),
             )
             bal = balance_cover(t, outidxs; kwargs...)
-            @test jacobian_ratio(U, bal.a, bal.b) <= GATE
-            @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+            @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
+            @test max_coverage_ratio(bal.a, bal.b, J) <= GATE
             @test bal.delta <= 1.0e-10
         end
         # The two-way log fit is exact in one round on a complete (dense) pattern.
@@ -397,7 +293,7 @@
         @test_throws "did not converge" balance_cover(Utri; uni..., maxiter = 20)
         # The convergent alternative on the same pattern.
         balg = balance_cover(Utri; arule = :geomean, rounds = nothing)
-        @test jacobian_ratio(Utri, balg.a, balg.b) <= GATE
+        @test max_coverage_ratio(balg.a, balg.b, Utri) <= GATE
 
         # A pattern that merely converges slowly must not be mistaken for drift: this banded map
         # needs thousands of rounds under the sum merge and still reaches its fixed point.
@@ -406,7 +302,7 @@
         Uc = jacobian_surrogate(tc, oc)
         slow = balance_cover(Uc; uni..., start = :equal, maxiter = 10^5)
         @test slow.iters > 2000
-        @test jacobian_ratio(Uc, slow.a, slow.b) <= GATE
+        @test max_coverage_ratio(slow.a, slow.b, Uc) <= GATE
     end
 
     @testset "balance_cover: an output no input reaches" begin
@@ -422,7 +318,7 @@
         bal = balance_cover(t, outidxs; rounds = nothing)
         @test bal.a[2] == 0
         @test all(>(0), bal.a[[1, 3]])
-        @test jacobian_ratio(U, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
 
         # The tape route and the materialized surrogate reach the same products, up to the gauge
         # each start leaves behind. Every entry here lies on one path, so the path counts and the
@@ -438,10 +334,10 @@
             jc = cover_jacobian(WithDiagnostics(), t, outidxs; a = bs.a, check = true)
             @test jc.a[2] == 0
             @test all(isfinite, jc.b_sum)
-            @test jacobian_ratio(U, jc.a, jc.b_max) <= GATE
+            @test max_coverage_ratio(jc.a, jc.b_max, U) <= GATE
             @test cover_jacobian_hybrid(t, outidxs, 3; a = bs.a).b ≈ jc.b_max
             hyb = cover_jacobian_hybrid(t, outidxs, 2; a = bs.a).b
-            @test jacobian_ratio(U, bs.a, hyb) <= GATE
+            @test max_coverage_ratio(bs.a, hyb, U) <= GATE
             @test all(jc.b_max .<= hyb .* GATE)
             @test all(hyb .<= jc.b_sum .* GATE)
         end
@@ -482,7 +378,7 @@
         balz = balance_cover(Uz)
         @test balz.a[2] == 0
         @test balz.b[2] == 0
-        @test jacobian_ratio(Uz, balz.a, balz.b) <= GATE
+        @test max_coverage_ratio(balz.a, balz.b, Uz) <= GATE
 
         @test_throws "did not converge" balance_cover(
             exp.(randn(rng, 3, 5));
@@ -608,7 +504,7 @@
         rres = xs -> [xs[1] - 1.0, xs[1] * xs[2] - 2.0]
         xsol = [1.0, 2.0]
         @test all(iszero, rres(xsol))
-        @test jacobian_ratio(ForwardDiff.jacobian(rres, xsol), abs.(rres(xsol)), [1.0, 1.0]) == Inf
+        @test max_coverage_ratio(abs.(rres(xsol)), [1.0, 1.0], ForwardDiff.jacobian(rres, xsol)) == Inf
 
         # The unweighted row sum a_k = sum_j Ũ_kj adds entries in the units of different inputs,
         # so an input rescaling moves each output's weight by a different factor.
@@ -652,14 +548,14 @@
         @test occursin("stalled", stall.msg)
 
         bal = balance_cover(Ucyc; merge = MaxMerge(), arule = :geomean, rounds = nothing)
-        @test jacobian_ratio(Ucyc, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, Ucyc) <= GATE
 
         # A fixed budget has nothing to stall: it returns what the rounds reached, and `delta`
         # reports the plateau rather than raising it as an error.
         budgeted = balance_cover(Ucyc; targets = :uniform, merge = MaxMerge(), rounds = 200)
         @test budgeted.iters == 200
         @test budgeted.delta > 0
-        @test jacobian_ratio(Ucyc, budgeted.a, budgeted.b) <= GATE
+        @test max_coverage_ratio(budgeted.a, budgeted.b, Ucyc) <= GATE
     end
 
     @testset "balance_cover: geomean round budget on slow supports" begin
@@ -676,13 +572,13 @@
             Uslow;
             merge = MaxMerge(), arule = :geomean, start = :equal, rounds = nothing
         )
-        @test jacobian_ratio(Uslow, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, Uslow) <= GATE
         @test bal.iters > 1000                                # exceeds the marginal budget
 
         # The same fit under a fixed budget stops where the budget runs out, still covering.
         short = balance_cover(Uslow; merge = MaxMerge(), arule = :geomean, rounds = 4)
         @test short.iters == 4
-        @test jacobian_ratio(Uslow, short.a, short.b) <= GATE
+        @test max_coverage_ratio(short.a, short.b, Uslow) <= GATE
 
         undersized = try
             balance_cover(

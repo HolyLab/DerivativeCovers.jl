@@ -257,13 +257,6 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         @test_throws "power iteration is pointwise" scaled_spectral_radius(tf, o, ones(2))
     end
 
-    @testset "the cover norm of an interval gradient is its largest value" begin
-        g = [interval(-2.0, 1.0), interval(0.5, 3.0)]
-        @test cover_norm(g, [2.0, 4.0]) === 1.25
-        @test cover_norm([interval(0.0), interval(1.0)], [0.0, 1.0]) === 1.0
-        @test cover_norm([interval(-1.0, 0.0), interval(1.0)], [0.0, 1.0]) === Inf
-    end
-
     @testset "boundtype" begin
         @test DerivativeCovers.boundtype(Interval{Float64}) === DerivativeCovers.Upward{Float64}
     end

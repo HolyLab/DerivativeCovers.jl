@@ -2,7 +2,7 @@
 
 These scripts measure cover tightness, not runtime. Symmetric covers are scored against a
 reference matrix from ForwardDiff—either the Hessian or the Gram matrix `J'*J`. The quantity
-`1/cover_ratio(A, h)` is the factor by which a cover exceeds the largest true entry. A rank-1
+`1/max_coverage_ratio(h, A)` is the factor by which a cover exceeds the largest true entry. A rank-1
 Jacobian pair is scored against the matrix it covers—either the surrogate `Ũ` or the exact `J`—by
 the *excess* `max_kj (a_k*b_j)/A_kj`. On both scales, `1` is exact and larger values are looser.
 
@@ -82,8 +82,8 @@ The cost and tightness improvement of the alternation in
 data-dependent: it runs until the per-round product change falls below `rtol` and errors when it
 does not. Its round count therefore belongs with any quoted cost.
 Excess puts three references on one scale: the unbalanced pair (`a = ones`, one merge b-step), the
-balanced pair, and the exact rank-1 optimum from `jacobian_minimax`, with
-`jacobian_representability`'s 2-cycle bound alongside.
+balanced pair, and the exact rank-1 optimum from `jacobian_minimax` (defined in
+[`minimax.jl`](minimax.jl)).
 
 The script reports four things: a table of all six `(merge, arule)` combinations for each test
 case; a sweep of `rtol`, the only public handle on where the iteration stops; a survey of convergence
@@ -112,7 +112,7 @@ drawn, in a median 27 rounds; its round count does not vary with the merge, whic
 closing b-step.
 
 The marginal failures are not failures of the cover. The iterates stay valid throughout, and
-tightly so — `jacobian_ratio` sits at exactly 1 on every one of them. Under drift they nonetheless
+tightly so — `max_coverage_ratio` sits at exactly 1 on every one of them. Under drift they nonetheless
 get monotonically worse: on `[1 1; 0 1]` the sum-merge excess is exactly `2*it + 2` against an
 optimum of 1, so a thousand rounds return a cover a thousand times looser than the one available
 after one. That is why iterating harder cannot be the remedy, and why drift is reported as drift

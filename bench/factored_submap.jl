@@ -13,11 +13,13 @@
 # both sit relative to keeping everything on one tape.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Printf
-using DerivativeCovers: cover_ratio, jacobian_minimax, declare_submap, submap,
+using MatrixCovers: max_coverage_ratio
+using DerivativeCovers: declare_submap, submap,
     compose_jacobian_cover, compose_hessian_cover, value
 
 # Use the same `softmax` and `layernorm` definitions as the tests.
 include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
+include(joinpath(@__DIR__, "minimax.jl"))
 
 tanhlayernorm(x::AbstractVector) = tanh.(layernorm(x))
 
@@ -64,7 +66,7 @@ end
 """
     hessian_routes(F, g, x0) -> (; sum, quad)
 
-Looseness `1/cover_ratio` of the Hessian of `g ∘ F` by each of the three routes, under both merges.
+Looseness `1/max_coverage_ratio` of the Hessian of `g ∘ F` by each of the three routes, under both merges.
 The factored route takes the head's own cover and gradient from a tape of `g` at `F(x0)`, the
 Jacobian cover from a tape of `F` at `x0`, and the curvature bound from `declare_submap` — the same
 `S` the declared route embeds, so the two routes differ only in how the `J'∇²g J` term is bounded.
@@ -78,7 +80,7 @@ function hessian_routes(F, g, x0)
     S = declare_submap(F, x0).S
     fsum = compose_hessian_cover(hd.h_sum, abs.(hd.grad), rF.a, rF.b_sum, S)
     fquad = compose_hessian_cover(hd.h_quad, abs.(hd.grad), rF.a, rF.b_sum, S)
-    loose(h) = 1 / cover_ratio(H, h)
+    loose(h) = 1 / max_coverage_ratio(h, H)
     return (
         sum = (
             decomposed = loose(dec.h_sum), declared = loose(dcl.h_sum),
@@ -111,7 +113,7 @@ function jacobian_table()
 end
 
 function hessian_table()
-    println("=== Hessian of head(F(z)): looseness 1/cover_ratio ===")
+    println("=== Hessian of head(F(z)): looseness 1/max_coverage_ratio ===")
     @printf(
         "%16s %10s %5s %10s %10s %10s %7s %10s %10s %10s %7s\n",
         "op", "head", "n", "sum_dec", "sum_decl", "sum_fact", "pen",

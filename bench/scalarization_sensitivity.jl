@@ -13,7 +13,8 @@
 # atom counts are reported alongside, since those are exact.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Statistics, Printf
-using DerivativeCovers: value, cover_ratio, local_covers, adjoints, nnodes, natoms,
+using MatrixCovers: max_coverage_ratio
+using DerivativeCovers: value, local_covers, adjoints, nnodes, natoms,
     cyclic_partition
 
 "`dot(z, A*z)/2`, whose taped-by-taped inner product records as one node carrying `n` atoms."
@@ -108,7 +109,7 @@ end
 """
     merge_curve(f, z, Gs) -> (; sum_loose, quad_loose, byatom, bynode, recovered, recovered_node)
 
-Looseness `1/cover_ratio` of the sum merge, the atomwise quadrature merge, and `cover_hybrid` at
+Looseness `1/max_coverage_ratio` of the sum merge, the atomwise quadrature merge, and `cover_hybrid` at
 each group count in `Gs`, under both granularities of partition. `recovered` is the fraction of the
 sum-to-quadrature gap that the finest partition reaches, measured in log space, and is `NaN` when
 there is no gap to recover.
@@ -117,10 +118,10 @@ function merge_curve(f, z, Gs)
     H = ForwardDiff.hessian(f, z)
     t, outidx = tape_function(f, z)
     d = cover_hessian(WithDiagnostics(), t, outidx)
-    sum_loose = 1 / cover_ratio(H, d.h_sum)
-    quad_loose = 1 / cover_ratio(H, d.h_quad)
-    byatom = [1 / cover_ratio(H, cover_hybrid(t, outidx, G)) for G in Gs]
-    bynode = [1 / cover_ratio(H, cover_hybrid(t, outidx, cyclic_partition(t, G))) for G in Gs]
+    sum_loose = 1 / max_coverage_ratio(d.h_sum, H)
+    quad_loose = 1 / max_coverage_ratio(d.h_quad, H)
+    byatom = [1 / max_coverage_ratio(cover_hybrid(t, outidx, G), H) for G in Gs]
+    bynode = [1 / max_coverage_ratio(cover_hybrid(t, outidx, cyclic_partition(t, G)), H) for G in Gs]
     span = log(sum_loose) - log(quad_loose)
     frac = h -> span > 1.0e-12 ? (log(sum_loose) - log(minimum(h))) / span : NaN
     return (;
@@ -170,7 +171,7 @@ function main()
     A = (A + A') ./ 2
     Gs = (1, 2, 4, 8, 16, 32, 64, 128)
 
-    println("Looseness is 1/cover_ratio: 1 is exact, larger is looser.")
+    println("Looseness is 1/max_coverage_ratio: 1 is exact, larger is looser.")
     println("`rec/atom` and `rec/node` are the fractions of the sum-to-quadrature gap the finest")
     println("partition of each granularity reaches.")
     println()
