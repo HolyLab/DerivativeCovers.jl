@@ -22,7 +22,37 @@
 using DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra, Random, Printf,
     Statistics
 using DerivativeCovers: cover_ratio, tape_function, nnodes, natoms, adjoints, abs_reverse,
-    atom_slots, value
+    atom_slots, value, sensitivities, tangents, local_covers, merge_atoms, hessian_bound,
+    magnitude
+
+"""
+    cover_lattice(t, outidx) -> (; B, B_signed, h_quad, h_quad_absadj, h_quad_signed, h_quad_forward)
+
+The quadrature merge of `t`'s Hessian cover in all four combinations of a signed or absolute
+intermediate-gradient channel with a signed or absolute adjoint channel. The absolute
+intermediate gradients are `sensitivities(t)`, the signed ones the magnitudes of `tangents(t)`;
+the signed adjoints are `abs.(adjoints(t, outidx))`, the absolute ones `acheck`, the unsigned sum
+over paths from each node to the output. `B` and `B_signed` are the elementwise bounds formed
+over the two intermediate-gradient channels with signed adjoints.
+"""
+function cover_lattice(t, outidx)
+    vbar = adjoints(t, outidx)
+    seed = zeros(eltype(t), nnodes(t))
+    seed[outidx] = 1
+    acheck = abs_reverse(t, seed)
+    utilde = sensitivities(t)
+    w = [magnitude.(g) for g in tangents(t)]
+    rhos_signed, _ = local_covers(t, vbar)
+    rhos_abs, _ = local_covers(t, acheck)
+    return (;
+        B = hessian_bound(t, vbar, utilde),
+        B_signed = hessian_bound(t, vbar, w),
+        h_quad = merge_atoms(t, rhos_signed, utilde)[2],
+        h_quad_absadj = merge_atoms(t, rhos_abs, utilde)[2],
+        h_quad_signed = merge_atoms(t, rhos_signed, w)[2],
+        h_quad_forward = merge_atoms(t, rhos_abs, w)[2],
+    )
+end
 
 "Geometric mean and maximum of `num ./ den` over the entries where `den` is positive."
 function ratio_stats(num, den)

@@ -54,40 +54,28 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         X = interval.(lo, hi)
         c = cover_hessian(f, X)
         d = cover_hessian(WithDiagnostics(), f, X)
-        lat = cover_lattice(f, X)
         @test c isa HessianCover{Interval{Float64}, Float64}
         @test c.h_sum isa Vector{Float64}
         @test c.grad isa Vector{Interval{Float64}}
         @test d isa HessianDiagnostics{Interval{Float64}}
         @test d.B isa Matrix{Float64}
-        @test lat isa CoverLattice{Interval{Float64}, Float64}
         @test c.h_sum ≈ d.h_sum rtol = 1.0e-12
 
         fref = get(reference, name, f)
         rng = Xoshiro(17)
-        ok_cover = ok_grad = ok_diag = ok_lattice = true
+        ok_cover = ok_grad = ok_diag = true
         for _ in 1:200
             x = lo .+ rand(rng, length(lo)) .* (hi .- lo)
             H = ForwardDiff.hessian(fref, x)
             g = ForwardDiff.gradient(fref, x)
-            ok_grad &= all(in_interval.(g, c.grad)) && all(in_interval.(g, d.grad)) &&
-                all(in_interval.(g, lat.grad))
+            ok_grad &= all(in_interval.(g, c.grad)) && all(in_interval.(g, d.grad))
             ok_cover &= covers(H, c.h_sum)
             ok_diag &= covers(H, d.h_sum) && covers(H, d.h_quad) &&
                 all(abs.(H) .<= d.B .* slack)
-            ok_lattice &= all(abs.(H) .<= lat.B .* slack) &&
-                all(abs.(H) .<= lat.B_signed .* slack) &&
-                all(
-                covers(H, getfield(lat, fld)) for fld in (
-                        :h_sum, :h_quad, :h_sum_absadj, :h_quad_absadj,
-                        :h_sum_signed, :h_quad_signed, :h_sum_forward, :h_quad_forward,
-                    )
-            )
         end
         @test ok_grad
         @test ok_cover
         @test ok_diag
-        @test ok_lattice
     end
 
     samples(rng, lo, hi, k = 150) = [lo .+ rand(rng, length(lo)) .* (hi .- lo) for _ in 1:k]
@@ -95,8 +83,8 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
     @testset "variance, hybrid and forward covers hold over the box — $name" for
         (name, f, lo, hi) in box_programs
         X = interval.(lo, hi)
-        vc = cover_variance(f, X)
-        @test vc isa VarianceCover{Interval{Float64}, Float64}
+        vc = cover_hessian(f, X)
+        @test vc isa HessianCover{Interval{Float64}, Float64}
         t, outidx = tape_function(f, X)
         h_sum, h_var = staged_channels(t, outidx)
         @test vc.h_sum ≈ h_sum rtol = 1.0e-12
@@ -267,8 +255,6 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         _, f, flo, fhi = box_programs[1]
         tf, o = tape_function(f, interval.(flo, fhi))
         @test_throws "power iteration is pointwise" scaled_spectral_radius(tf, o, ones(2))
-        @test_throws "must be a plain number" jacobian_shrink(ones(3), ones(3), interval(0.5, 0.6))
-        @test_throws "must be a plain number" spectral_shrink(ones(2), interval(0.5, 0.6))
     end
 
     @testset "the cover norm of an interval gradient is its largest value" begin
@@ -308,23 +294,11 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         H = ForwardDiff.hessian(x -> f(x, R), R.(x0))
         c = cover_hessian(fi, X)
         d = cover_hessian(WithDiagnostics(), fi, X)
-        ds = cover_hessian(WithDiagnostics(), fi, X; channel = SignedTangents())
-        lat = cover_lattice(fi, X)
         @test covers_exactly(H, c.h_sum)
-        @test covers_exactly(H, cover_variance(fi, X).h_sum)
-        for e in (d, ds)
-            @test all(abs.(H) .<= R.(e.B))
-            @test covers_exactly(H, e.h_sum)
-            @test covers_exactly(H, e.h_quad)
-            @test covers_exactly(H, e.h_sum_rev)
-        end
-        @test all(abs.(H) .<= R.(lat.B)) && all(abs.(H) .<= R.(lat.B_signed))
-        for fld in (
-                :h_sum, :h_quad, :h_sum_absadj, :h_quad_absadj,
-                :h_sum_signed, :h_quad_signed, :h_sum_forward, :h_quad_forward,
-            )
-            @test covers_exactly(H, getfield(lat, fld))
-        end
+        @test all(abs.(H) .<= R.(d.B))
+        @test covers_exactly(H, d.h_sum)
+        @test covers_exactly(H, d.h_quad)
+        @test covers_exactly(H, d.h_sum_rev)
         @test covers_exactly(H, cover_hybrid(fi, X, 2))
         @test covers_exactly(H, forward_cover(fi, X).h_quad)
     end

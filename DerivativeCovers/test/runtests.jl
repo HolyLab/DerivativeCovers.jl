@@ -11,14 +11,13 @@ using .DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
 using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms, cover_ratio,
-    bound_ratio,
-    rank1_ratio, tightness, jacobian_ratio, jacobian_representability,
-    jacobian_minimax, dependency_severity, scaled_spectral_radius,
-    scaled_singular_value, spectral_shrink, jacobian_shrink, equilibrate,
+    bound_ratio, tightness, jacobian_ratio, jacobian_representability,
+    jacobian_minimax, scaled_spectral_radius, scaled_singular_value, equilibrate,
+    cover_hybrid, cover_jacobian_hybrid,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
-    nls_partition, adjoints, sensitivities, abs_reverse, abs_forward,
-    local_covers, balanced_split, variance_seeds, dependency_sweep,
+    nls_partition, adjoints, sensitivities, tangents, abs_reverse, abs_forward,
+    local_covers, merge_atoms, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate,
     Curvature, NoCurvature, UnaryCurvature, BinaryCurvature, DenseCurvature
@@ -40,6 +39,24 @@ include("programs.jl")
 # The covering chain abs.(H) <= B <= sum_k s_k s_k' <= h*h' is exact in exact arithmetic;
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1.0e-10
+
+# Per-coordinate ratio of a cover's sum and variance channels: 1 where a single contribution
+# reaches a coordinate, growing with the overlap of the contributions it sums. Both channels vanish
+# together, and such a coordinate gets 1.
+severity(c) = map((s, v) -> (r = float(s) / float(v); isnan(r) ? one(r) : r), c.h_sum, c.h_var)
+
+# The quadrature cover a forward propagation reaches, assembled from a tape: the atoms are split
+# with the unsigned path sum from each node to the output in place of its adjoint, and merged over
+# the magnitudes of the exact intermediate gradients.
+function forward_corner(f, x0; scales = nothing, ratio = nothing)
+    t, outidx = tape_function(f, x0)
+    T = eltype(t)
+    seed = zeros(DerivativeCovers.boundtype(T), nnodes(t))
+    seed[outidx] = 1
+    rhos, _ = local_covers(t, abs_reverse(t, seed); scales, ratio)
+    u = [DerivativeCovers.tobound.(T, DerivativeCovers.magnitude.(g)) for g in tangents(t)]
+    return DerivativeCovers.tomag(T, merge_atoms(t, rhos, u)[2])
+end
 
 # The staged route to the channels `cover_hessian` fuses into one sweep: finish the adjoints, form
 # every local cover, then propagate the linear and squared seeds. Returns `(h_sum, h_var)`.
@@ -73,7 +90,6 @@ include("arrayops.jl")
 include("mlp.jl")
 include("cancellation.jl")
 include("merges.jl")
-include("lattice.jl")
 include("forward.jl")
 include("nls.jl")
 include("vectoroutput.jl")
@@ -131,13 +147,10 @@ include("maxpath.jl")
             [
                 :Tape, :TVar, :tape_function,
                 :FVar, :forward_cover, :ForwardCover,
-                :cover_hessian, :cover_jacobian, :cover_nls, :cover_variance,
-                :cover_hybrid, :cover_jacobian_hybrid, :cover_lattice,
+                :cover_hessian, :cover_jacobian, :cover_nls,
                 :CoverOnly, :WithDiagnostics,
-                :TangentChannel, :AbsoluteTangents, :SignedTangents,
-                :CoverLattice, :HessianCover, :HessianDiagnostics,
-                :JacobianCover, :JacobianDiagnostics, :NLSCover,
-                :NLSDiagnostics, :VarianceCover,
+                :HessianCover, :HessianDiagnostics,
+                :JacobianCover, :JacobianDiagnostics, :NLSCover, :NLSDiagnostics,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
             ]
         )
@@ -148,15 +161,15 @@ include("maxpath.jl")
             :constantnode, :atom_slots, :check_finite_partials,
             :submapnode, :split_scales, :split_block, :split_ratio, :guards_any_block,
             :sensitivity_scales, :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms,
-            :CoverVar, :constantvar, :tangent_channel, :forward_scale,
+            :CoverVar, :constantvar, :forward_scale,
             :magnitude, :magtype, :separation, :decided_sign, :check_values, :adjoints,
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
-            :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
-            :jacobian_representability, :jacobian_minimax, :dependency_severity,
-            :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink,
-            :jacobian_shrink, :equilibrate,
+            :cover_ratio, :bound_ratio, :tightness, :jacobian_ratio,
+            :jacobian_representability, :jacobian_minimax,
+            :scaled_spectral_radius, :scaled_singular_value, :equilibrate,
+            :cover_hybrid, :cover_jacobian_hybrid,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
             :declare_submap, :submap, :gramvariance, :gramvariance!,
         )
@@ -249,13 +262,11 @@ include("maxpath.jl")
         results = (
             cover_hessian(f, x0),
             cover_hessian(WithDiagnostics(), f, x0),
-            cover_lattice(f, x0),
             forward_cover(f, x0),
             cover_jacobian(xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_jacobian(WithDiagnostics(), xs -> [xs[1] * xs[2], sin(xs[3])], x0),
             cover_nls(xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
             cover_nls(WithDiagnostics(), xs -> [xs[1] * xs[2] - 1, sin(xs[3])], x0),
-            cover_variance(f, x0),
         )
         for c in results
             # Each names its own type and its dimensions, and holds vectors it must not print.
@@ -265,10 +276,10 @@ include("maxpath.jl")
                 @test length(s) < 100
             end
         end
-        @test sprint(show, results[5]) == "JacobianCover(2x3)"
-        @test sprint(show, results[6]) == "JacobianDiagnostics(2x3)"
-        @test sprint(show, results[7]) == "NLSCover(2 residuals, 3 inputs)"
-        @test sprint(show, results[8]) == "NLSDiagnostics(2 residuals, 3 inputs)"
+        @test sprint(show, results[4]) == "JacobianCover(2x3)"
+        @test sprint(show, results[5]) == "JacobianDiagnostics(2x3)"
+        @test sprint(show, results[6]) == "NLSCover(2 residuals, 3 inputs)"
+        @test sprint(show, results[7]) == "NLSDiagnostics(2 residuals, 3 inputs)"
     end
 
     @testset "tape mechanics" begin
@@ -300,7 +311,7 @@ include("maxpath.jl")
         oi = Int32(outidx)
         @test adjoints(t, oi) == adjoints(t, outidx)
         @test cover_hessian(t, oi).h_sum == cover_hessian(t, outidx).h_sum
-        @test cover_variance(t, oi).h_var == cover_variance(t, outidx).h_var
+        @test cover_hessian(t, oi).h_var == cover_hessian(t, outidx).h_var
         @test cover_hybrid(t, oi, 2) == cover_hybrid(t, outidx, 2)
         @test hvp(t, oi, [1.0, 0.0, 0.0]) == hvp(t, outidx, [1.0, 0.0, 0.0])
         h = cover_hessian(t, outidx).h_sum
@@ -458,7 +469,7 @@ include("maxpath.jl")
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test all(isfinite, res.h_sum)
         @test cover_ratio(ForwardDiff.hessian(f, x0), res.h_sum) <= GATE
-        @test all(isfinite, cover_variance(f, x0).h_sum)
+        @test all(isfinite, cover_hessian(f, x0).h_sum)
 
         # Deeper still, where the adjoints themselves approach the subnormal range.
         f2 = x -> prod(x)^2
@@ -508,7 +519,7 @@ include("maxpath.jl")
         @test bound_ratio(H, res.B) <= GATE                  # abs.(H) <= B
         for h in (res.h_sum, res.h_quad)
             @test all(>=(0), h)
-            @test rank1_ratio(res.B, h) <= GATE              # B <= h*h'
+            @test cover_ratio(res.B, h) <= GATE              # B <= h*h'
             @test cover_ratio(H, h) <= GATE                  # abs.(H) <= h*h'
         end
         # The quadrature merge is never looser than the sum merge, coordinatewise.
@@ -980,10 +991,10 @@ include("maxpath.jl")
 
         # Every entry point that splits threads both keywords. `ratio = 0.5` condemns `xp`'s value
         # pair, which the default keeps, so each of these separates.
-        vc = cover_variance(fmul, xp; ratio = 0.5)
+        vc = cover_hessian(fmul, xp; ratio = 0.5)
         @test vc.h_sum == [1.0, 1.0]
-        @test all(>=(1 - 1.0e-12), vc.severity)
-        @test cover_variance(fmul, xp).h_sum == [2.0, 0.5]
+        @test all(>=(1 - 1.0e-12), severity(vc))
+        @test cover_hessian(fmul, xp).h_sum == [2.0, 0.5]
 
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
         @test declare_submap(Fsub, xp; ratio = 0.5).S == [1.0 1.0]
@@ -1003,11 +1014,9 @@ include("maxpath.jl")
         end
 
         # A forward propagation carries both scale references itself, so it splits by the same
-        # rule a tape does and reaches the lattice's forward corner under either threshold.
+        # rule a tape does and reaches the same cover as its tape under either threshold.
         for ratio in (nothing, 0.5)
-            fc = forward_cover(fmul, xp; ratio)
-            lat = cover_lattice(fmul, xp; ratio)
-            @test fc.h_quad ≈ lat.h_quad_forward rtol = 1.0e-12
+            @test forward_cover(fmul, xp; ratio).h_quad ≈ forward_corner(fmul, xp; ratio) rtol = 1.0e-12
         end
         @test_throws "strictly positive" forward_cover(fmul, x0; scales = [1.0, 0.0])
         @test_throws DimensionMismatch forward_cover(fmul, x0; scales = [1.0])
@@ -1021,7 +1030,7 @@ include("maxpath.jl")
             )
             for h in (res.h_sum, res.h_quad)
                 @test all(>=(0), h)
-                @test rank1_ratio(res.B, h) <= GATE
+                @test cover_ratio(res.B, h) <= GATE
                 @test cover_ratio(H, h) <= GATE
             end
             @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
@@ -1089,7 +1098,7 @@ include("maxpath.jl")
             h = cover_hybrid(t, outidx, groups)
             @test all(>=(0), h)
             @test cover_ratio(H, h) <= GATE                  # valid for any partition
-            @test rank1_ratio(res.B, h) <= GATE
+            @test cover_ratio(res.B, h) <= GATE
             # Bracketed by the two extremes it interpolates.
             @test all(res.h_quad .<= h .* GATE)
             @test all(h .<= res.h_sum .* GATE)
@@ -1145,7 +1154,7 @@ include("maxpath.jl")
     @testset "variance channel — $name" for (name, f, x0) in PROBLEMS
         t, outidx = tape_function(f, x0)
         res = cover_hessian(WithDiagnostics(), t, outidx)
-        vc = cover_variance(t, outidx)
+        vc = cover_hessian(t, outidx)
 
         @test vc.grad ≈ res.grad
         @test vc.h_sum ≈ res.h_sum rtol = 1.0e-12             # the hard channel is the sum merge
@@ -1155,8 +1164,8 @@ include("maxpath.jl")
         @test all(res.h_quad .<= vc.h_sum .* GATE)
         # The two channels carry seed weight along the same paths, so they vanish together.
         @test (vc.h_var .== 0) == (vc.h_sum .== 0)
-        @test all(vc.severity .>= 1 / GATE)
-        @test all(isfinite, vc.severity)
+        @test all(severity(vc) .>= 1 / GATE)
+        @test all(isfinite, severity(vc))
 
         rhos, _ = local_covers(t, adjoints(t, outidx))
         theta2 = variance_seeds(t, rhos)
@@ -1169,20 +1178,20 @@ include("maxpath.jl")
         # Each input reaches each node along a single path, and no node has two parents sharing an
         # input, so there is no covariance to drop: the estimate attains the quadrature merge.
         for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
-            @test cover_variance(f, x0).h_var ≈
+            @test cover_hessian(f, x0).h_var ≈
                 cover_hessian(WithDiagnostics(), f, x0).h_quad rtol = 1.0e-12
         end
         # One nonlinear node carries the whole Hessian of the factored quadratic, so the estimate
         # lands on the exact minimal cover.
-        @test cover_variance(quad_factored(WQ), XQ).h_var ≈ abs.(WQ)
+        @test cover_hessian(quad_factored(WQ), XQ).h_var ≈ abs.(WQ)
     end
 
     @testset "variance channel underestimates where paths reconverge" begin
         # The entrywise quadratic routes each input through n nonlinear nodes whose contributions
         # overlap — exactly the covariances the independence assumption drops.
         f, x0 = quad_entrywise(AQ), XQ
-        @test all(cover_variance(f, x0).h_var .< cover_hessian(WithDiagnostics(), f, x0).h_quad)
-        @test maximum(cover_variance(f, x0).severity) > 1.5
+        @test all(cover_hessian(f, x0).h_var .< cover_hessian(WithDiagnostics(), f, x0).h_quad)
+        @test maximum(severity(cover_hessian(f, x0))) > 1.5
 
         # The estimate is not a cover. The diamond makes that concrete: its quadrature merge
         # attains the minimal cover [3, 1], so any undershoot loses the guarantee. x₁ reaches the
@@ -1190,7 +1199,7 @@ include("maxpath.jl")
         # in quadrature as sqrt(5) instead of summing to 3.
         H = ForwardDiff.hessian(reconvergent_diamond, [0.4, -0.9])
         res = cover_hessian(WithDiagnostics(), reconvergent_diamond, [0.4, -0.9])
-        vc = cover_variance(reconvergent_diamond, [0.4, -0.9])
+        vc = cover_hessian(reconvergent_diamond, [0.4, -0.9])
         @test H ≈ [9.0 -3.0; -3.0 1.0]
         @test res.h_quad ≈ [3.0, 1.0]
         @test cover_ratio(H, res.h_quad) ≈ 1
@@ -1200,14 +1209,14 @@ include("maxpath.jl")
 
     @testset "variance channel counts each parent slot as its own path" begin
         # `x*x` seeds two slots that share a sign in the program; the channel squares them apart.
-        vc = cover_variance(x -> x[1] * x[1], [3.0])
+        vc = cover_hessian(x -> x[1] * x[1], [3.0])
         @test vc.h_sum ≈ [2.0]
         @test vc.h_var ≈ [sqrt(2.0)]
         # The unary square has a single slot, so its two channels agree.
-        vu = cover_variance(x -> x[1]^2, [3.0])
+        vu = cover_hessian(x -> x[1]^2, [3.0])
         @test vu.h_sum ≈ vu.h_var ≈ [sqrt(2.0)]
         # The cube reconverges on x through three slots and falls below sqrt(abs(f'')) = sqrt(18).
-        vcube = cover_variance(x -> x[1] * x[1] * x[1], [3.0])
+        vcube = cover_hessian(x -> x[1] * x[1] * x[1], [3.0])
         @test vcube.h_var ≈ [sqrt(15.0)]
         @test vcube.h_var[1] < sqrt(18.0)
         @test cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var == vcube.h_var
@@ -1224,23 +1233,23 @@ include("maxpath.jl")
             ),
         ]
         @testset "$name" for (name, f, x0, d) in cases
-            vc = cover_variance(f, x0)
+            vc = cover_hessian(f, x0)
 
             # Rescaling the inputs puts a factor 1/d[a] on each input edge, whose square the
             # variance channel picks up; the severity, a ratio of the two channels, is invariant.
-            vcd = cover_variance(xt -> f(xt ./ d), d .* x0)
+            vcd = cover_hessian(xt -> f(xt ./ d), d .* x0)
             @test vcd.h_var ≈ vc.h_var ./ d rtol = 1.0e-12
-            @test vcd.severity ≈ vc.severity rtol = 1.0e-12
+            @test severity(vcd) ≈ severity(vc) rtol = 1.0e-12
 
             # f -> c*f scales every rho by sqrt(c), hence every squared seed by c.
             c = 7.3
-            vcc = cover_variance(x -> c * f(x), x0)
+            vcc = cover_hessian(x -> c * f(x), x0)
             @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol = 1.0e-12
-            @test vcc.severity ≈ vc.severity rtol = 1.0e-12
+            @test severity(vcc) ≈ severity(vc) rtol = 1.0e-12
         end
     end
 
-    @testset "dependency sweep and severity" begin
+    @testset "dependency sweep" begin
         t, outidx = tape_function(x -> exp(x[1] * x[2]), [0.5, -2.0])
         N = nnodes(t)
         theta = Float64[k == outidx ? 1.0 : 0.0 for k in 1:N]
@@ -1256,9 +1265,6 @@ include("maxpath.jl")
         @test_throws DimensionMismatch dependency_sweep(t, theta, zeros(N + 1))
         @test_throws DimensionMismatch dependency_sweep(t, zeros(N - 1), zeros(N))
 
-        @test dependency_severity([2.0, 0.0], [1.0, 0.0]) == [2.0, 1.0]
-        @test dependency_severity([1.0], [0.0]) == [Inf]
-        @test_throws DimensionMismatch dependency_severity([1.0], [1.0, 2.0])
     end
 
     @testset "hvp — $name" for (name, f, x0) in PROBLEMS
@@ -1276,7 +1282,7 @@ include("maxpath.jl")
         @test_throws DimensionMismatch hvp!(similar(x0, length(x0) + 1), t, outidx, v)
     end
 
-    @testset "spectral shrink — $name" for (name, f, x0) in PROBLEMS
+    @testset "scaled spectral radius — $name" for (name, f, x0) in PROBLEMS
         H = ForwardDiff.hessian(f, x0)
         t, outidx = tape_function(f, x0)
         h = cover_hessian(WithDiagnostics(), t, outidx).h_sum
@@ -1285,15 +1291,7 @@ include("maxpath.jl")
         lambda = scaled_spectral_radius(H, h)
         @test lambda >= cover_ratio(H, h) * (1 - 1.0e-12)
 
-        hs = spectral_shrink(h, lambda)
-        @test cover_ratio(H, hs) <= GATE                     # shrinking preserves validity
-        @test all(hs .<= h .* GATE)                          # and never inflates
-        if lambda < 1
-            @test hs ≈ h .* sqrt(lambda)
-            @test all(hs[h .> 0] .< h[h .> 0])
-        else
-            @test hs == h
-        end
+        @test cover_ratio(H, sqrt(lambda) .* h) <= GATE       # rescaling by the norm stays valid
 
         # The matrix-free estimate approaches the exact norm from below, where it applies at all:
         # a coordinate the Hessian ignores gets a zero cover, which the power iteration rejects.
@@ -1306,16 +1304,13 @@ include("maxpath.jl")
         end
     end
 
-    @testset "spectral shrink algebra" begin
+    @testset "scaled spectral radius algebra" begin
         H = [4.0 -2.0; -2.0 1.0]
         h = [2.0, 1.0]
         # Hhat = [1 -1; -1 1] has spectral norm 2, so this cover is spectrally saturated.
         @test scaled_spectral_radius(H, h) ≈ 2
-        @test spectral_shrink(h, 2.0) == h
-        @test spectral_shrink(h, 0.25) ≈ h ./ 2
-        @test spectral_shrink(h, 0.25; safety = 4) == h        # safety = 4 saturates the cover
 
-        # The scaled Hessian, and hence the shrink factor, is invariant under both rescalings.
+        # The scaled Hessian, and hence its norm, is invariant under both rescalings.
         d = [1.0e-3, 1.0e5]
         @test scaled_spectral_radius(H .* (d * d'), h .* d) ≈ scaled_spectral_radius(H, h)
         @test scaled_spectral_radius(9 .* H, 3 .* h) ≈ scaled_spectral_radius(H, h)
@@ -1331,8 +1326,6 @@ include("maxpath.jl")
             t, outidx, [1.0, 1.0];
             maxiter = 1, rtol = 1.0e-12
         )
-        @test_throws ArgumentError spectral_shrink(h, -1.0)
-        @test_throws ArgumentError spectral_shrink(h, 1.0; safety = 0)
     end
 
     @testset "metrics" begin
@@ -1344,7 +1337,7 @@ include("maxpath.jl")
 
         B = [4.0 2.0; 2.0 2.0]
         @test bound_ratio(H, B) ≈ 1                         # attained on the (1,1) entry
-        @test rank1_ratio(B, [2.0, 1.0]) ≈ 2                # B[2,2] = 2 exceeds h[2]^2 = 1
+        @test cover_ratio(B, [2.0, 1.0]) ≈ 2                # B[2,2] = 2 exceeds h[2]^2 = 1
 
         mx, gm, nextra = tightness([2.0, 8.0, 1.0], [1.0, 2.0, 0.0])
         @test mx ≈ 4
@@ -1412,7 +1405,7 @@ include("maxpath.jl")
         @test c.h_sum ≈ h_sum rtol = 1.0e-12
         @test c.h_var ≈ h_var rtol = 1.0e-12
         @test all(c.h_var .<= c.h_sum .* GATE)
-        vc = cover_variance(t, outidx)
+        vc = cover_hessian(t, outidx)
         @test vc.grad == c.grad && vc.h_sum == c.h_sum && vc.h_var == c.h_var
     end
 
@@ -1439,13 +1432,13 @@ include("maxpath.jl")
         # every node along a single path. The variance channel drops covariances between
         # reconverging paths, so it attains the quadrature merge exactly iff there are none.
         tree = random_dag(8; nops = 40, sharing = 0.0, rng = MersenneTwister(11))
-        @test cover_variance(tree.f, tree.x0).h_var ≈
+        @test cover_hessian(tree.f, tree.x0).h_var ≈
             cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol = 1.0e-10
 
         # With reuse, paths reconverge; the variance channel drops exactly those covariances and
         # so falls strictly below the quadrature merge on the coordinates that reconverge.
         shared = random_dag(8; nops = 40, sharing = 0.6, rng = MersenneTwister(11))
-        hv = cover_variance(shared.f, shared.x0).h_var
+        hv = cover_hessian(shared.f, shared.x0).h_var
         hq = cover_hessian(WithDiagnostics(), shared.f, shared.x0).h_quad
         @test all(hv .<= hq .* GATE)
         @test count(hv .< hq .* (1 - 1.0e-8)) >= 2

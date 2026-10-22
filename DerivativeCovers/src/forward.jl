@@ -482,15 +482,12 @@ for many: the propagation is then compiled for the exact input count, which for 
 more in compilation than it saves at run time. A `Vector` point propagates in `Vector`s and
 compiles once for every size.
 
-Currently, the tape-based
-[`cover_hessian`](@ref) with [`SignedTangents`](@ref) is tighter, since it merges
-the same atoms weighted by exact adjoints rather than by the unsigned path sums a forward pass has
-to use.
-
-The cover this reaches is exactly the signed-tangent, absolute-adjoint corner of
-[`cover_lattice`](@ref) — `h_quad_forward` — which is therefore what it is tested against. That
-corner is *incomparable* with the default `h_quad`: it keeps every tangent sign and discards every
-adjoint sign, so which is tighter is a property of the program.
+The cover keeps the signs of the intermediate gradients `∇v`, which a forward pass carries
+exactly, and discards the signs of the adjoints, which it cannot see: each atom is weighted by the
+unsigned sum over paths from its node to the output rather than by the node's adjoint. That makes
+it *incomparable* with the quadrature merge `h_quad` of [`HessianDiagnostics`](@ref), which
+discards the signs of the intermediate gradients and keeps those of the adjoints; which is tighter
+is a property of the program.
 
 `scales` and `ratio` govern the split exactly as in [`cover_hessian`](@ref): the propagation
 carries both of the references [`split_block`](@ref) reads, so it splits by the same rule a tape

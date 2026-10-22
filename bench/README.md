@@ -152,7 +152,7 @@ while `dot(z, A*z)/2` loses everything.
 What each of a cover's two sign channels is worth. The tangents `∇v_j` carry an input's influence
 forward to each node, the adjoints `vbar_k` carry the output's sensitivity back, and either can be
 propagated with signs or in absolute-value arithmetic.
-[`cover_lattice`](../DerivativeCovers/src/covers.jl) computes all four combinations from one tape,
+The script's `cover_lattice` computes all four combinations from one tape,
 so the looseness of the default cover splits into a tangent-side part, an adjoint-side part, and a
 residue neither channel reaches. The script scores the four corners on the
 `DerivativeCoverProblems` families and on array-op heads, decomposes the gap per coordinate, sweeps

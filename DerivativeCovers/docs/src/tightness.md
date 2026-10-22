@@ -23,9 +23,9 @@ comparison coordinate by coordinate. [`tightness`](@ref) summarizes the
 profile `h ./ href` by its maximum and geometric mean, which show whether the
 looseness is spread evenly or concentrated in a few coordinates.
 
-[`rank1_ratio`](@ref) and [`bound_ratio`](@ref) compare a cover and the
-elementwise bound `B` of [`HessianDiagnostics`](@ref) with each other and with
-`H`. For Jacobians, [`jacobian_ratio`](@ref) is the counterpart of
+[`bound_ratio`](@ref) checks the elementwise bound `B` of
+[`HessianDiagnostics`](@ref) against `H`, and `cover_ratio(B, h)` checks a
+cover against `B`. For Jacobians, [`jacobian_ratio`](@ref) is the counterpart of
 `cover_ratio`.
 
 ## Where looseness comes from
@@ -80,10 +80,10 @@ product, and all of them reconverge on the inputs. The factored form has only
 `rank` nonlinear operations, which do not overlap. The quadrature merge
 recovers part of the difference.
 
-Without the Hessian, the `severity` returned by [`cover_variance`](@ref)
-estimates how much the contributions to each coordinate overlap: it is 1 when
-each coordinate receives a single contribution and grows with the number of
-overlapping contributions.
+Without the Hessian, the ratio `h_sum ./ h_var` of the two vectors in a
+[`HessianCover`](@ref) estimates how much the contributions to each coordinate
+overlap: it is 1 when each coordinate receives a single contribution and grows
+with the number of overlapping contributions.
 
 ### Lost cancellation
 
@@ -91,34 +91,15 @@ The construction loses tightness wherever it takes absolute values of terms
 that would have cancelled. This happens in two places. The intermediate gradients carry the
 influence of each input forward through the program, and the adjoints carry
 the sensitivity of the output backward. Either can be computed with signs or in
-absolute-value arithmetic. [`cover_lattice`](@ref) computes the covers for all
-four combinations, which shows what each choice costs for a given program:
-
-```jldoctest lattice
-julia> using DerivativeCovers
-
-julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
-
-julia> lat = cover_lattice(g, [0.4, 1.5]);
-
-julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)     # gain from signed intermediate gradients
-2-element Vector{Float64}:
- 0.222
- 1.0
-
-julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)     # gain from signed adjoints
-2-element Vector{Float64}:
- 0.362
- 0.364
-```
-
-In this program, `d` is a difference of nearly equal terms, so its exact
-intermediate gradient is much smaller than its absolute-value bound. The value `u` reaches
-the output along two paths whose contributions have opposite signs, so the
-signed adjoint is smaller than its absolute-value bound. The default
-[`cover_hessian`](@ref) keeps the adjoint signs and bounds the intermediate gradients;
-[`SignedTangents`](@ref) keeps both (see
-[Choosing the intermediate-gradient channel](@ref)).
+absolute-value arithmetic. The default [`cover_hessian`](@ref) keeps the
+adjoint signs and bounds the intermediate gradients, which is what lets it run
+in a single ``O(L)`` sweep; [`forward_cover`](@ref) does the opposite (see
+[Propagating a cover forward](@ref)). A difference of nearly equal terms, such
+as `exp(x) - 1 - x` near zero, has an exact intermediate gradient much smaller
+than its absolute-value bound; a value that reaches the output along paths
+with opposite signs has an adjoint much smaller than its absolute-value bound.
+When the program is small enough to form `H`, a cover computed from `H`
+itself, such as `symcover(H)`, loses neither.
 
 ## Test problems
 

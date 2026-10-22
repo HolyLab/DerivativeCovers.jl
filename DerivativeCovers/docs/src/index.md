@@ -143,13 +143,11 @@ true
 |---|---|---|---|
 | [`cover_hessian`](@ref) | Hessian of a scalar function | ``O(L)`` | `h_sum` yes; `h_var` no |
 | [`cover_hessian`](@ref)`(WithDiagnostics(), …)` | adds a tighter cover `h_quad` and an elementwise bound | ``O(nL)`` time, ``O(n^2)`` memory | yes |
-| [`cover_hybrid`](@ref) | Hessian, between `h_sum` and `h_quad` | ``O(GL)`` for `G` groups | yes |
+| [`DerivativeCovers.cover_hybrid`](@ref cover_hybrid) | Hessian, between `h_sum` and `h_quad` | ``O(GL)`` for `G` groups | yes |
 | [`forward_cover`](@ref) | Hessian, without recording the program | ``O(nL)`` time, ``O(n)`` memory per live variable | yes |
-| [`cover_variance`](@ref) | `h_sum`, plus an estimate of how much it overlaps | ``O(L)`` | `h_sum` only |
 | [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(GL)``, with `G = m` residual channels by default | `h`, `h_gn` yes; `h_var`, `h_var_gn` no |
 | [`cover_jacobian`](@ref) | Jacobian of a vector-valued function | a few ``O(L)`` sweeps | yes |
-| [`cover_jacobian_hybrid`](@ref) | Jacobian, tighter than the default | ``O(GL)`` for `G` groups | yes |
-| [`cover_lattice`](@ref) | four variants of the Hessian cover, for analysis | ``O(nL)`` | yes |
+| [`DerivativeCovers.cover_jacobian_hybrid`](@ref cover_jacobian_hybrid) | Jacobian, tighter than the default | ``O(GL)`` for `G` groups | yes |
 
 For most uses, [`cover_hessian`](@ref) and [`cover_jacobian`](@ref) are the
 place to start. The ``O(L)`` cover `h_sum` can be loose when many paths through

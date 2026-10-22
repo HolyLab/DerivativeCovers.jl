@@ -54,9 +54,9 @@
     # gauge does not reorder.
     function pipeline(t, outidx)
         res = cover_hessian(WithDiagnostics(), t, outidx)
-        vc = cover_variance(t, outidx)
+        vc = cover_hessian(t, outidx)
         return (;
-            res.grad, res.B, res.h_sum, res.h_quad, res.h_sum_rev, vc.h_var, vc.severity,
+            res.grad, res.B, res.h_sum, res.h_quad, res.h_sum_rev, vc.h_var, severity = severity(vc),
             h_hyb = cover_hybrid(t, outidx, 4),
             lambda = scaled_spectral_radius(tape_hessian(t, outidx), res.h_sum),
         )
@@ -134,13 +134,12 @@
         end
 
         # The matrix-free spectral radius sees the same scaled Hessian at every power iterate, so
-        # with the same random start it returns the same estimate, and the shrunk cover follows.
+        # with the same random start it returns the same estimate.
         if all(>(0), p.h_sum)
             hg = sqrt(c) .* p.h_sum ./ d
             l0 = scaled_spectral_radius(t, outidx, p.h_sum; rng = MersenneTwister(0))
             lg = scaled_spectral_radius(tg, outidx, hg; rng = MersenneTwister(0))
             @test lg == l0
-            @test spectral_shrink(hg, lg) == sqrt(c) .* spectral_shrink(p.h_sum, l0) ./ d
         end
     end
 

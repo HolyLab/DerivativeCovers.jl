@@ -89,23 +89,22 @@ contributions that `h_sum` adds. It is the expected size of the sum if each
 contribution carried an independent random sign. **`h_var` is not a certified
 cover**: it can fall below the true scale where several contributions share a
 sign. It costs nothing extra, and the ratio `h_sum ./ h_var` indicates how
-much the contributions to each coordinate overlap. [`cover_variance`](@ref)
-returns this ratio along with both vectors.
+much the contributions to each coordinate overlap.
 
 ### Between the two merges
 
-[`cover_hybrid`](@ref) divides the local covers into `G` groups, sums within
+[`DerivativeCovers.cover_hybrid`](@ref cover_hybrid) divides the local covers into `G` groups, sums within
 each group, and combines the group totals in quadrature. One group gives
 `h_sum`; one group per local term gives `h_quad`. The cost is ``O(GL)``, so `G`
 trades cost for tightness:
 
 ```jldoctest hess
-julia> round.(cover_hybrid(f, x0, 1); digits=4)    # the sum merge
+julia> round.(DerivativeCovers.cover_hybrid(f, x0, 1); digits=4)    # the sum merge
 2-element Vector{Float64}:
  4.1125
  2.4142
 
-julia> round.(cover_hybrid(f, x0, 3); digits=4)    # the quadrature merge
+julia> round.(DerivativeCovers.cover_hybrid(f, x0, 3); digits=4)    # the quadrature merge
 2-element Vector{Float64}:
  3.1062
  1.7321
@@ -173,43 +172,8 @@ For a given `a`, the tightest valid `b` is `b_max[j] = maximum(abs(J[k,j]) / a[k
 (with `abs(J)` replaced by a bound computed from the program). The default
 computes the looser `b_sum` in ``O(L)``.
 `cover_jacobian(WithDiagnostics(), …)` also returns `b_max` and `b_quad`, which
-lies between `b_max` and `b_sum`, at a cost of ``O(mL)``. [`cover_jacobian_hybrid`](@ref) interpolates
+lies between `b_max` and `b_sum`, at a cost of ``O(mL)``. [`DerivativeCovers.cover_jacobian_hybrid`](@ref cover_jacobian_hybrid) interpolates
 between `b_sum` and `b_max` by grouping the outputs, at a cost of ``O(GL)``.
-
-## Choosing the intermediate-gradient channel
-
-The local covers need bounds on the magnitudes of the intermediate gradients. By
-default,
-these bounds are accumulated in absolute-value arithmetic, which loses any
-cancellation between the paths from an input to an operation. This is the
-[`AbsoluteTangents`](@ref) channel, and it is what allows the sum merge to be
-computed in a single ``O(L)`` sweep.
-
-The [`SignedTangents`](@ref) channel uses the exact intermediate gradients instead. It
-requires the ``O(nL)`` diagnostic mode and gives the tightest cover the package
-computes:
-
-```jldoctest channel
-julia> using DerivativeCovers
-
-julia> g(x) = (d = sin(x[1]) - x[1]; u = d * x[2]; exp(u) - u);
-
-julia> x0 = [0.7, 1.3];
-
-julia> round.(cover_hessian(WithDiagnostics(), g, x0).h_quad; digits=4)
-2-element Vector{Float64}:
- 3.1673
- 0.0768
-
-julia> round.(cover_hessian(WithDiagnostics(), g, x0; channel=SignedTangents()).h_quad; digits=4)
-2-element Vector{Float64}:
- 0.4854
- 0.0768
-```
-
-In this program, `d = sin(x[1]) - x[1]` nearly cancels, and the absolute-value
-bound on the intermediate gradient of `d` overestimates the exact one. [Tightness](@ref) describes how to
-diagnose such losses.
 
 ## Propagating a cover forward
 
@@ -221,18 +185,36 @@ finishes. The memory required is ``O(n)`` for each variable that is live at a
 given moment, rather than for every operation of the program, so the method
 suits programs too long to record. The cost is ``O(nL)`` time.
 
-```jldoctest channel
+The local covers need bounds on the magnitudes of the intermediate gradients and
+of the adjoints. The tape-based covers bound the intermediate gradients in
+absolute-value arithmetic, which loses any cancellation between the paths from
+an input to an operation; that is what allows the sum merge to be computed in a
+single ``O(L)`` sweep. A forward pass does the opposite: it carries the exact
+intermediate gradients, but it cannot know how the output depends on the
+current variable, so it bounds the adjoints in absolute-value arithmetic.
+Neither result is tighter in general:
+
+```jldoctest forward
+julia> using DerivativeCovers
+
+julia> g(x) = (d = sin(x[1]) - x[1]; u = d * x[2]; exp(u) - u);
+
+julia> x0 = [0.7, 1.3];
+
+julia> round.(cover_hessian(WithDiagnostics(), g, x0).h_quad; digits=4)
+2-element Vector{Float64}:
+ 3.1673
+ 0.0768
+
 julia> round.(forward_cover(g, x0).h_quad; digits=4)
 2-element Vector{Float64}:
  2.0471
  0.2928
 ```
 
-A forward pass cannot know how the output depends on the current variable, so
-it bounds the adjoints in absolute-value arithmetic, while keeping the exact
-intermediate gradients. The tape-based covers do the opposite, and neither result is tighter
-in general. With [`SignedTangents`](@ref), the tape-based cover is tighter than
-`forward_cover`.
+In this program, `d = sin(x[1]) - x[1]` nearly cancels, so the absolute-value
+bound on the intermediate gradient of `d` overestimates the exact one, and the
+forward cover is tighter in `x[1]`; it is looser in `x[2]`. [Tightness](@ref) describes how to diagnose such losses.
 
 `forward_cover` stores its channels in arrays of the same type as `x0`. With a
 `StaticVector` from StaticArrays, no operation allocates; this is suited to

@@ -107,9 +107,9 @@
         @test nnodes(t) < nnodes(ttr)               # the call is recorded compressed
 
         # The variance channel runs through the declared node and shares the hard channel.
-        vres = cover_variance(t, o)
+        vres = cover_hessian(t, o)
         @test vres.h_sum ≈ res.h_sum rtol = 1.0e-12
-        @test all(vres.severity .>= 1 - 1.0e-12)
+        @test all(severity(vres) .>= 1 - 1.0e-12)
 
         # Exact Hessian-vector products are impossible through a declared call.
         @test_throws "declared sub-map output" hvp(t, o, ones(length(x0)))

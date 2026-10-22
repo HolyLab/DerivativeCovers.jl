@@ -93,11 +93,11 @@ computes the smallest sufficient `τ`.
 ## Tightening a cover
 
 If the spectral radius of `Hhat` is `λ < 1`, then every entry of `Hhat` is at
-most `λ` in magnitude, and `sqrt(λ) * h` is also a cover.
-[`spectral_shrink`](@ref) applies this:
+most `λ` in magnitude, and `sqrt(λ) * h` is also a cover. The power-iteration
+estimate of `λ` needs the same safety factor:
 
 ```jldoctest use
-julia> hs = DerivativeCovers.spectral_shrink(h, λ; safety=1.1);
+julia> hs = sqrt(1.1 * λ) .* h;
 
 julia> round(DerivativeCovers.cover_ratio(H, h); digits=3), round(DerivativeCovers.cover_ratio(H, hs); digits=3)
 (0.449, 0.73)
@@ -112,8 +112,8 @@ For a Jacobian cover `(a, b)`, the scale-invariant matrix is
 `Jhat = J ./ (a .* b')`, computed by [`equilibrate`](@ref). The Jacobian
 counterparts of the functions above are [`scaled_singular_value`](@ref), which
 computes the largest singular value of `Jhat` (by power iteration with
-[`jvp`](@ref) and [`vjp`](@ref) when given a tape), and
-[`jacobian_shrink`](@ref).
+[`jvp`](@ref) and [`vjp`](@ref) when given a tape). If `σ < 1`, then
+`(sqrt(σ) * a, sqrt(σ) * b)` is also a cover.
 
 ```jldoctest jac
 julia> using DerivativeCovers
@@ -129,7 +129,7 @@ julia> σ = DerivativeCovers.scaled_singular_value(t, outs, jc.a, jc.b_sum);
 julia> round(σ; digits=3)
 0.866
 
-julia> a, b = DerivativeCovers.jacobian_shrink(jc.a, jc.b_sum, σ; safety=1.1);
+julia> a, b = sqrt(1.1 * σ) .* jc.a, sqrt(1.1 * σ) .* jc.b_sum;
 ```
 
 ## Matrix-free products

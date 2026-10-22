@@ -39,9 +39,6 @@
         t, outidx = tape_function(x -> x[1] * x[2]^2, [0.5, 2.0])
         vbar = DerivativeCovers.adjoints(t, outidx)
         @test_throws "one adjoint per tape node" cover_hessian(CoverOnly(), t, vbar[1:(end - 1)])
-        @test_throws "CoverOnly cannot merge over SignedTangents" cover_hessian(
-            CoverOnly(), t, vbar; channel = SignedTangents()
-        )
     end
 
     @testset "primitive tapes — $name" for (name, fp, _, x0) in PRIMITIVE_PARITY

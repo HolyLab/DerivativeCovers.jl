@@ -138,11 +138,11 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-        vp = cover_variance(sum_prim, x0)
-        vs = cover_variance(sum_scalar, x0)
+        vp = cover_hessian(sum_prim, x0)
+        vs = cover_hessian(sum_scalar, x0)
         @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
         @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
-        @test vp.severity ≈ vs.severity rtol = 1.0e-12
+        @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
 
         H = ForwardDiff.hessian(sum_prim, x0)
         @test bound_ratio(H, rp.B) <= GATE
@@ -187,11 +187,11 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
             @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-            vp = cover_variance(f, x0)
-            vs = cover_variance(fs, x0)
+            vp = cover_hessian(f, x0)
+            vs = cover_hessian(fs, x0)
             @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
             @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
-            @test vp.severity ≈ vs.severity rtol = 1.0e-12
+            @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
         end
 
         @testset "shift transparency of the detached max" begin
@@ -251,11 +251,11 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
             @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-            vp = cover_variance(f, x0)
-            vs = cover_variance(fs, x0)
+            vp = cover_hessian(f, x0)
+            vs = cover_hessian(fs, x0)
             @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
             @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
-            @test vp.severity ≈ vs.severity rtol = 1.0e-12
+            @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
         end
 
         @testset "plain-vector sanity" begin

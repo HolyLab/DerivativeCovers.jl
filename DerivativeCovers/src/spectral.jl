@@ -1,7 +1,4 @@
-# Hessian-vector products and spectral shrinking.
-#
-# For D = diag(h), a valid cover makes every entry of Ĥ = D⁻¹HD⁻¹ at most one in magnitude.
-# Therefore √norm(Ĥ, 2) h is also valid and is tighter when the scaled spectral norm is below one.
+# Hessian-vector products and the spectral norm of a Hessian scaled by its cover.
 
 """
     hvp(t::Tape, outidx::Integer, v::AbstractVector) -> Hv
@@ -110,6 +107,12 @@ Spectral norm of the scaled Hessian `Hhat = D^-1 H D^-1`, `D = diag(h)`, which m
 the cover `h` is in the spectral sense: `h` is valid iff every entry of `Hhat` is at most 1 in
 magnitude, and `lambda >= max_ij abs(Hhat[i,j])`.
 
+Because every entry of the symmetric `Hhat` is bounded by its spectral norm,
+`abs(H[i,j]) <= lambda * h[i] * h[j]`, so `sqrt(lambda) * h` is also a cover of `H`. It is tighter
+than `h` when `lambda < 1`. `lambda` must bound the scaled norm wherever the cover is meant to
+hold: for a cover computed over a set of points, such as a box of intervals, that is the supremum
+over the set.
+
 The dense method is exact. Coordinates with `h[i] == 0` are admissible only if row `i` of `H`
 vanishes, in which case they are dropped; otherwise `h` does not cover `H` and an error is thrown.
 
@@ -118,8 +121,8 @@ the estimate changes by less than `rtol` relative. It requires `h` to be strictl
 tape whose element type is its own [`magtype`](@ref): power iteration evaluates at a point, so a
 set-valued tape (such as one recorded on intervals) is an error. Each
 iterate `norm(Hhat*v)` with `norm(v) == 1` is a *lower* bound on `lambda` and the sequence
-converges to it from below, so the estimate must be inflated by a safety factor before it is used
-to shrink a cover (see [`spectral_shrink`](@ref)). Failure to converge within `maxiter` is an
+converges to it from below, so rescaling a cover by `sqrt(safety * lambda)` is valid only for a
+`safety > 1` large enough to make `safety * lambda` an upper bound. Failure to converge within `maxiter` is an
 error, not a silently returned partial result.
 """
 function scaled_spectral_radius(H::AbstractMatrix, h::AbstractVector)
@@ -169,31 +172,4 @@ function scaled_spectral_radius(
         converged && return lambda
     end
     error("power iteration did not converge in $maxiter iterations (last estimate $lambda)")
-end
-
-"""
-    spectral_shrink(h::AbstractVector, lambda::Real; safety::Real=1) -> hs
-
-Shrink the cover `h` by the spectral slack `lambda = scaled_spectral_radius(H, h)`, returning
-`hs = sqrt(min(1, safety*lambda)) * h`.
-
-Validity is inherited: `abs(H[i,j]) <= lambda * h[i] * h[j]` for every `i`, `j`, because every
-entry of the symmetric scaled Hessian is bounded by its spectral norm. The shrink is a strict
-improvement exactly when `safety*lambda < 1`; the clamp keeps a spectrally saturated cover
-(`lambda >= 1`) from being inflated, which would be valid but looser.
-
-`safety` inflates `lambda` before it is used. It must be large enough that `safety*lambda` is an
-upper bound on the true spectral norm: with an exact `lambda` the default `1` is correct, but the
-power-iteration estimate converges from below and needs `safety > 1`.
-
-`lambda` must bound the scaled norm wherever the cover is meant to hold: for a cover computed over
-a set of points, such as a box of intervals, that is the supremum over the set. It must be a plain
-number (its type is its own [`magtype`](@ref)); a set-valued `lambda`, such as an interval, is an
-error.
-"""
-function spectral_shrink(h::AbstractVector, lambda::Real; safety::Real = 1)
-    _check_pointwise_slack(lambda, "lambda")
-    lambda >= 0 || throw(ArgumentError("lambda must be nonnegative, got $lambda"))
-    safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
-    return h .* sqrt(min(one(float(lambda)), safety * lambda))
 end

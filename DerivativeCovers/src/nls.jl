@@ -35,7 +35,7 @@
 # and c_var ≤ c because a sum of squares of nonnegative contributions is at most the square of their
 # sum. h_var = √(h_var_gn² + c_var²) is the variance scale of the full Hessian, with
 # h_var_gn ≤ h_var ≤ h. Because the variance channel is linear in its seeds and each square node's
-# atom is 1, h_var is `cover_variance`'s `h_var` of the loss tape, split into its two sources.
+# atom is 1, h_var is `cover_hessian`'s `h_var` of the loss tape, split into its two sources.
 
 """
     NLSCover{T, M}
@@ -62,7 +62,7 @@ residual per channel, the default — `h_gn` is the per-residual quadrature `√
 `sqrt.(diag(J'J))` when no signed paths cancel. The two scales share one further two-channel
 `O(L)` sweep through squared partials, whatever `G` is, so neither depends on `G`. `h_var_gn`
 equals `h_gn` (for `G = m`) where each entry of `J` has a single path, and `h_var` equals `h_var_gn`
-where the residuals have no curvature. `h_var` is the `h_var` of [`cover_variance`](@ref) applied to
+where the residuals have no curvature. `h_var` is the `h_var` of [`cover_hessian`](@ref) applied to
 the loss tape of [`nls_loss_tape`](@ref).
 
 Rescaling the inputs, `x -> D*x` with `D` diagonal, maps every channel `h -> inv(D)*h` on a program

@@ -38,8 +38,8 @@
         @test rc.h_sum == ra.h_sum
         @test rc.h_quad == ra.h_quad
 
-        vc = cover_variance(tc, oc)
-        va = cover_variance(ta, oa)
+        vc = cover_hessian(tc, oc)
+        va = cover_hessian(ta, oa)
         @test vc.h_var == va.h_var
     end
 
@@ -58,7 +58,7 @@
         pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
         res = cover_hessian(WithDiagnostics(), pc.f, pc.x0)
-        vc = cover_variance(pc.f, pc.x0)
+        vc = cover_hessian(pc.f, pc.x0)
 
         @test res.h_quad ≈ sqrt.(diag(Ha)) rtol = 1.0e-8
         @test vc.h_var ≈ res.h_quad rtol = 1.0e-10
@@ -150,7 +150,7 @@
         # sqrt(kappa) on the support.
         hstar = sqrt.(diag(Hc))
         sqrtkappa = sqrt.(diag(Ha) ./ diag(Hc))
-        vc = cover_variance(tc, oc)
+        vc = cover_hessian(tc, oc)
         for h in (rc.h_sum, rc.h_quad, cover_hybrid(tc, oc, 4), vc.h_var)
             @test all(h[support] .>= sqrtkappa[support] .* hstar[support] .* (1 - 1.0e-8))
         end
@@ -167,18 +167,18 @@
         @test norm(hvp(tc, oc, e) - hvp(ta, oa, e)) > 1.0e-3 * norm(hvp(tc, oc, e))
     end
 
-    @testset "the spectral shrink reads signs" begin
+    @testset "the scaled spectral radius reads signs" begin
         pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
         pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
         hc = cover_hessian(pc.f, pc.x0).h_sum
         ha = cover_hessian(pa.f, pa.x0).h_sum
         @test hc == ha
-        # On the canceling variant the scaled Hessian is far from saturated, so the shrink
-        # engages there and separates covers that the sum merge returns identically.
+        # On the canceling variant the scaled Hessian is far from saturated, so rescaling by its
+        # norm separates covers that the sum merge returns identically.
         lc, la = scaled_spectral_radius(Hc, hc), scaled_spectral_radius(Ha, ha)
         @test lc < la < 1
-        sc, sa = spectral_shrink(hc, lc), spectral_shrink(ha, la)
+        sc, sa = sqrt(lc) .* hc, sqrt(la) .* ha
         @test maximum(abs.(sc .- sa) ./ max.(sc, sa)) > 0.1
         @test cover_ratio(Hc, sc) <= GATE
         @test cover_ratio(Ha, sa) <= GATE

@@ -23,7 +23,6 @@
     @testset "value invariance — $name" for (name, f, args) in (
             ("cover_ratio", cover_ratio, (H, h)),
             ("bound_ratio", bound_ratio, (H, B)),
-            ("rank1_ratio", rank1_ratio, (B, h)),
             ("tightness", tightness, (h, href)),
             ("jacobian_ratio", jacobian_ratio, (J, av, bv)),
             ("scaled_spectral_radius", scaled_spectral_radius, (H, h)),
@@ -38,10 +37,7 @@
     # Index-matched results: the values are likewise invariant, but the result must additionally
     # come back on the axes of the argument it is matched to. `which` picks that argument.
     @testset "axes propagation — $name" for (name, f, args, which) in (
-            ("spectral_shrink", h -> spectral_shrink(h, 0.5), (h,), 1),
             ("equilibrate", equilibrate, (J, av, bv), 1),
-            ("dependency_severity", dependency_severity, (h, href), 1),
-            ("jacobian_shrink", (a, b) -> jacobian_shrink(a, b, 0.5)[1], (av, bv), 1),
             (
                 "compose_jacobian_cover", (a2, b2, a1, b1) ->
                 compose_jacobian_cover(a2, b2, a1, b1).a, (av, bv, bv, av), 1,
@@ -87,7 +83,6 @@
         @test_throws "offset arrays are not supported" hvp(f, offsetcopy(x0), v)
         @test_throws "offset arrays are not supported" hvp(t, outidx, offsetcopy(v))
         @test_throws "offset arrays are not supported" cover_hessian(f, offsetcopy(x0))
-        @test_throws "offset arrays are not supported" cover_lattice(f, offsetcopy(x0))
         @test_throws "offset arrays are not supported" forward_cover(f, offsetcopy(x0))
         @test_throws "offset arrays are not supported" scaled_spectral_radius(
             t, outidx,

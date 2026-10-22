@@ -150,9 +150,9 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
             @test all(nc.h_var_gn .<= nc.h_var)
             @test all(nc.h_var .<= nc.h .* GATE)
             @test any(nc.h_var .< nc.h .* (1 - 1.0e-3))
-            # It is cover_variance's h_var of the loss tape; that sweep's h_sum is looser than h.
+            # It is cover_hessian's h_var of the loss tape; that sweep's h_sum is looser than h.
             t, outidx, _, _ = nls_loss_tape(rmap, x0)
-            vc = cover_variance(t, outidx; kw...)
+            vc = cover_hessian(t, outidx; kw...)
             @test isapprox(nc.h_var, vc.h_var; rtol)
             @test all(nc.h .<= vc.h_sum .* GATE)
             # The residual channel is gramvariance; neither scale depends on ngroups.

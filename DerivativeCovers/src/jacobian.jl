@@ -256,13 +256,13 @@ julia> r(x) = [x[1] * x[2], exp(x[1]) - x[3], x[2] + 2x[3]];
 
 julia> t, outidxs = tape_function(r, [0.5, 2.0, -1.0]);
 
-julia> round.(cover_jacobian_hybrid(t, outidxs, 1; a = ones(3)).b; digits=4)   # one group: b_sum
+julia> round.(DerivativeCovers.cover_jacobian_hybrid(t, outidxs, 1; a = ones(3)).b; digits=4)   # one group: b_sum
 3-element Vector{Float64}:
  3.6487
  1.5
  3.0
 
-julia> round.(cover_jacobian_hybrid(t, outidxs, 3; a = ones(3)).b; digits=4)   # per output: b_max
+julia> round.(DerivativeCovers.cover_jacobian_hybrid(t, outidxs, 3; a = ones(3)).b; digits=4)   # per output: b_max
 3-element Vector{Float64}:
  2.0
  1.0

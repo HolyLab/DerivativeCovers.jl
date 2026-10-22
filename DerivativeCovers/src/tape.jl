@@ -26,8 +26,8 @@ magtype(::Type{T}) where {T} = typeof(magnitude(zero(T)))
 
 How far apart `x` and `y` are: `abs(x - y)` for numbers. A type whose values stand for sets
 extends this with the smallest distance between members of the two sets, which is zero whenever
-they overlap. The consistency checks of [`cover_hessian`](@ref) and [`cover_lattice`](@ref) use it
-to compare two computations of the same gradient.
+they overlap. The consistency checks of [`cover_hessian`](@ref) use it to compare two
+computations of the same gradient.
 """
 separation(x, y) = abs(x - y)
 
