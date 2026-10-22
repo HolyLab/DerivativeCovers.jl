@@ -90,21 +90,60 @@ inner products and linear combinations.
 
 ## Declaring a sub-map
 
-A part of the program can be recorded as a single operation per output, with
-a declared bound on its second derivatives in place of its internal
-operations. [`submap`](@ref)`(F, xs)` evaluates `F` on the arguments `xs`,
-computes its exact Jacobian and a cover of the Hessian of each of its outputs,
-and records the result on the tape of `xs`:
+A part of the program that maps several values to several others can be
+recorded as a single operation per output, described by a *declaration*: the
+values of its outputs, its exact Jacobian, and a cover of the Hessian of each
+output. The tape then records the declaration instead of the operations inside
+the part.
 
-```julia
-outer(x) = (y = DerivativeCovers.submap(F, [x[1] + x[2], x[3]]); y[1] * y[2] + x[1])
+Suppose the program passes two intermediate values through a map `F` from
+``\mathbb{R}^2`` to ``\mathbb{R}^2``. [`submap`](@ref)`(F, xs)` evaluates `F`
+on the arguments `xs`, computes the declaration, and records it on the tape
+of `xs`, returning the outputs of `F`:
+
+```jldoctest submap
+julia> using DerivativeCovers
+
+julia> F(v) = [v[1] * exp(v[2]), v[1]^2 + v[2]^2];
+
+julia> function outer(x)
+           y = DerivativeCovers.submap(F, [x[1] + x[2], x[3]])
+           return y[1] * y[2] + x[1]
+       end;
+
+julia> x0 = [0.3, 0.2, -0.4];
+
+julia> round.(cover_hessian(outer, x0).h_sum; digits=4)
+3-element Vector{Float64}:
+ 3.2057
+ 3.2057
+ 2.6541
 ```
 
-[`declare_submap`](@ref) computes the declaration without recording it, and
-[`submapnode`](@ref) records a declaration supplied by the caller. Covers
-computed from such a tape are valid provided that the declaration is.
-Because the exact second derivatives are not recorded, [`hvp`](@ref) is not
-available on a tape that contains a declared sub-map.
+[`declare_submap`](@ref) computes the same declaration without recording it.
+Here the arguments of `F` at `x0` are `[0.5, -0.4]`:
+
+```jldoctest submap
+julia> d = DerivativeCovers.declare_submap(F, [0.5, -0.4]);
+
+julia> round.(d.J; digits=4)     # J[k, i] is the derivative of output k with respect to argument i
+2×2 Matrix{Float64}:
+ 0.6703   0.3352
+ 1.0     -0.8
+
+julia> round.(d.S; digits=4)     # row k is a cover of the Hessian of output k
+2×2 Matrix{Float64}:
+ 1.1579  1.1579
+ 1.4142  1.4142
+```
+
+[`submapnode`](@ref) records a declaration supplied by the caller. This allows
+a part of the program that cannot be recorded, such as a call to an external
+library, to appear on the tape, provided that its Jacobian can be computed and
+its second derivatives bounded by other means. Covers computed from the tape
+are valid provided that the declaration is. Because the exact second
+derivatives are not recorded, [`hvp`](@ref) is not available on a tape that
+contains a declared sub-map.
 
 ## Combining covers of pieces
 

@@ -14,8 +14,8 @@ When the Hessian `H` is available, [`cover_ratio`](@ref) computes the largest
 ratio `abs(H[i,j]) / (h[i] * h[j])` over the nonzero entries of `H`. A value
 of at most 1 confirms that `h` is a cover, and values closer to 1 indicate a
 tighter cover. The ratio reflects only the entry on which the cover is
-tightest, however: `sqrt(r) * h` has ratio exactly 1, however loose it remains
-elsewhere.
+tightest, however: if `r = cover_ratio(H, h)`, then `sqrt(r) * h` has ratio
+exactly 1, however loose it remains elsewhere.
 
 A reference cover computed from `H` itself, such as `symcover(H)` from
 [MatrixCovers](https://github.com/HolyLab/MatrixCovers.jl), allows a
@@ -88,7 +88,7 @@ overlapping contributions.
 ### Lost cancellation
 
 The construction loses tightness wherever it takes absolute values of terms
-that would have cancelled. This happens in two places. The tangents carry the
+that would have cancelled. This happens in two places. The input gradients carry the
 influence of each input forward through the program, and the adjoints carry
 the sensitivity of the output backward. Either can be computed with signs or in
 absolute-value arithmetic. [`cover_lattice`](@ref) computes the covers for all
@@ -101,7 +101,7 @@ julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
 
 julia> lat = cover_lattice(g, [0.4, 1.5]);
 
-julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)     # gain from signed tangents
+julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)     # gain from signed input gradients
 2-element Vector{Float64}:
  0.222
  1.0
@@ -113,17 +113,17 @@ julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)     # gain from signed 
 ```
 
 In this program, `d` is a difference of nearly equal terms, so its exact
-tangent is much smaller than its absolute-value bound. The value `u` reaches
+input gradient is much smaller than its absolute-value bound. The value `u` reaches
 the output along two paths whose contributions have opposite signs, so the
 signed adjoint is smaller than its absolute-value bound. The default
-[`cover_hessian`](@ref) keeps the adjoint signs and bounds the tangents;
+[`cover_hessian`](@ref) keeps the adjoint signs and bounds the input gradients;
 [`SignedTangents`](@ref) keeps both (see
-[Choosing the tangent channel](@ref)).
+[Choosing the input-gradient channel](@ref)).
 
 ## Test problems
 
-The companion package DerivativeCoverProblems provides parameterized problems
-for studying cover tightness. Each generator returns a
+The `quadratic` family used above is one of several in DerivativeCoverProblems.
+Each generator returns a
 [`CoverProblem`](@ref DerivativeCoverProblems.CoverProblem) (or, for
 vector-valued programs, a
 [`JacobianProblem`](@ref DerivativeCoverProblems.JacobianProblem)) containing
@@ -147,7 +147,7 @@ generators that differ in how strongly the paths of the program reconverge.
 [`rescale`](@ref DerivativeCoverProblems.rescale) and
 [`logscales`](@ref DerivativeCoverProblems.logscales) change the units of a
 problem's inputs, for testing covariance. Problems with cancellation in the
-tangents or adjoints include
+input gradients or adjoints include
 [`cancellation`](@ref DerivativeCoverProblems.cancellation),
 [`adjoint_cancellation`](@ref DerivativeCoverProblems.adjoint_cancellation),
 and [`converged_inner_solve`](@ref DerivativeCoverProblems.converged_inner_solve).

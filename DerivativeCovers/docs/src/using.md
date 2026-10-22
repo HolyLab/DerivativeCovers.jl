@@ -26,8 +26,16 @@ If `abs.(H) .<= h .* h'`, then:
 
 - each entry satisfies `abs(H[i,j]) ≤ h[i] * h[j]`;
 - each Hessian-vector product satisfies `abs.(H * d) .≤ h .* (h' * abs.(d))`;
-- the spectral radius of `H` is at most `sum(abs2, h)`, since
-  ``\rho(H) \le \rho(|H|) \le \rho(h h^{\mathsf T}) = \lVert h\rVert^2``.
+- the scaled Hessian `Hhat = H ./ (h .* h')` has entries in `[-1, 1]`, so its
+  spectral radius is at most the number of nonzeros in the densest row of `H`,
+  and in particular at most `n`.
+
+The last is a statement about `Hhat` rather than `H`. When the inputs have
+different units, the entries of `H` have different units too, and the
+eigenvalue equation `H * v = λ * v` cannot be satisfied by a scalar `λ` with a
+single unit. `Hhat` is dimensionless, and because the cover transforms with
+the units (see [Scale covariance](@ref)), its eigenvalues do not depend on
+them.
 
 ```jldoctest use
 julia> d = [1.0, -2.0, 0.5, 0.0];
@@ -35,7 +43,9 @@ julia> d = [1.0, -2.0, 0.5, 0.0];
 julia> all(abs.(H * d) .<= h .* (h' * abs.(d)))
 true
 
-julia> opnorm(H) <= sum(abs2, h)
+julia> Hhat = H ./ (h .* h');
+
+julia> maximum(abs, eigvals(Hhat)) <= maximum(count(!iszero, H; dims=2))
 true
 ```
 
@@ -60,8 +70,8 @@ depends on its units. The diagonal of the cover respects them. The shift
 `H + τ * Diagonal(h .^ 2)` is positive semidefinite when `τ ≥ -eigmin(Hhat)`,
 so any upper bound on the spectral radius of `Hhat` gives a sufficient `τ`.
 
-Because every entry of `Hhat` has magnitude at most one, the number of nonzeros
-in the densest row of `H` (at most `n`) is such a bound. A tighter bound comes
+The number of nonzeros in the densest row of `H` (see
+[What a cover bounds](@ref)) is such a bound. A tighter bound comes
 from [`scaled_spectral_radius`](@ref), which estimates the spectral radius of
 `Hhat` by power iteration using Hessian-vector products, without forming `H`:
 
