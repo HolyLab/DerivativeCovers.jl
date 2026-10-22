@@ -17,13 +17,13 @@ H \;=\; \sum_k \bar v_k \sum_{i,j} C^{k}_{ij}\, \nabla v_{p_i} \nabla v_{p_j}^{\
 
 where ``C^k`` holds the second partial derivatives of ``φ_k`` with respect to
 its arguments, ``\nabla v_{p_i}`` is the gradient of argument `i` with respect
-to the inputs (its *input gradient*), and ``\bar v_k`` is the derivative of the
+to the inputs (its *intermediate gradient*), and ``\bar v_k`` is the derivative of the
 output with respect to ``v_k`` (the *adjoint*). Operations that are linear in
 their arguments, such as `+`, have ``C^k = 0`` and contribute nothing.
 
 DerivativeCovers bounds each term by a rank-one matrix ``s_k s_k^{\mathsf T}``,
 built from a cover of the small matrix ``|\bar v_k|\, C^k`` and from
-bounds on the magnitudes of the input gradients. These *local covers* are then
+bounds on the magnitudes of the intermediate gradients. These *local covers* are then
 combined into a cover of `H`. Two ways of combining them are provided:
 
 - the **sum merge** `h_sum = Σ_k s_k`, which is valid because the cross terms
@@ -172,20 +172,20 @@ refinement rounds. Alternatively, pass a fixed `a`.
 For a given `a`, the tightest valid `b` is `b_max[j] = maximum(abs(J[k,j]) / a[k])`
 (with `abs(J)` replaced by a bound computed from the program). The default
 computes the looser `b_sum` in ``O(L)``.
-`cover_jacobian(WithDiagnostics(), …)` also returns `b_max` and an intermediate
-`b_quad`, at a cost of ``O(mL)``. [`cover_jacobian_hybrid`](@ref) interpolates
+`cover_jacobian(WithDiagnostics(), …)` also returns `b_max` and `b_quad`, which
+lies between `b_max` and `b_sum`, at a cost of ``O(mL)``. [`cover_jacobian_hybrid`](@ref) interpolates
 between `b_sum` and `b_max` by grouping the outputs, at a cost of ``O(GL)``.
 
-## Choosing the input-gradient channel
+## Choosing the intermediate-gradient channel
 
-The local covers need bounds on the magnitudes of the input gradients. By
+The local covers need bounds on the magnitudes of the intermediate gradients. By
 default,
 these bounds are accumulated in absolute-value arithmetic, which loses any
 cancellation between the paths from an input to an operation. This is the
 [`AbsoluteTangents`](@ref) channel, and it is what allows the sum merge to be
 computed in a single ``O(L)`` sweep.
 
-The [`SignedTangents`](@ref) channel uses the exact input gradients instead. It
+The [`SignedTangents`](@ref) channel uses the exact intermediate gradients instead. It
 requires the ``O(nL)`` diagnostic mode and gives the tightest cover the package
 computes:
 
@@ -208,13 +208,13 @@ julia> round.(cover_hessian(WithDiagnostics(), g, x0; channel=SignedTangents()).
 ```
 
 In this program, `d = sin(x[1]) - x[1]` nearly cancels, and the absolute-value
-bound on the input gradient of `d` overestimates the exact one. [Tightness](@ref) describes how to
+bound on the intermediate gradient of `d` overestimates the exact one. [Tightness](@ref) describes how to
 diagnose such losses.
 
 ## Propagating a cover forward
 
 [`forward_cover`](@ref) computes a Hessian cover without recording the
-program. Each variable carries its value, its exact input gradient, and a
+program. Each variable carries its value, its exact intermediate gradient, and a
 cover of
 its own Hessian; the cover of the output is available when the program
 finishes. The memory required is ``O(n)`` for each variable that is live at a
@@ -230,7 +230,7 @@ julia> round.(forward_cover(g, x0).h_quad; digits=4)
 
 A forward pass cannot know how the output depends on the current variable, so
 it bounds the adjoints in absolute-value arithmetic, while keeping the exact
-input gradients. The tape-based covers do the opposite, and neither result is tighter
+intermediate gradients. The tape-based covers do the opposite, and neither result is tighter
 in general. With [`SignedTangents`](@ref), the tape-based cover is tighter than
 `forward_cover`.
 

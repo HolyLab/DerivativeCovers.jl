@@ -88,7 +88,7 @@ overlapping contributions.
 ### Lost cancellation
 
 The construction loses tightness wherever it takes absolute values of terms
-that would have cancelled. This happens in two places. The input gradients carry the
+that would have cancelled. This happens in two places. The intermediate gradients carry the
 influence of each input forward through the program, and the adjoints carry
 the sensitivity of the output backward. Either can be computed with signs or in
 absolute-value arithmetic. [`cover_lattice`](@ref) computes the covers for all
@@ -101,7 +101,7 @@ julia> g(x) = (d = exp(x[1]) - 1 - x[1]; u = d * x[2]; exp(u) - u);
 
 julia> lat = cover_lattice(g, [0.4, 1.5]);
 
-julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)     # gain from signed input gradients
+julia> round.(lat.h_quad_signed ./ lat.h_quad; digits=3)     # gain from signed intermediate gradients
 2-element Vector{Float64}:
  0.222
  1.0
@@ -113,12 +113,12 @@ julia> round.(lat.h_quad ./ lat.h_quad_absadj; digits=3)     # gain from signed 
 ```
 
 In this program, `d` is a difference of nearly equal terms, so its exact
-input gradient is much smaller than its absolute-value bound. The value `u` reaches
+intermediate gradient is much smaller than its absolute-value bound. The value `u` reaches
 the output along two paths whose contributions have opposite signs, so the
 signed adjoint is smaller than its absolute-value bound. The default
-[`cover_hessian`](@ref) keeps the adjoint signs and bounds the input gradients;
+[`cover_hessian`](@ref) keeps the adjoint signs and bounds the intermediate gradients;
 [`SignedTangents`](@ref) keeps both (see
-[Choosing the input-gradient channel](@ref)).
+[Choosing the intermediate-gradient channel](@ref)).
 
 ## Test problems
 
@@ -147,7 +147,7 @@ generators that differ in how strongly the paths of the program reconverge.
 [`rescale`](@ref DerivativeCoverProblems.rescale) and
 [`logscales`](@ref DerivativeCoverProblems.logscales) change the units of a
 problem's inputs, for testing covariance. Problems with cancellation in the
-input gradients or adjoints include
+intermediate gradients or adjoints include
 [`cancellation`](@ref DerivativeCoverProblems.cancellation),
 [`adjoint_cancellation`](@ref DerivativeCoverProblems.adjoint_cancellation),
 and [`converged_inner_solve`](@ref DerivativeCoverProblems.converged_inner_solve).
