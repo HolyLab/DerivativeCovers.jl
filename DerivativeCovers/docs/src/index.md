@@ -144,7 +144,7 @@ true
 | [`cover_hessian`](@ref)`(WithDiagnostics(), …)` | adds a tighter cover `h_quad` and an elementwise bound | ``O(nL)`` time, ``O(n^2)`` memory | yes |
 | [`DerivativeCovers.cover_hybrid`](@ref cover_hybrid) | Hessian, between `h_sum` and `h_quad` | ``O(GL)`` for `G` groups | yes |
 | [`forward_cover`](@ref) | Hessian, without recording the program | ``O(nL)`` time, ``O(n)`` memory per live variable | yes |
-| [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(GL)``, with `G = m` residual channels by default | `h`, `h_gn` yes; `h_var`, `h_var_gn` no |
+| [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(L)``; ``O(GL)`` with `G` residual channels | `h`, `h_gn` yes; `h_var`, `h_var_gn` no |
 | [`cover_jacobian`](@ref) | Jacobian of a vector-valued function | a few ``O(L)`` sweeps | yes |
 | [`DerivativeCovers.cover_jacobian_hybrid`](@ref cover_jacobian_hybrid) | Jacobian, tighter than the default | ``O(GL)`` for `G` groups | yes |
 

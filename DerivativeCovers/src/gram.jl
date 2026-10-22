@@ -40,8 +40,8 @@ for `w >= 0` (or no weight) it brackets the per-output quadrature
 
 where `n_j` is the number of outputs that input `j` reaches. `h_gn` is the minimal symmetric
 cover of `Ũ'*W*Ũ` and costs one sweep channel per output, `O(m*L)`. Unweighted, it is the `h_gn`
-of [`cover_nls`](@ref); with `Ũ` in hand from a `WithDiagnostics` result, a diagonal weight gives
-it as `MatrixCovers.gramcover(Utilde, w)`.
+of [`cover_nls`](@ref) with `ngroups=nothing`; with `Ũ` in hand from a `WithDiagnostics` result, a
+diagonal weight gives it as `MatrixCovers.gramcover(Utilde, w)`.
 
 On a tape whose sweeps round upward (see [`boundtype`](@ref)), such as one recorded over a box of
 intervals, the seeds and the sweep round upward, and `v` is raised by the few units in the last
@@ -209,10 +209,10 @@ the sum), where `Ũ` is the absolute-sensitivity surrogate ([`jacobian_surrogate
 
     h[j] <= h_gn[j] = sqrt(∑_k abs(w[k]) * Ũ[k,j]^2) <= gramcover(t, outidxs, w)[j].
 
-Unweighted, `h_gn` is the Gauss–Newton cover of [`cover_nls`](@ref). Where each entry of `J` has a
-single path, `Ũ⁽²⁾ = Ũ.^2 = abs2.(J)` on a point tape, and `h` equals `h_gn` and the column norms
-of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`; rescaling the
-outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
+Unweighted, `h_gn` is the Gauss–Newton cover of [`cover_nls`](@ref) with `ngroups=nothing`. Where
+each entry of `J` has a single path, `Ũ⁽²⁾ = Ũ.^2 = abs2.(J)` on a point tape, and `h` equals `h_gn`
+and the column norms of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`;
+rescaling the outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
 
 `h` comes from one reverse sweep with squared local partials (the variance channel of
 [`dependency_sweep`](@ref), without its linear channel) seeded `abs(w[k])` at output node

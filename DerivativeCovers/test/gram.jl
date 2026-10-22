@@ -203,7 +203,7 @@ end
         @test isapprox(gramvariance(t1, o1), sqrt.(vec(sum(abs2, U1; dims = 1))); rtol)
         @test isapprox(gramvariance(t1, o1), sqrt.(vec(sum(abs2, J1; dims = 1))); rtol)
         @test isapprox(gramvariance(t1, o1, w1), sqrt.(vec(sum(abs2, sqrt.(w1) .* J1; dims = 1))); rtol)
-        nls = cover_nls(r1, y0)
+        nls = cover_nls(r1, y0; ngroups = nothing)
         @test isapprox(nls.h_var_gn, nls.h_gn; rtol)
     end
 
@@ -211,7 +211,7 @@ end
         rn = x -> [x[1] * x[2] - 1.0, exp(x[1]) - 2.0, sin(x[1] * x[2]) * x[2], x[3] * x[3]]
         z0 = [0.5, 2.0, 0.3]
         tr, or = tape_function(rn, z0)
-        nc = cover_nls(rn, z0)
+        nc = cover_nls(rn, z0; ngroups = nothing)
         nd = cover_nls(WithDiagnostics(), rn, z0)
         @test isapprox(nc.h_var_gn, gramvariance(tr, or); rtol)
         @test nd.h_var_gn == nc.h_var_gn

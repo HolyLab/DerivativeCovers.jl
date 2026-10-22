@@ -942,8 +942,9 @@ _sqslot(d, k, i, p) = magnitude(d)^2
     CoverOnly()
 
 Return only the covers a sweep-tier computation yields: the gradient, sum-merge cover, and
-variance channel from [`cover_hessian`](@ref) at `O(L)`, or the gradient and the two merges from [`cover_nls`](@ref) at
-`O(G * L)`. This is the default mode of both.
+variance channel from [`cover_hessian`](@ref) at `O(L)`, or the gradient, two covers, and two
+scales from [`cover_nls`](@ref) at `O(G * L)` for `G` residual channels, `O(L)` by default. This is
+the default mode of both.
 """
 struct CoverOnly end
 
