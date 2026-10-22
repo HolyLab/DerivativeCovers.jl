@@ -1,14 +1,14 @@
 # What each sign channel is worth to a Hessian cover.
 #
-# A cover's tightness turns on two channels. The tangents `∇v_j` carry an input's influence forward
-# to each node; the adjoints `vbar_k` carry the output's sensitivity back. Either can be propagated
-# with signs or in absolute-value arithmetic, and the absolute form is a bound wherever the exact
-# one cancels. `cover_lattice` computes the cover with all four combinations:
+# A cover's tightness turns on two channels. The intermediate gradients `∇v_j` carry an input's
+# influence forward to each node; the adjoints `vbar_k` carry the output's sensitivity back. Either
+# can be propagated with signs or in absolute-value arithmetic, and the absolute form is a bound
+# wherever the exact one cancels. `cover_lattice` computes the cover with all four combinations:
 #
-#     quad    absolute tangents, signed adjoints    what `cover_hessian` computes
-#     signed  signed tangents, signed adjoints      the tightest corner
-#     fwd-G   absolute tangents, absolute adjoints  the loosest corner
-#     fwd     signed tangents, absolute adjoints    what a tapeless forward pass reaches
+#     quad    absolute gradients, signed adjoints    what `cover_hessian` computes
+#     signed  signed gradients, signed adjoints      the tightest corner
+#     fwd-G   absolute gradients, absolute adjoints  the loosest corner
+#     fwd     signed gradients, absolute adjoints    what a tapeless forward pass reaches
 #
 # Looseness is `1/max_coverage_ratio(h, H)` against the exact Hessian from ForwardDiff, the scale the
 # other scripts use: 1 is exact, larger is looser. The two mixed corners are incomparable, so
@@ -23,18 +23,18 @@ using DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra, Ran
     Statistics
 using MatrixCovers: max_coverage_ratio
 using DerivativeCovers: tape_function, nnodes, natoms, adjoints, abs_reverse,
-    atom_slots, value, sensitivities, tangents, local_covers, merge_atoms, hessian_bound,
-    magnitude
+    atom_slots, value, sensitivities, intermediate_gradients, local_covers, merge_atoms,
+    hessian_bound, magnitude
 
 """
     cover_lattice(t, outidx) -> (; B, B_signed, h_quad, h_quad_absadj, h_quad_signed, h_quad_forward)
 
 The quadrature merge of `t`'s Hessian cover in all four combinations of a signed or absolute
 intermediate-gradient channel with a signed or absolute adjoint channel. The absolute
-intermediate gradients are `sensitivities(t)`, the signed ones the magnitudes of `tangents(t)`;
-the signed adjoints are `abs.(adjoints(t, outidx))`, the absolute ones `acheck`, the unsigned sum
-over paths from each node to the output. `B` and `B_signed` are the elementwise bounds formed
-over the two intermediate-gradient channels with signed adjoints.
+intermediate gradients are `sensitivities(t)`, the signed ones the magnitudes of
+`intermediate_gradients(t)`; the signed adjoints are `abs.(adjoints(t, outidx))`, the absolute ones
+`acheck`, the unsigned sum over paths from each node to the output. `B` and `B_signed` are the
+elementwise bounds formed over the two intermediate-gradient channels with signed adjoints.
 """
 function cover_lattice(t, outidx)
     vbar = adjoints(t, outidx)
@@ -42,7 +42,7 @@ function cover_lattice(t, outidx)
     seed[outidx] = 1
     acheck = abs_reverse(t, seed)
     utilde = sensitivities(t)
-    w = [magnitude.(g) for g in tangents(t)]
+    w = [magnitude.(g) for g in intermediate_gradients(t)]
     rhos_signed, _ = local_covers(t, vbar)
     rhos_abs, _ = local_covers(t, acheck)
     return (;
@@ -102,17 +102,17 @@ function corners(f, x0)
     loose(h) = 1 / max_coverage_ratio(h, H)
 
     # Both channels are scored the same way: how much the cover shrinks when the signs are kept.
-    tangent = ratio_stats(lat.h_quad, lat.h_quad_signed)
+    gradient = ratio_stats(lat.h_quad, lat.h_quad_signed)
     adjoint = ratio_stats(lat.h_quad_absadj, lat.h_quad)
     # The looseness of the elementwise bound factors on the sqrt scale a rank-1 cover lives on:
-    # path cancellation inside each tangent, then cancellation across elementals.
+    # path cancellation inside each intermediate gradient, then cancellation across elementals.
     within = ratio_stats(sqrt.(diag(lat.B)), sqrt.(diag(lat.B_signed)))
     cross = ratio_stats(sqrt.(diag(lat.B_signed)), sqrt.(abs.(diag(H))))
     return (;
         n = t.ninputs, nodes = nnodes(t), natoms = natoms(t),
         quad = loose(lat.h_quad), signed = loose(lat.h_quad_signed),
         fwdg = loose(lat.h_quad_absadj), fwd = loose(lat.h_quad_forward),
-        tangent, adjoint, within, cross, index = adjoint_index(t, outidx),
+        gradient, adjoint, within, cross, index = adjoint_index(t, outidx),
     )
 end
 
@@ -133,8 +133,8 @@ end
 
 function decomposition_table(fixtures)
     @printf(
-        "%-22s %15s %15s %15s %15s %13s\n",
-        "case", "tangent geo/max", "adjoint geo/max", "within-path", "cross-elem",
+        "%-22s %16s %15s %15s %15s %13s\n",
+        "case", "gradient geo/max", "adjoint geo/max", "within-path", "cross-elem",
         "acheck/vbar"
     )
     anydead = false
@@ -143,8 +143,8 @@ function decomposition_table(fixtures)
         anydead |= c.index.ndead > 0
         dead = c.index.ndead == 0 ? "" : @sprintf(" +%d", c.index.ndead)
         @printf(
-            "%-22s %6.3f /%7.3f %6.3f /%7.3f %6.3f /%7.3f %6.3f /%7.3f %6.2f%s\n",
-            name, c.tangent.geo, c.tangent.max, c.adjoint.geo, c.adjoint.max,
+            "%-22s %7.3f /%7.3f %6.3f /%7.3f %6.3f /%7.3f %6.3f /%7.3f %6.2f%s\n",
+            name, c.gradient.geo, c.gradient.max, c.adjoint.geo, c.adjoint.max,
             c.within.geo, c.within.max, c.cross.geo, c.cross.max, c.index.geo, dead
         )
     end
@@ -167,7 +167,7 @@ random DAG is dominated by which elementals it happened to draw.
 function sharing_sweep(n, sharings; ndraws = 12)
     @printf(
         "%8s %6s %9s %9s %9s %9s %9s %9s\n",
-        "sharing", "atoms", "quad", "signed", "fwd-G", "fwd", "tangent", "adjoint"
+        "sharing", "atoms", "quad", "signed", "fwd-G", "fwd", "gradient", "adjoint"
     )
     for s in sharings
         cs = map(1:ndraws) do j
@@ -178,7 +178,7 @@ function sharing_sweep(n, sharings; ndraws = 12)
         @printf(
             "%8.2f %6.0f %9.4g %9.4g %9.4g %9.4g %9.3f %9.3f\n",
             s, med(c -> c.natoms), med(c -> c.quad), med(c -> c.signed), med(c -> c.fwdg),
-            med(c -> c.fwd), med(c -> c.tangent.geo), med(c -> c.adjoint.geo)
+            med(c -> c.fwd), med(c -> c.gradient.geo), med(c -> c.adjoint.geo)
         )
     end
     return println()
@@ -188,23 +188,23 @@ end
     adjoint_sweep(deltas; ns=(2, 8, 64))
 
 What the *adjoint* channel is worth. [`sharing_sweep`](@ref) varies reconvergence, which feeds the
-tangent channel; an adjoint cancels only where the output is nearly stationary in an interior node,
+gradient channel; an adjoint cancels only where the output is nearly stationary in an interior node,
 and no amount of reconvergence through `+` produces that.
 
 `adjoint_cancellation`'s `delta` sets how nearly stationary, so `adjoint` should track `2/delta`
-while `tangent` stays pinned at 1 — the family has one path from each input to the product node, so
+while `gradient` stays pinned at 1 — the family has one path from each input to the product node, so
 it isolates the channel. Each row repeats at several `ns` because the mechanism belongs to the
 node, not the program: the separation is the same at every size.
 """
 function adjoint_sweep(deltas; ns = (2, 8, 64))
     @printf("%9s %5s %6s %9s %9s %9s %9s %9s %9s\n",
-            "delta", "n", "atoms", "quad", "signed", "fwd-G", "fwd", "tangent", "adjoint")
+            "delta", "n", "atoms", "quad", "signed", "fwd-G", "fwd", "gradient", "adjoint")
     for delta in deltas, n in ns
         p = adjoint_cancellation(n; delta)
         c = corners(p.f, p.x0)
         @printf("%9.3g %5d %6.0f %9.4g %9.4g %9.4g %9.4g %9.3f %9.3f\n",
                 delta, n, c.natoms, c.quad, c.signed, c.fwdg, c.fwd,
-                c.tangent.geo, c.adjoint.geo)
+                c.gradient.geo, c.adjoint.geo)
     end
     return println()
 end
@@ -214,17 +214,17 @@ end
 
 The same condition reached by the envelope theorem rather than by construction. Each Newton step on
 the inner problem makes the output more nearly stationary in the final iterate, so the adjoint gain
-climbs with `steps` — and unlike [`adjoint_sweep`](@ref) the tangent channel is engaged too, which
+climbs with `steps` — and unlike [`adjoint_sweep`](@ref) the gradient channel is engaged too, which
 is what differentiating through a converged solve actually looks like.
 """
 function inner_solve_sweep(steps)
     @printf("%6s %6s %9s %9s %9s %9s %9s %9s\n",
-            "steps", "atoms", "quad", "signed", "fwd-G", "fwd", "tangent", "adjoint")
+            "steps", "atoms", "quad", "signed", "fwd-G", "fwd", "gradient", "adjoint")
     for k in steps
         p = converged_inner_solve(; steps = k)
         c = corners(p.f, p.x0)
         @printf("%6d %6.0f %9.4g %9.4g %9.4g %9.4g %9.3f %9.3f\n",
-                k, c.natoms, c.quad, c.signed, c.fwdg, c.fwd, c.tangent.geo, c.adjoint.geo)
+                k, c.natoms, c.quad, c.signed, c.fwdg, c.fwd, c.gradient.geo, c.adjoint.geo)
     end
     return println()
 end
@@ -235,7 +235,7 @@ end
 What no corner of the lattice recovers. `cancellation`'s two variants differ only in the sign of
 the constants multiplying two of each quartet's four squares: every node value, every first
 partial, and every adjoint agree between them, and only the curvature they carry differs. So the
-tangent and adjoint channels have identical work to do in both, while the Hessian of the cancel
+gradient and adjoint channels have identical work to do in both, while the Hessian of the cancel
 variant collapses onto its rank-1 `delta` term. The gap that opens is cancellation between
 elementals, which every corner discards.
 """
@@ -291,7 +291,7 @@ function main()
     fixtures = vcat(family_fixtures(n), array_fixtures(MersenneTwister(20240607), n))
 
     println("Looseness is 1/max_coverage_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
-    println("`tangent` and `adjoint` are the factor by which keeping that channel's signs shrinks")
+    println("`gradient` and `adjoint` are the factor by which keeping that channel's signs shrinks")
     println("the cover, per coordinate; `within-path` and `cross-elem` split the elementwise bound.")
     println()
 

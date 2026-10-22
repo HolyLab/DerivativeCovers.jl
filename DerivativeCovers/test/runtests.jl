@@ -14,7 +14,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     cover_hybrid, cover_jacobian_hybrid,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
-    nls_partition, adjoints, sensitivities, tangents, abs_reverse, abs_forward,
+    nls_partition, adjoints, sensitivities, intermediate_gradients, abs_reverse, abs_forward,
     local_covers, merge_atoms, balanced_split, variance_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate,
@@ -52,7 +52,10 @@ function forward_corner(f, x0; scales = nothing, ratio = nothing)
     seed = zeros(DerivativeCovers.boundtype(T), nnodes(t))
     seed[outidx] = 1
     rhos, _ = local_covers(t, abs_reverse(t, seed); scales, ratio)
-    u = [DerivativeCovers.tobound.(T, DerivativeCovers.magnitude.(g)) for g in tangents(t)]
+    u = [
+        DerivativeCovers.tobound.(T, DerivativeCovers.magnitude.(g))
+        for g in intermediate_gradients(t)
+    ]
     return DerivativeCovers.tomag(T, merge_atoms(t, rhos, u)[2])
 end
 
@@ -179,7 +182,7 @@ include("maxpath.jl")
         # carry no promise: they are what a reimplementation of the sweeps is free to restructure.
         private = (
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
-            :group_seeds, :sensitivities, :tangents, :abs_reverse, :abs_forward,
+            :group_seeds, :sensitivities, :intermediate_gradients, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
@@ -878,10 +881,10 @@ include("maxpath.jl")
         end
 
         # A zero *value* certifies nothing about a slot, so none is dropped on that account. A zero
-        # *tangent* does: the slot multiplies its block's entries by the zero vector, so they are
-        # absent from the Hessian and the cover leaves them uncovered. Here the two coincide —
-        # `x[1]^2` has both — and the cover is the exact one, `H = [6 0; 0 0]` admitting no cover
-        # smaller than `[sqrt(6), 0]`.
+        # *intermediate gradient* does: the slot multiplies its block's entries by the zero vector,
+        # so they are absent from the Hessian and the cover leaves them uncovered. Here the two
+        # coincide — `x[1]^2` has both — and the cover is the exact one, `H = [6 0; 0 0]` admitting
+        # no cover smaller than `[sqrt(6), 0]`.
         fdead = x -> x[1]^2 * x[2]
         xd = [0.0, 3.0]
         Hd = ForwardDiff.hessian(fdead, xd)
@@ -893,15 +896,15 @@ include("maxpath.jl")
         @test forward_cover(fdead, xd).h_quad ≈ [sqrt(6.0), 0.0]
 
         # A slot the value channel sees no problem with: `cos` is `1` at `0`, so the block keeps a
-        # usable value pair and only the tangent reports the slot dead.
+        # usable value pair and only the intermediate gradient reports the slot dead.
         fung = x -> cos(x[1]) * x[2]
         xu = [0.0, 3.0]
         resung = cover_hessian(WithDiagnostics(), fung, xu)
         @test max_coverage_ratio(resung.h_sum, ForwardDiff.hessian(fung, xu)) <= GATE
         @test resung.h_sum ≈ [sqrt(3.0), 0.0]
 
-        # The converse: a vanishing value with a live tangent keeps its weight, since the block's
-        # off-diagonal entry is in the Hessian and has to be covered.
+        # The converse: a vanishing value with a live intermediate gradient keeps its weight, since
+        # the block's off-diagonal entry is in the Hessian and has to be covered.
         xlivecos = [pi / 2, 3.0]
         reslive = cover_hessian(WithDiagnostics(), fung, xlivecos)
         @test max_coverage_ratio(reslive.h_sum, ForwardDiff.hessian(fung, xlivecos)) <= GATE
@@ -946,8 +949,9 @@ include("maxpath.jl")
         @test DerivativeCovers.guards_any_block(first(tape_function(fdot, xtail)))
         # The prediction is measured against the sweep it predicts, in the direction it claims: a
         # tape it clears never fills the declared-scale store. A tape it names may leave the store
-        # empty all the same, since a guarded pair whose slot has no tangent is dropped outright
-        # and asks for no scale — which is `xdot`, where `x[1]^2` is the vanishing side.
+        # empty all the same, since a guarded pair whose slot has a zero intermediate gradient is
+        # dropped outright and asks for no scale — which is `xdot`, where `x[1]^2` is the vanishing
+        # side.
         stored = Dict{Vector{Float64}, Bool}()
         for xf in (xdot, xlive, xtail)
             t, outidx = tape_function(fdot, xf)

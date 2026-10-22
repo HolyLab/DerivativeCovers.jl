@@ -60,10 +60,10 @@ const FORWARD_SPLITS = (
         end
     end
 
-    @testset "a slot is dead by its tangent, not by its declared scale" begin
+    @testset "a slot is dead by its intermediate gradient, not by its declared scale" begin
         # `sigma` is a sum of products of first partials, so a chain of small factors underflows it
-        # while the tangent it stands for is still there. Reading that as a dead slot would drop
-        # the block's off-diagonal entry, which is in the Hessian and has to be covered.
+        # while the intermediate gradient it stands for is still there. Reading that as a dead slot
+        # would drop the block's off-diagonal entry, which is in the Hessian and has to be covered.
         f = x -> (x[1] * 1.0e-100) * x[2]
         x0 = [1.0e100, 2.0]
         w = [1.0e-300, 1.0]
@@ -76,7 +76,8 @@ const FORWARD_SPLITS = (
         @test max_coverage_ratio(fc.h_quad, ForwardDiff.hessian(f, x0)) <= GATE
         @test fc.h_quad ≈ forward_corner(f, x0; scales = w) rtol = FORWARD_RTOL
 
-        # The slots a tangent really does empty are dropped by both backends alike.
+        # The slots a zero intermediate gradient really does empty are dropped by both backends
+        # alike.
         deadprograms = (
             ("square times zero", x -> x[1]^2 * x[2], [0.0, 3.0]),
             ("unit cosine", x -> cos(x[1]) * x[2], [0.0, 3.0]),
@@ -152,7 +153,7 @@ const FORWARD_SPLITS = (
         @test_throws "covers a scalar-valued program" forward_cover(x -> [x[1], x[2]], [1.0, 2.0])
         @test_throws "no inputs" forward_cover(x -> x, Float64[])
         # A constant carries no channels, so asking one for its cover names the reason.
-        @test_throws "carries no tangent or cover channel" forward_cover(
+        @test_throws "carries no gradient or cover channel" forward_cover(
             FVar{Float64, Vector{Float64}}(1.0)
         )
         # A declared sub-map belongs to recording; the propagation says so rather than

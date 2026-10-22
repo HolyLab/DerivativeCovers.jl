@@ -8,7 +8,7 @@ The result of [`forward_cover`](@ref), with `T` as the propagation's element typ
 propagation ran in (see [`ForwardContext`](@ref)). `ForwardCover{T}` stands for
 `ForwardCover{T, magtype(T)}`.
 
-- `grad::VG`: the gradient, represented by the exact signed tangent at the output, in `T`.
+- `grad::VG`: the exact gradient of the output, in `T`.
 - `h_quad::VH`: a certified Hessian cover formed by merging the cover atoms in quadrature, in `M`.
 """
 struct ForwardCover{T, M, VG <: AbstractVector{T}, VH <: AbstractVector{M}}
@@ -36,13 +36,13 @@ State shared by every variable in a forward propagation: the degeneracy threshol
 split at, whether each local cover is verified, and the scratch a node writes through while
 assembling its cover.
 
-`S` is the storage of the signed tangent channel, one entry of `T` per input, and `SM` that of the
-cover channel, one entry of `M =` [`boundtype`](@ref)`(T)` per input. [`forward_cover`](@ref) derives
-both from the point it is given, so a `Vector` input propagates in `Vector`s and a `StaticVector`
-input in `StaticVector`s. `zerotangent` and `zerochannel` are zeros of the two storages, which
-fresh channels are copied from; the input variables share `zerochannel` as their cover channel. `scratch` is
-the atom accumulator, written in place when `SM` is mutable and left alone when it is not; and
-`rho` holds the slot weights of the elemental being covered.
+`S` is the storage of the intermediate-gradient channel, one entry of `T` per input, and `SM` that
+of the cover channel, one entry of `M =` [`boundtype`](@ref)`(T)` per input. [`forward_cover`](@ref)
+derives both from the point it is given, so a `Vector` input propagates in `Vector`s and a
+`StaticVector` input in `StaticVector`s. `zerogradient` and `zerochannel` are zeros of the two
+storages, which fresh channels are copied from; the input variables share `zerochannel` as their
+cover channel. `scratch` is the atom accumulator, written in place when `SM` is mutable and left
+alone when it is not; and `rho` holds the slot weights of the elemental being covered.
 
 It is a reference type so that every variable of the propagation holds a pointer to the one
 context: storing an immutable into a variable's field would copy it, at one allocation per node.
@@ -51,19 +51,19 @@ Identity is then also what `===` compares, which is what distinguishes two propa
 mutable struct ForwardContext{T, S <: AbstractVector{T}, M, SM <: AbstractVector{M}}
     const ratio::M
     const check::Bool
-    const zerotangent::S
+    const zerogradient::S
     const zerochannel::SM
     const scratch::SM
     const rho::Vector{M}
 
-    ForwardContext{T, S, M, SM}(ratio, check, zerotangent, zerochannel, scratch, rho) where {T, S, M, SM} =
-        new{T, S, M, SM}(ratio, check, zerotangent, zerochannel, scratch, rho)
+    ForwardContext{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, rho) where {T, S, M, SM} =
+        new{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, rho)
 end
 
-function ForwardContext{T}(ratio, check, zerotangent::AbstractVector{T}, zerochannel::AbstractVector) where {T}
+function ForwardContext{T}(ratio, check, zerogradient::AbstractVector{T}, zerochannel::AbstractVector) where {T}
     M = boundtype(T)
-    return ForwardContext{T, typeof(zerotangent), M, typeof(zerochannel)}(
-        ratio, check, zerotangent, zerochannel, zero(zerochannel), M[]
+    return ForwardContext{T, typeof(zerogradient), M, typeof(zerochannel)}(
+        ratio, check, zerogradient, zerochannel, zero(zerochannel), M[]
     )
 end
 
@@ -71,7 +71,7 @@ end
     ForwardChannels{T, S, M, SM}
 
 The two vector channels an [`FVar`](@ref) carries beyond its value and its declared scale: the
-signed tangent `g = ∇v` (storage `S`, entries `T`), and the squared cover `G` (storage `SM`,
+intermediate gradient `g = ∇v` (storage `S`, entries `T`), and the squared cover `G` (storage `SM`,
 entries `M =` [`boundtype`](@ref)`(T)`) maintaining `sqrt.(G) * sqrt.(G)' >= magnitude.(∇²v)`
 entrywise.
 
@@ -95,17 +95,17 @@ end
 A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
 [`CoverVar`](@ref) backend.
 
-`S` and `SM` are the storage of the tangent and cover channels, and `M =` [`boundtype`](@ref)`(T)`
-the type the cover and the declared scale are propagated in (see [`ForwardContext`](@ref)). `M`
-and `SM` follow from `T` and `S`, so `FVar{T, S}` names the variable type as well. A constant
-carries the storage too, because generic numerical code builds typed literals from `eltype`, which
-is all it has to reach the backend by.
+`S` and `SM` are the storage of the intermediate-gradient and cover channels, and `M =`
+[`boundtype`](@ref)`(T)` the type the cover and the declared scale are propagated in (see
+[`ForwardContext`](@ref)). `M` and `SM` follow from `T` and `S`, so `FVar{T, S}` names the variable
+type as well. A constant carries the storage too, because generic numerical code builds typed
+literals from `eltype`, which is all it has to reach the backend by.
 
-For each variable, the propagation holds the value, the signed tangent `∇v`, a squared cover of
-`∇²v` (see [`ForwardChannels`](@ref)), the scalar declared scale `sigma` the split falls back
-on, and whether `∇v` is identically zero (see [`ForwardScale`](@ref)). Working memory is `O(n)`
-per *live* variable rather than per recorded node, so a program whose intermediates go out of
-scope costs `O(n × live width)` and never materializes a tape.
+For each variable, the propagation holds the value, the intermediate gradient `∇v`, a squared cover
+of `∇²v` (see [`ForwardChannels`](@ref)), the scalar declared scale `sigma` the split falls back on,
+and whether `∇v` is identically zero (see [`ForwardScale`](@ref)). Working memory is `O(n)` per
+*live* variable rather than per recorded node, so a program whose intermediates go out of scope
+costs `O(n × live width)` and never materializes a tape.
 
 Build one with [`forward_cover`](@ref) rather than directly.
 """
@@ -142,7 +142,7 @@ constantvar(::Type{FVar{T, S, M, SM}}, c::Real) where {T, S, M, SM} = FVar{T, S,
 
 @noinline _constant_channels(x::FVar) = throw(
     ArgumentError(
-        "a constant FVar (value $(value(x))) carries no tangent or cover channel; it must be " *
+        "a constant FVar (value $(value(x))) carries no gradient or cover channel; it must be " *
             "folded into an operand that does"
     )
 )
@@ -150,8 +150,8 @@ constantvar(::Type{FVar{T, S, M, SM}}, c::Real) where {T, S, M, SM} = FVar{T, S,
 """
     channels(x::FVar) -> ForwardChannels
 
-The tangent and cover channels behind `x`. A constant has neither: every elemental folds a
-constant operand into one that propagates, so reaching here with a constant means a caller
+The intermediate-gradient and cover channels behind `x`. A constant has neither: every elemental
+folds a constant operand into one that propagates, so reaching here with a constant means a caller
 bypassed that folding.
 """
 function channels(x::FVar{T, S, M, SM}) where {T, S, M, SM}
@@ -173,7 +173,7 @@ struct ImmutableChannels end
 channelkind(::Type{S}) where {S} = Base.ismutabletype(S) ? MutableChannels() : ImmutableChannels()
 channelkind(g::AbstractVector) = channelkind(typeof(g))
 
-# A zero channel matching the point `x0`, and the tangent of its `a`th coordinate.
+# A zero channel matching the point `x0`, and the intermediate gradient of its `a`th coordinate.
 channel_zero(x0::AbstractVector, ::Type{T}) where {T} = zeros(T, length(x0))
 channel_zero(x0::StaticVector, ::Type{T}) where {T} = zeros(similar_type(x0, T))
 
@@ -200,7 +200,7 @@ constantchannel(::Type{S}) where {S <: Array} = S(undef, 0)
 #
 # Nodes read but never write their parents' channels, allowing input variables to share
 # `zerochannel`. Accumulation targets are fresh channels, broadcast results, or `scratch`.
-# `add_scaled_abs!` reads a signed tangent into a cover channel through `magnitude`.
+# `add_scaled_abs!` reads an intermediate gradient into a cover channel through `magnitude`.
 add_scaled!(acc, c, v) = add_scaled!(channelkind(acc), acc, c, v)
 add_scaled!(::ImmutableChannels, acc, c, v) = acc .+ c .* v
 function add_scaled!(::MutableChannels, acc, c, v)
@@ -242,9 +242,9 @@ function input_vars(::Type{FVar{T, S, M, SM}}, ctx, x0, w) where {T, S, M, SM}
     return [var(a) for a in Base.OneTo(length(x0))]
 end
 
-# A zero channel to accumulate into: a fresh tangent or cover channel, and the context's reusable
-# cover channel.
-freshtangent(ctx::ForwardContext) = zero(ctx.zerotangent)
+# A zero channel to accumulate into: a fresh intermediate-gradient or cover channel, and the
+# context's reusable cover channel.
+freshgradient(ctx::ForwardContext) = zero(ctx.zerogradient)
 freshchannel(ctx::ForwardContext) = zero(ctx.zerochannel)
 zeroscratch(ctx::ForwardContext) = zeroscratch(channelkind(ctx.scratch), ctx)
 zeroscratch(::MutableChannels, ctx::ForwardContext) = fill!(ctx.scratch, 0)
@@ -272,14 +272,14 @@ site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operan
     ForwardScale(sigma, live)
 
 The declared channel of one slot of a forward propagation: the scale `sigma` that stands in for a
-parent value carrying none, and whether the slot's tangent is identically zero.
+parent value carrying none, and whether the slot's intermediate gradient is identically zero.
 
 Liveness travels separately from `sigma` because `sigma` cannot report it. It is a sum of products
-of first partials, so it underflows on a long chain of small factors while the tangent it bounds is
-still there, and a slot dropped on that evidence would leave a real Hessian entry uncovered. The
-flag is carried by the same recursion [`live_nodes`](@ref) runs over a tape — a slot is live when
-some parent is live and reaches it through a nonzero partial — so both backends drop exactly the
-same entries.
+of first partials, so it underflows on a long chain of small factors while the intermediate gradient
+it bounds is still there, and a slot dropped on that evidence would leave a real Hessian entry
+uncovered. The flag is carried by the same recursion [`live_nodes`](@ref) runs over a tape — a slot
+is live when some parent is live and reaches it through a nonzero partial — so both backends drop
+exactly the same entries.
 """
 struct ForwardScale{T}
     sigma::T
@@ -376,7 +376,7 @@ function linearnode(
     val = zero(T)
     sigma = zero(M)
     live = false
-    g = freshtangent(ctx)
+    g = freshgradient(ctx)
     G = freshchannel(ctx)
     for j in idxs
         ch = channels(xs[j])
@@ -402,7 +402,7 @@ function dotnode(
     val = zero(T)
     sigma = zero(M)
     live = false
-    g = freshtangent(ctx)
+    g = freshgradient(ctx)
     G = freshchannel(ctx)
     # Slot order is `(w_1..w_q, x_1..x_q)`, matching `PairedCurvature`'s pairing of `j` with `q+j`.
     gs = Vector{S}(undef, 2q)
@@ -450,8 +450,8 @@ Compute a certified rank-1 cover of a scalar function's Hessian by propagating i
 pass and with no tape.
 
 `f` must accept a vector of [`FVar`](@ref)s and return one, using operations `FVar` supports. Per
-variable the propagation carries the value, the signed tangent `∇v`, a squared cover of `∇²v`, and
-the scalar declared scale `sigma`; the recursions are
+variable the propagation carries the value, the intermediate gradient `∇v`, a squared cover of
+`∇²v`, and the scalar declared scale `sigma`; the recursions are
 
     ∇v_k    = sum_i d_i * ∇v_i
     sigma_k = sum_i magnitude(d_i) * sigma_i
