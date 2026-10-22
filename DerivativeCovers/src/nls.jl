@@ -57,13 +57,13 @@ the [`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the ty
 - `m`: the number of residuals.
 
 Both covers are read off one grouped reverse sweep with `G` residual channels and one
-residual-curvature channel, so together they cost `O(G * L)` time and memory. With `G = m` — one
-residual per channel, the default — `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which equals
-`sqrt.(diag(J'J))` when no signed paths cancel. The two scales share one further two-channel
-`O(L)` sweep through squared partials, whatever `G` is, so neither depends on `G`. `h_var_gn`
-equals `h_gn` (for `G = m`) where each entry of `J` has a single path, and `h_var` equals `h_var_gn`
-where the residuals have no curvature. `h_var` is the `h_var` of [`cover_hessian`](@ref) applied to
-the loss tape of [`nls_loss_tape`](@ref).
+residual-curvature channel, so together they cost `O(G * L)` time and memory. With `G = 1`, the
+default, `h_gn` is the sum `∑ₖ ũ`. With `G = m`, one residual per channel, `h_gn` is the
+per-residual quadrature `√(∑ₖ ũ²)`, which equals `sqrt.(diag(J'J))` when no signed paths cancel. The
+two scales share one further two-channel `O(L)` sweep through squared partials, whatever `G` is, so
+neither depends on `G`. `h_var_gn` equals `h_gn` (for `G = m`) where each entry of `J` has a single
+path, and `h_var` equals `h_var_gn` where the residuals have no curvature. `h_var` is the `h_var` of
+[`cover_hessian`](@ref) applied to the loss tape of [`nls_loss_tape`](@ref).
 
 Rescaling the inputs, `x -> D*x` with `D` diagonal, maps every channel `h -> inv(D)*h` on a program
 without guarded elementals; `scales` and `ratio` reach `h` and `h_var` only through the
@@ -168,7 +168,7 @@ function nls_partition(N::Integer, sqidx::AbstractVector{<:Integer}; ngroups = n
 end
 
 """
-    cover_nls([mode], r, x0; ngroups=nothing, check=true, scales=nothing, ratio=nothing)
+    cover_nls([mode], r, x0; ngroups=1, check=true, scales=nothing, ratio=nothing)
 
 Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
@@ -181,11 +181,14 @@ scales `h_var <= h` of the full Hessian and `h_var_gn <= h_gn` of `JᵀJ` (the l
 `O(m * L)`.
 
 `ngroups` sets the number of residual channels `G`, and with it the entire cost of the
-[`CoverOnly`](@ref) mode: `O(G * L)` time and `O(G * n)` memory. The default `nothing` gives every
-residual a channel of its own (`G = m`), the tightest pair of covers available. A smaller positive
-integer spreads the residuals cyclically over `G` channels and sums their sensitivities within a
-channel before the quadrature merge; both covers remain valid and can only loosen. The two
-variance scales take one further `O(L)` sweep and do not depend on `G`.
+[`CoverOnly`](@ref) mode: `O(G * L)` time and `O(G * n)` memory. The residuals are spread
+cyclically over the `G` channels, and their sensitivities are summed within a channel before the
+quadrature merge. The default `1` sums them all, so `h_gn` is the [`gramcover`](@ref) of the
+residuals and both covers cost `O(L)`. `ngroups=nothing` gives every residual a channel of its own
+(`G = m`), the tightest pair of covers available, at `O(m * L)`; its `h_gn[j]` is smaller than the
+default's by a factor of at most `sqrt(n_j)`, where `n_j` is the number of residuals input `j`
+reaches. That factor varies with `j`, so it changes the profile of the cover as well as its
+level. The two variance scales take one further `O(L)` sweep and do not depend on `G`.
 
 `scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and reach only the
 residual-curvature channel, and through it `h` and `h_var`: the residual channels carry unit
@@ -202,12 +205,12 @@ julia> nc = cover_nls(r, [0.5, 2.0]);
 
 julia> round.(nc.h; digits=4)
 2-element Vector{Float64}:
- 2.7014
+ 3.7272
  0.5
 
 julia> round.(nc.h_gn; digits=4)
 2-element Vector{Float64}:
- 2.592
+ 3.6487
  0.5
 
 julia> all(nc.h_gn .<= nc.h)
@@ -223,7 +226,7 @@ true
 ```
 """
 function cover_nls(
-        ::CoverOnly, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
+        ::CoverOnly, r, x0::AbstractVector; ngroups = 1, check::Bool = true,
         scales = nothing, ratio = nothing
     )
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)
@@ -231,7 +234,7 @@ function cover_nls(
 end
 
 function cover_nls(
-        ::WithDiagnostics, r, x0::AbstractVector; ngroups = nothing, check::Bool = true,
+        ::WithDiagnostics, r, x0::AbstractVector; ngroups = 1, check::Bool = true,
         scales = nothing, ratio = nothing
     )
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)

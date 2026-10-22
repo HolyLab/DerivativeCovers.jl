@@ -63,9 +63,9 @@ The chain rule `∇²f = J_F'*∇²g*J_F + Σ_k (∂g/∂y_k)*∇²F_k` bounds e
 
 For `g = 0.5*norm(r)^2` this generic rule gives `norm(a, 1)*b` for the Gauss–Newton term: the
 sum-merge Gram cover with each row of the surrogate `Ũ` replaced by its rank-1 bound `a[k]*b`. It
-is therefore at least the tape's `gramcover(t, outidxs) = Ũ'*ones(m)`, which in turn is at least
-the per-residual quadrature `h_gn` of [`cover_nls`](@ref); NLS consumers should prefer
-`cover_nls`.
+is therefore at least the tape's `gramcover(t, outidxs) = Ũ'*ones(m)`, which is the default
+`h_gn` of [`cover_nls`](@ref) and in turn at least its per-residual quadrature
+(`ngroups=nothing`); NLS consumers should prefer `cover_nls`.
 """
 function compose_hessian_cover(
         hg::AbstractVector, gamma::AbstractVector, a::AbstractVector,

@@ -128,18 +128,21 @@ julia> nc = cover_nls(r, [0.5, 2.0]);
 
 julia> round.(nc.h; digits=4)
 2-element Vector{Float64}:
- 2.7014
+ 3.7272
  0.5
 
 julia> round.(nc.h_gn; digits=4)
 2-element Vector{Float64}:
- 2.592
+ 3.6487
  0.5
 ```
 
-By default each residual gets its own channel in the reverse sweep, for a cost
-of ``O(mL)`` with `m` residuals. The `ngroups` keyword lowers the number of
-channels to `G`, and the cost to ``O(GL)``, at some loss of tightness. The
+By default the residuals share one channel in the reverse sweep, for a cost of
+``O(L)``. The `ngroups` keyword raises the number of channels to `G`, and the
+cost to ``O(GL)``; `ngroups=nothing` gives each of the `m` residuals its own
+channel, the tightest covers available. Summing residuals into one channel
+loosens `h_gn[j]` by at most ``\sqrt{n_j}``, where ``n_j`` is the number of
+residuals input `j` reaches. The
 uncertified scales `h_var` and `h_var_gn` are the analogs of `h_var` for
 [`cover_hessian`](@ref).
 

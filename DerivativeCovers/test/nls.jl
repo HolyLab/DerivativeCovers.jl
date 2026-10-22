@@ -1,5 +1,6 @@
-# Compare least-squares covers with ForwardDiff. The Gauss–Newton cover must bound J'J, remain
-# below the full-Hessian cover, and equal sqrt.(diag(J'J)) for linear residuals.
+# Compare least-squares covers with ForwardDiff. The Gauss–Newton cover must bound J'J and remain
+# below the full-Hessian cover. For linear residuals it is the column sums of abs.(J) by default and
+# sqrt.(diag(J'J)) with one channel per residual.
 
 "Loss `f = ½∑ₖ rₖ²` of a residual map, as a plain scalar program for ForwardDiff."
 nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
@@ -49,10 +50,12 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         tk = randn(rng, m)
         x0 = randn(rng, n)
         rmap(x) = [W[k, :]' * x - tk[k] for k in 1:m]
-        nls = cover_nls(rmap, x0)
+        nls = cover_nls(rmap, x0; ngroups = nothing)
 
         J = ForwardDiff.jacobian(rmap, x0)
         @test nls.h_gn ≈ sqrt.(diag(J' * J))
+        # The default single residual channel sums before the quadrature merge.
+        @test cover_nls(rmap, x0).h_gn ≈ vec(sum(abs, J; dims = 1))
         # A linear residual has no ∑ rₖ∇²rₖ term, so the full cover collapses onto the GN cover.
         @test nls.h ≈ nls.h_gn
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
@@ -65,12 +68,16 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         W = randn(rng, m, n)
         x0 = 0.5 .* randn(rng, n)
         rmap(x) = [tanh(sum(W[k, j] * x[j] for j in 1:n)) for k in 1:m]
-        nls = cover_nls(WithDiagnostics(), rmap, x0)
+        nls = cover_nls(WithDiagnostics(), rmap, x0; ngroups = nothing)
 
         # The full cover is exactly what the hybrid merge gives on the reconstructed partition.
         t, outidx, residx, sqidx = nls_loss_tape(rmap, x0)
         groups = nls_partition(nnodes(t), sqidx)
         @test cover_hybrid(t, outidx, groups) ≈ nls.h
+        groups1 = nls_partition(nnodes(t), sqidx; ngroups = 1)
+        @test cover_hybrid(t, outidx, groups1) ≈ cover_nls(rmap, x0).h
+        # The default Gauss–Newton cover is the sum-merge Gram cover of the residuals.
+        @test cover_nls(rmap, x0).h_gn ≈ gramcover(t, residx)
         # Ũ formed by the O(m·L) channel sweep matches the O(n·L) forward-sensitivity path.
         u = sensitivities(t)
         Ualt = reduce(vcat, permutedims(u[residx[k]]) for k in 1:m)
@@ -84,7 +91,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         tk = randn(rng, m)
         x0 = 0.4 .* randn(rng, n)
         rmap(x) = [sin(sum(W[k, j] * x[j] for j in 1:n)) - tk[k] for k in 1:m]
-        fine = cover_nls(WithDiagnostics(), rmap, x0)
+        fine = cover_nls(WithDiagnostics(), rmap, x0; ngroups = nothing)
         coarse = cover_nls(WithDiagnostics(), rmap, x0; ngroups = 3)
         H = ForwardDiff.hessian(nls_loss(rmap), x0)
         J = ForwardDiff.jacobian(rmap, x0)
@@ -130,7 +137,9 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
     @testset "variance scale of the full Hessian" begin
         rtol = 1.0e-13
         # Single paths and no residual curvature: all four channels agree.
-        lin = cover_nls(WithDiagnostics(), x -> [x[1] + 2 * x[2], 3 * x[2] - 1], [0.7, -0.4])
+        lin = cover_nls(
+            WithDiagnostics(), x -> [x[1] + 2 * x[2], 3 * x[2] - 1], [0.7, -0.4]; ngroups = nothing
+        )
         @test lin.h_var ≈ lin.h_var_gn ≈ lin.h_gn ≈ lin.h
         # Curvature with no Jacobian at the point: r = x² - 1 at x = 0.
         z = cover_nls(x -> [x[1]^2 - 1], [0.0])
