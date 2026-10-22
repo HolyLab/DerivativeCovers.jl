@@ -149,37 +149,37 @@ while `dot(z, A*z)/2` loses everything.
 
 ## `sign_channels.jl`
 
-What each of a cover's two sign channels is worth. The tangents `∇v_j` carry an input's influence
-forward to each node, the adjoints `vbar_k` carry the output's sensitivity back, and either can be
-propagated with signs or in absolute-value arithmetic.
-The script's `cover_lattice` computes all four combinations from one tape,
-so the looseness of the default cover splits into a tangent-side part, an adjoint-side part, and a
-residue neither channel reaches. The script scores the four corners on the
-`DerivativeCoverProblems` families and on array-op heads, decomposes the gap per coordinate, sweeps
-the reconvergence that creates it, and isolates the residue.
+What each of a cover's two sign channels is worth. The intermediate gradients `∇v_j` carry an
+input's influence forward to each node, the adjoints `vbar_k` carry the output's sensitivity back,
+and either can be propagated with signs or in absolute-value arithmetic. The script's
+`cover_lattice` computes all four combinations from one tape, so the looseness of the default cover
+splits into a gradient-side part, an adjoint-side part, and a residue neither channel reaches. The
+script scores the four corners on the `DerivativeCoverProblems` families and on array-op heads,
+decomposes the gap per coordinate, sweeps the reconvergence that creates it, and isolates the
+residue.
 
-**The two channels are not worth the same.** Keeping tangent signs shrinks the cover by a
-per-coordinate geometric mean of 2.47x on `deep w=4` and 1.70x on a two-layer MLP, while keeping
-adjoint signs improves it by 1.17x and 1.15x on the same programs. Discarding adjoint signs causes
-the smaller loss everywhere measured: the index `acheck_k/abs(vbar_k)` over curvature-carrying nodes has a
-geometric mean of 1.00–2.39 across the full set of test problems.
+**The two channels are not worth the same.** Keeping intermediate-gradient signs shrinks the cover
+by a per-coordinate geometric mean of 2.47x on `deep w=4` and 1.70x on a two-layer MLP, while
+keeping adjoint signs improves it by 1.17x and 1.15x on the same programs. Discarding adjoint signs
+causes the smaller loss everywhere measured: the index `acheck_k/abs(vbar_k)` over
+curvature-carrying nodes has a geometric mean of 1.00–2.39 across the full set of test problems.
 
-That decides the question the lattice was built to answer. The signed-tangent, absolute-adjoint
+That decides the question the lattice was built to answer. The signed-gradient, absolute-adjoint
 corner is exactly the cover a tapeless forward propagation reaches, and it is *not* dominated by
 the default cover: it is tighter on three of eleven test problems, by 2.0x on `deep w=4`, 1.6x on
 the layernorm head, and 1.2x on the MLP, and loses by 1.4x on the softmax head. Which side wins is
 a property of the program, as the incomparability of the two mixed corners predicts, and the
-tapeless corner wins where tangent cancellation is the larger of the two.
+tapeless corner wins where intermediate-gradient cancellation is the larger of the two.
 
 **Reconvergence is the whole mechanism.** A program whose graph is a tree reaches each node from
 each input along one path, so no sign anywhere can cancel and all four corners coincide: at
 `sharing = 0` the median looseness is 1.001 in every column. Raising `random_dag`'s sharing over
 paired draws carries the adjoint gain from 1.000 to 1.224, rising at every step but one. The
-tangent gain shows no such trend, and the `atoms` column says why the endpoints are not
+gradient gain shows no such trend, and the `atoms` column says why the endpoints are not
 size-matched — tree generation stops early, at a median 10 atoms against 45–49 above zero.
 
 Within the elementwise bound the same split appears on the `sqrt` scale a rank-1 cover lives on,
-and it tracks the merge closely: `within-path` reproduces the tangent gain to three digits on the
+and it tracks the merge closely: `within-path` reproduces the gradient gain to three digits on the
 test problems where curvature sits on one node per atom (2.465 on `deep w=4`, 1.700 on the MLP) and
 exceeds it where an array primitive holds several atoms in one node (1.420 against 1.386 on
 layernorm). Cross-elemental loss is the larger of the two everywhere but `deep w=4`, reaching 2.4x

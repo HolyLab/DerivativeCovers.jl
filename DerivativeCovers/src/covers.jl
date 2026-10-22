@@ -174,9 +174,9 @@ function sensitivities(t::Tape{T}) where {T}
 end
 
 """
-    tangents(t::Tape) -> u
+    intermediate_gradients(t::Tape) -> u
 
-Forward signed tangents: `u[k][a] = ∂v_k/∂x_a`, obtained by propagating
+The signed intermediate gradients: `u[k][a] = ∂v_k/∂x_a`, obtained by propagating
 `u[k] = sum_{i in P_k} (∂φ_k/∂v_i) * u[i]` from `u[x_a] = e_a`.
 
 The signed counterpart of [`sensitivities`](@ref), which runs the same recursion in absolute-value
@@ -186,7 +186,7 @@ gap between the two is the cancellation that occurs along paths from an input to
 Costs `O(n * L)` time and memory. Only first partials enter, so a declared sub-map node (see
 [`submapnode`](@ref)) propagates exactly like any other.
 """
-function tangents(t::Tape{T}) where {T}
+function intermediate_gradients(t::Tape{T}) where {T}
     n, N = t.ninputs, nnodes(t)
     u = [zeros(T, n) for _ in 1:N]
     for a in 1:n
@@ -209,13 +209,13 @@ end
 """
     merge_atoms(t::Tape, rhos, u) -> (h_sum, h_quad)
 
-Both merges of the cover atoms, from per-node cover slots `rhos` and a tangent channel `u`. An
-atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and the merges are
-`h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
+Both merges of the cover atoms, from per-node cover slots `rhos` and an intermediate-gradient
+channel `u`. An atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and the
+merges are `h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
 
 `u[j]` must be nonnegative and dominate `abs.(∇v_j)` entrywise for the results to cover; both
-[`sensitivities`](@ref) and the magnitudes of [`tangents`](@ref) qualify. The merges are in
-[`boundtype`](@ref) of the tape's element type. Which slots share an atom comes from
+[`sensitivities`](@ref) and the magnitudes of [`intermediate_gradients`](@ref) qualify. The merges
+are in [`boundtype`](@ref) of the tape's element type. Which slots share an atom comes from
 [`atom_slots`](@ref), and the loop depends on its partitioning the slots: a slot in no atom would
 lose its contribution, one named twice would be counted twice.
 
@@ -357,13 +357,13 @@ cover jumps to a finite one.
 
 These zero-reference cases concern the value channel, and they are exactly the ones
 [`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there,
-and a declared scale vanishes only at a slot with no tangent, which [`cover_slots!`](@ref) covers
-diagonally instead of splitting. So a split reaches this function with a pair that is not
-degenerate, and a pair carrying a ratio reaches the geometric mean only when `c12*z2/z1` leaves
-the range of the element type at a block whose feasible segment has a degenerate endpoint. There
-the equalizing point is recomputed from the separated exponents, which represents it whenever it
-is representable at all; see [`split_fallback`](@ref). A split that is genuinely out of range
-throws, since every pair returned here is a cover. Entries that are already non-finite are
+and a declared scale vanishes only at a slot whose intermediate gradient is zero, which
+[`cover_slots!`](@ref) covers diagonally instead of splitting. So a split reaches this function with
+a pair that is not degenerate, and a pair carrying a ratio reaches the geometric mean only when
+`c12*z2/z1` leaves the range of the element type at a block whose feasible segment has a degenerate
+endpoint. There the equalizing point is recomputed from the separated exponents, which represents it
+whenever it is representable at all; see [`split_fallback`](@ref). A split that is genuinely out of
+range throws, since every pair returned here is a cover. Entries that are already non-finite are
 returned as IEEE arithmetic gives them, which is what `check=false` asks for.
 """
 function balanced_split(c11, c12, c22, z1, z2)
@@ -559,10 +559,10 @@ end
 """
     live_nodes(t::Tape) -> live
 
-Which nodes of `t` have a tangent that is not identically zero. `live[k]` is `false` exactly when
-every path from the inputs to node `k` passes through a recorded first partial that is exactly
-zero (whose [`magnitude`](@ref) is zero), and then `∇v_k` is the zero vector in any arithmetic: every term of every path product
-carries an exact zero factor.
+Which nodes of `t` have an intermediate gradient that is not identically zero. `live[k]` is
+`false` exactly when every path from the inputs to node `k` passes through a recorded first partial
+that is exactly zero (whose [`magnitude`](@ref) is zero), and then `∇v_k` is the zero vector in any
+arithmetic: every term of every path product carries an exact zero factor.
 
 The test is on the recorded partials rather than on a propagated magnitude, so it neither
 underflows a live node to dead nor depends on the declared input scales.
@@ -599,7 +599,7 @@ split.
 `declared` is whatever [`declared_scale`](@ref) resolves: the number itself where a backend
 already has it, and a [`DeferredScale`](@ref) where the sweep that produces it should run only if
 some block asks. [`dead_slot`](@ref) reads the same field, since a backend that can name a slot's
-declared scale can say whether the slot has a tangent at all.
+declared scale can say whether the slot's intermediate gradient vanishes.
 """
 struct SplitScale{T, D}
     value::T
@@ -609,7 +609,7 @@ end
 """
     dead_slot(s::SplitScale) -> Bool
 
-Whether the slot's tangent `∇v` is identically zero.
+Whether the slot's intermediate gradient `∇v` is identically zero.
 
 Such a slot contributes no outer product to the Hessian
 `H = sum_k vbar_k * sum_{i,j} C^k_{ij} * ∇v_{p_i} * ∇v_{p_j}'`, so every entry of its block that
@@ -710,12 +710,13 @@ input rescaling, and pays no extra sweep. On one that answers `true` the cover i
 its inputs are expressed in at the blocks where no covariant local choice exists, and stays
 covariant only when the declared scales are rescaled alongside.
 
-The test reads recorded values and second partials, never an adjoint and never a tangent. The
-adjoint scales a block's three entries together, so it changes neither the value ratio nor which
-diagonal entries are nonzero, except where it underflows one of them to zero. Reading it that way
-overcounts — a block whose adjoint vanishes contributes no cover term for the fallback to reach —
-and, in that underflow corner alone, can undercount. Ignoring tangents overcounts too: a block
-with a [`dead_slot`](@ref) is covered diagonally and never consults a scale at all.
+The test reads recorded values and second partials, never an adjoint and never an intermediate
+gradient. The adjoint scales a block's three entries together, so it changes neither the value ratio
+nor which diagonal entries are nonzero, except where it underflows one of them to zero. Reading it
+that way overcounts — a block whose adjoint vanishes contributes no cover term for the fallback to
+reach — and, in that underflow corner alone, can undercount. Ignoring intermediate gradients
+overcounts too: a block with a [`dead_slot`](@ref) is covered diagonally and never consults a scale
+at all.
 
 So this predicts which programs will ask for the declared scales without running a cover; the
 covers themselves build those scales on demand and never call it, and they are the authority on
@@ -823,15 +824,14 @@ end
     local_cover_slots(ratio, t::Tape, k::Integer, av, scales; check::Bool=true)
 
 The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
-`rho[i]*rho[j] >= av*magnitude(C^k[i,j])` wherever both slots have a tangent (see
-[`dead_slot`](@ref)), and `av` the absolute adjoint `magnitude(vbar[k])`. `rho` and `av` are in
-`M =` [`magtype`](@ref)`(T)`. Returns `nothing` when the node contributes no
-second-order term (`av == 0`, or a [`NoCurvature`](@ref) node).
-This is the per-node kernel shared by [`local_covers`](@ref), which
-accumulates the results into `(rhos, theta)`, and the [`CoverOnly`](@ref) sweep, which deposits
-them directly into the absolute adjoint channel. It reads the node's [`Curvature`](@ref) off the
-tape and forwards to [`cover_slots`](@ref), which holds the construction for each form. `check`
-verifies the covering invariant on recorded nodes.
+`rho[i]*rho[j] >= av*magnitude(C^k[i,j])` wherever both slots have a nonzero intermediate
+gradient (see [`dead_slot`](@ref)), and `av` the absolute adjoint `magnitude(vbar[k])`. `rho` and
+`av` are in `M =` [`magtype`](@ref)`(T)`. Returns `nothing` when the node contributes no
+second-order term (`av == 0`, or a [`NoCurvature`](@ref) node). This is the per-node kernel shared
+by [`local_covers`](@ref), which accumulates the results into `(rhos, theta)`, and the
+[`CoverOnly`](@ref) sweep, which deposits them directly into the absolute adjoint channel. It reads
+the node's [`Curvature`](@ref) off the tape and forwards to [`cover_slots`](@ref), which holds the
+construction for each form. `check` verifies the covering invariant on recorded nodes.
 
 The first form takes the default split, resolving the threshold against the tape's element type.
 The second takes a resolved `ratio` together with `scales = split_scales(w, t)`, both computed

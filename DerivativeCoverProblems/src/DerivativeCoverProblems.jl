@@ -21,7 +21,8 @@ knobs for size, reconvergence, and dynamic range:
 - [`random_dag`](@ref): a random program whose `sharing` parameter interpolates from a tree
   (`sharing = 0`) to heavy subexpression reuse (`sharing = 1`).
 - [`adjoint_cancellation`](@ref): a chain of multiplication nodes the output is nearly stationary
-  in, so the paths from each node to the output cancel in the *adjoints* rather than the tangents.
+  in, so the paths from each node to the output cancel in the *adjoints* rather than the
+  intermediate gradients.
   [`converged_inner_solve`](@ref) reaches the same condition by the envelope theorem.
 
 Wide dynamic range enters along two independent axes: `sigma` widens the log-magnitude spread of
@@ -657,8 +658,8 @@ end
 #
 # Programs whose output is *stationary* in an interior node. That is what makes a signed adjoint
 # collapse while the unsigned sum over paths from the same node does not, so these are the
-# families that separate the two adjoint channels. Everything above cancels in the tangents
-# instead, along paths from an input.
+# families that separate the two adjoint channels. Everything above cancels in the intermediate
+# gradients instead, along paths from an input.
 
 """
     adjoint_cancellation(n; delta=1e-2, sigma=0.0, rng=MersenneTwister(1)) -> CoverProblem
@@ -732,10 +733,10 @@ paths does not. Newton doubles the accuracy each step, so the adjoint index grow
 superexponentially in `steps`. At `steps = 0` the inner variable keeps its initial value and
 nothing cancels, which is the control.
 
-Unlike [`adjoint_cancellation`](@ref) this engages the tangent channel too — the realistic case,
-since the same structure appears in implicit layers, self-consistent field iterations, and any
-objective differentiated through a converged inner solve. Its knob is `steps` rather than a size,
-so it takes no `n` and is not one of [`families`](@ref).
+Unlike [`adjoint_cancellation`](@ref) this engages the intermediate-gradient channel too — the
+realistic case, since the same structure appears in implicit layers, self-consistent field
+iterations, and any objective differentiated through a converged inner solve. Its knob is `steps`
+rather than a size, so it takes no `n` and is not one of [`families`](@ref).
 
 Past four steps the inner residual is at roundoff and a further step measures the floor rather
 than the mechanism.
@@ -993,8 +994,8 @@ at fixed problem size, or sweep `n` within one to measure how a cover's loosenes
 The three quadratic forms are seeded alike, so at a given `n` they carry the *same* Hessian and
 differ only as programs.
 
-Every family but the last cancels in the tangents; `adjcancel` cancels in the adjoints, and is
-the only one whose looseness is set by a knob rather than by `n`.
+Every family but the last cancels in the intermediate gradients; `adjcancel` cancels in the
+adjoints, and is the only one whose looseness is set by a knob rather than by `n`.
 """
 function families(; sigma::Real = 0.0, seed::Integer = 1)
     return [

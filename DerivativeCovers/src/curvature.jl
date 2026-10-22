@@ -232,9 +232,9 @@ The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `
 term carries (the absolute adjoint `magnitude(vbar[k])` in a reverse sweep, `1` in a forward one).
 Returns `nothing` when the elemental contributes no second-order term.
 
-Entries involving a slot whose tangent vanishes are exempt: they are multiplied by zero in the
-Hessian, so covering them would only import the other slot's scale into a term that is not there.
-[`dead_slot`](@ref) is the test, and it reads the slot's entry of `sl`.
+Entries involving a slot whose intermediate gradient vanishes are exempt: they are multiplied by
+zero in the Hessian, so covering them would only import the other slot's scale into a term that is
+not there. [`dead_slot`](@ref) is the test, and it reads the slot's entry of `sl`.
 
 `rho`, `av` and the entries of `sl` are magnitudes, in `M = magtype(eltype(site))`. `rho` must be a
 `Vector{M}`: [`local_cover_slots`](@ref) asserts that type so that the sweeps, which call it once
