@@ -174,8 +174,8 @@
 
         bal = balance_cover(t, outidxs; targets = :flow, rounds = nothing)
         @test bal.delta <= 1.0e-10
-        @test jacobian_ratio(U, bal.a, bal.b) <= GATE
-        @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, J) <= GATE
 
         # The matrix-free tape path and the explicit matrix path reach the same pair.
         rt, ct = flowtargets(t, outidxs)
@@ -184,14 +184,14 @@
         @test bal.b ≈ balm.b rtol = 1.0e-8
         # `:support` is the matrix form's built-in pattern-feasible choice.
         bals = balance_cover(U; targets = :support, rounds = nothing)
-        @test jacobian_ratio(U, bals.a, bals.b) <= GATE
+        @test max_coverage_ratio(bals.a, bals.b, U) <= GATE
 
         # Non-sum merges take the same normalized alternation and only change the final b-step,
         # so their products are no larger than the sum merge's. (The comparison is on products:
         # the delegating path starts elsewhere and so fixes a different gauge.)
         for merge in (QuadMerge(), MaxMerge())
             balq = balance_cover(t, outidxs; targets = :flow, rounds = nothing, merge)
-            @test jacobian_ratio(U, balq.a, balq.b) <= GATE
+            @test max_coverage_ratio(balq.a, balq.b, U) <= GATE
             @test all(balq.a .* balq.b' .<= bal.a .* bal.b' .* GATE)
         end
     end
@@ -210,8 +210,8 @@
 
         bal = balance_cover(t, outidxs; targets = :flow, rounds = nothing)
         @test bal.delta <= 1.0e-10
-        @test jacobian_ratio(U, bal.a, bal.b) <= GATE
-        @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, J) <= GATE
     end
 
     @testset "targets: explicit marginals are validated" begin
@@ -242,7 +242,7 @@
         )
         bald = balance_cover(td, od; targets = :flow, rounds = nothing)
         @test bald.a[2] == 0
-        @test jacobian_ratio(jacobian_surrogate(td, od), bald.a, bald.b) <= GATE
+        @test max_coverage_ratio(bald.a, bald.b, jacobian_surrogate(td, od)) <= GATE
     end
 
     @testset "tape_potentials and the covariant start cover — $name" for (name, r, x0) in PROGRAMS
@@ -260,8 +260,8 @@
 
         for rounds in (0, 1, 4), cgiters in (0, 5)
             cw = balance_cover(t, outidxs; rounds, cgiters, check = true)
-            @test jacobian_ratio(U, cw.a, cw.b) <= GATE
-            @test jacobian_ratio(J, cw.a, cw.b) <= GATE
+            @test max_coverage_ratio(cw.a, cw.b, U) <= GATE
+            @test max_coverage_ratio(cw.a, cw.b, J) <= GATE
             @test all(>=(0), cw.a)
             @test all(>=(0), cw.b)
         end
@@ -383,7 +383,7 @@
         @test cw.a[2] == 0
         @test cw.b[3] == 0
         @test all(>(0), cw.a[[1, 3]])
-        @test jacobian_ratio(U, cw.a, cw.b) <= GATE
+        @test max_coverage_ratio(cw.a, cw.b, U) <= GATE
         @test isnan(tape_potentials(t, outidxs).theta[3])
     end
 
@@ -398,7 +398,7 @@
             @test c.a == d.a
             @test c.b_sum == d.b_sum
             @test c.m == d.m == 3 && c.n == d.n == 3
-            @test jacobian_ratio(U, c.a, c.b_sum) <= GATE
+            @test max_coverage_ratio(c.a, c.b_sum, U) <= GATE
             @test all(d.b_max .<= d.b_quad .* GATE)
             @test all(d.b_quad .<= d.b_sum .* GATE)
             @test (start === :covariant) == (c.roots !== nothing)
@@ -465,7 +465,7 @@
             h2 = cover_jacobian_hybrid(t, outidxs, 2; start, rounds)
             @test h2.a == c.a
             hyb = h2.b
-            @test jacobian_ratio(U, c.a, hyb) <= GATE
+            @test max_coverage_ratio(c.a, hyb, U) <= GATE
             @test all(c.b_max .<= hyb .* GATE)
             @test all(hyb .<= c.b_sum .* GATE)
         end
@@ -499,7 +499,7 @@
             @test ad[2] == 0
             bd = cover_jacobian_hybrid(td, od, 2; start).b
             @test all(isfinite, bd)
-            @test jacobian_ratio(Ud, ad, bd) <= GATE
+            @test max_coverage_ratio(ad, bd, Ud) <= GATE
         end
     end
 
@@ -515,10 +515,10 @@
                 @test x.a[2] == 0
                 @test x.b_sum[3] == 0
                 @test all(isfinite, x.a) && all(isfinite, x.b_sum)
-                @test jacobian_ratio(U, x.a, x.b_sum) <= GATE
+                @test max_coverage_ratio(x.a, x.b_sum, U) <= GATE
             end
             @test all(isfinite, d.b_quad) && all(isfinite, d.b_max)
-            @test jacobian_ratio(U, d.a, d.b_max) <= GATE
+            @test max_coverage_ratio(d.a, d.b_max, U) <= GATE
         end
     end
 
@@ -530,7 +530,7 @@
         c = cover_jacobian(t, outidxs)
         @test all(isfinite, c.a) && all(>(0), c.a)
         @test all(isfinite, c.b_sum)
-        @test jacobian_ratio(jacobian_surrogate(t, outidxs), c.a, c.b_sum) <= GATE
+        @test max_coverage_ratio(c.a, c.b_sum, jacobian_surrogate(t, outidxs)) <= GATE
         # A spread nothing can hold is reported as a range failure naming the weight, never as the
         # zero-weight symptom it used to surface as.
         wider = try
@@ -684,7 +684,7 @@
         t, outidxs = tape_function(triangular, [0.6, -0.4, 0.9])
         jc = cover_jacobian(WithDiagnostics(), t, outidxs)
         @test all(jc.b_max .<= jc.b_quad .* GATE)
-        @test jacobian_ratio(jc.Utilde, jc.a, jc.b_max) <= GATE
+        @test max_coverage_ratio(jc.a, jc.b_max, jc.Utilde) <= GATE
     end
 
     @testset "the convenience program form" begin
@@ -743,7 +743,7 @@
             # Every live column of `U2 ./ (a.^2 .* b'.^2)` sums to one, so the squares cover `U2`.
             S = [U2[k, j] > 0 ? U2[k, j] / (bal.a[k] * bal.b[j])^2 : 0.0 for k in axes(U2, 1), j in axes(U2, 2)]
             @test all(sum(S; dims = 1)[j] ≈ 1 for j in axes(U2, 2) if li.livecol[j])
-            @test jacobian_ratio(U2, bal.a .^ 2, bal.b .^ 2) <= GATE
+            @test max_coverage_ratio(bal.a .^ 2, bal.b .^ 2, U2) <= GATE
         end
 
         # Run to convergence, the normalized iterate `(a, b ./ sqrt.(γ))` meets both targets.
@@ -832,8 +832,8 @@
         @test U2[1, 1] ≈ 18 && U[1, 1] ≈ 6
         v = balance_cover(t, outidxs; merge = VarianceMerge(), rounds = nothing, check = true)
         @test v.a[1] * v.b[1] ≈ sqrt(18)
-        @test jacobian_ratio(U, v.a, v.b) ≈ 6 / sqrt(18)          # > 1: not a cover of Ũ
-        @test jacobian_ratio(U2, v.a .^ 2, v.b .^ 2) <= GATE
+        @test max_coverage_ratio(v.a, v.b, U) ≈ 6 / sqrt(18)          # > 1: not a cover of Ũ
+        @test max_coverage_ratio(v.a .^ 2, v.b .^ 2, U2) <= GATE
 
         # Dead rows and columns keep zero weights.
         rd = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]

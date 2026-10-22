@@ -204,9 +204,9 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         # The covering chain holds in Float32, up to Float32 roundoff.
         H = ForwardDiff.hessian(f32, x064)
         gate32 = 1 + sqrt(eps(Float32))
-        @test cover_ratio(H, Float64.(c32.h_sum)) <= gate32
-        @test cover_ratio(H, Float64.(c32.h_quad)) <= gate32
-        @test bound_ratio(H, Float64.(c32.B)) <= gate32
+        @test max_coverage_ratio(Float64.(c32.h_sum), H) <= gate32
+        @test max_coverage_ratio(Float64.(c32.h_quad), H) <= gate32
+        @test all(abs.(H) .<= gate32 .* Float64.(c32.B))
         @test all(abs.(H) .<= Float64.(c32.h_sum) * Float64.(c32.h_sum)' * gate32)
     end
 

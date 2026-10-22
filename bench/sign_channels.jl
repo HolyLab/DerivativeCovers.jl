@@ -10,7 +10,7 @@
 #     fwd-G   absolute tangents, absolute adjoints  the loosest corner
 #     fwd     signed tangents, absolute adjoints    what a tapeless forward pass reaches
 #
-# Looseness is `1/cover_ratio(H, h)` against the exact Hessian from ForwardDiff, the scale the
+# Looseness is `1/max_coverage_ratio(h, H)` against the exact Hessian from ForwardDiff, the scale the
 # other scripts use: 1 is exact, larger is looser. The two mixed corners are incomparable, so
 # `fwd/quad` above 1 says the default cover is tighter on the worst entry; below 1 says the tapeless
 # one does.
@@ -21,7 +21,8 @@
 
 using DerivativeCovers, DerivativeCoverProblems, ForwardDiff, LinearAlgebra, Random, Printf,
     Statistics
-using DerivativeCovers: cover_ratio, tape_function, nnodes, natoms, adjoints, abs_reverse,
+using MatrixCovers: max_coverage_ratio
+using DerivativeCovers: tape_function, nnodes, natoms, adjoints, abs_reverse,
     atom_slots, value, sensitivities, tangents, local_covers, merge_atoms, hessian_bound,
     magnitude
 
@@ -98,7 +99,7 @@ function corners(f, x0)
     t, outidx = tape_function(f, x0)
     lat = cover_lattice(t, outidx)
     H = ForwardDiff.hessian(f, x0)
-    loose(h) = 1 / cover_ratio(H, h)
+    loose(h) = 1 / max_coverage_ratio(h, H)
 
     # Both channels are scored the same way: how much the cover shrinks when the signs are kept.
     tangent = ratio_stats(lat.h_quad, lat.h_quad_signed)
@@ -289,7 +290,7 @@ function main()
     n = 12
     fixtures = vcat(family_fixtures(n), array_fixtures(MersenneTwister(20240607), n))
 
-    println("Looseness is 1/cover_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
+    println("Looseness is 1/max_coverage_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
     println("`tangent` and `adjoint` are the factor by which keeping that channel's signs shrinks")
     println("the cover, per coordinate; `within-path` and `cross-elem` split the elementwise bound.")
     println()

@@ -21,14 +21,14 @@ A generator returns a `CoverProblem` containing the program `f`, the point `x0`,
 closed form exists—the reference Hessian:
 
 ```julia
-using DerivativeCovers, DerivativeCoverProblems
+using DerivativeCovers, DerivativeCoverProblems, MatrixCovers
 
 p = quadratic(6; rank=2, form=:factored)
 c = cover_hessian(p.f, p.x0)
 H = exact_hessian(p)
 
 all(abs.(H) .<= c.h_sum * c.h_sum')             # true: the cover is guaranteed
-DerivativeCovers.cover_ratio(H, c.h_sum)        # 0.879: and it is nearly tight
+max_coverage_ratio(c.h_sum, H)                  # 0.879: and it is nearly tight
 ```
 
 The ratio approaches `1` as the cover approaches the tightest cover that the Hessian admits.

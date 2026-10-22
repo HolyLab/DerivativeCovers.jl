@@ -131,9 +131,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     @testset "validity vs ForwardDiff — $name" for (name, f, x0) in PRIMITIVE_VALIDITY
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
         @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
     end
@@ -180,8 +180,8 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test res.h_quad ≈ pattern rtol = 1.0e-12
 
         H = ForwardDiff.hessian(f, zW)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
     end
 
     @testset "repeated parents" begin
@@ -190,9 +190,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
     end
 
@@ -236,9 +236,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
     end
 
     # However long the operand, the split records the product in a bounded number of nodes; the
@@ -260,9 +260,9 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         H = ForwardDiff.hessian(f_constx, x0)
         res = cover_hessian(WithDiagnostics(), f_constx, x0)
         @test res.grad ≈ ForwardDiff.gradient(f_constx, x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
 
         Aconst = [1.0 0.5; -0.3 2.0]
         f_constW = z -> sum(abs2.(Aconst * z)) / 2
@@ -270,8 +270,8 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         Hw = ForwardDiff.hessian(f_constW, z0)
         resw = cover_hessian(WithDiagnostics(), f_constW, z0)
         @test resw.grad ≈ ForwardDiff.gradient(f_constW, z0)
-        @test cover_ratio(Hw, resw.h_sum) <= GATE
-        @test cover_ratio(Hw, resw.h_quad) <= GATE
+        @test max_coverage_ratio(resw.h_sum, Hw) <= GATE
+        @test max_coverage_ratio(resw.h_quad, Hw) <= GATE
         # A constant-W matvec records only linear nodes: no PairedCurvature atom on the tape.
         t, _ = tape_function(f_constW, z0)
         @test !any(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
@@ -293,14 +293,14 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test cover_hybrid(t, outidx, natoms(t)) ≈ res.h_quad rtol = 1.0e-12
         h_nodewise = cover_hybrid(t, outidx, collect(1:N))
         @test all(>=(0), h_nodewise)
-        @test cover_ratio(H, h_nodewise) <= GATE
+        @test max_coverage_ratio(h_nodewise, H) <= GATE
         @test all(res.h_quad .<= h_nodewise .* GATE)
 
         rng = MersenneTwister(41)
         groups = rand(rng, 1:5, N)
         h = cover_hybrid(t, outidx, groups)
         @test all(>=(0), h)
-        @test cover_ratio(H, h) <= GATE
+        @test max_coverage_ratio(h, H) <= GATE
     end
 
     @testset "covariance — dot and matvec" begin

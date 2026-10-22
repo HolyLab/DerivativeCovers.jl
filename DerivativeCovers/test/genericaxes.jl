@@ -11,9 +11,7 @@
     fullview(A) = view(A, ntuple(_ -> Colon(), ndims(A))...)
 
     H = [1.0 0.3 -0.2; 0.3 2.0 0.5; -0.2 0.5 1.4]
-    B = abs.(H) .+ 0.1
     h = [1.2, 1.5, 0.9]
-    href = [1.0, 2.0, 0.9]
     J = [1.0 0.3 0.5; 0.2 2.0 0.1]
     av = [1.5, 2.0]
     bv = [1.1, 1.4, 0.9]
@@ -21,13 +19,8 @@
     # Reductions: only the values are defined, and they must not depend on how the data is
     # labelled. Each case names the arrays it consumes so the wrappers can be applied uniformly.
     @testset "value invariance — $name" for (name, f, args) in (
-            ("cover_ratio", cover_ratio, (H, h)),
-            ("bound_ratio", bound_ratio, (H, B)),
-            ("tightness", tightness, (h, href)),
-            ("jacobian_ratio", jacobian_ratio, (J, av, bv)),
             ("scaled_spectral_radius", scaled_spectral_radius, (H, h)),
             ("scaled_singular_value", scaled_singular_value, (J, av, bv)),
-            ("anisotropy", anisotropy, (h,)),
         )
         ref = f(args...)
         @test f(map(offsetcopy, args)...) == ref
@@ -46,9 +39,6 @@
                 "compose_hessian_cover", (hg, g, a, b) ->
                 compose_hessian_cover(hg, g, a, b).h_sum, (av, av, av, bv), 4,
             ),
-            ("inflate", (h, f) -> inflate(h, f), (h, fill(2.0, 3)), 1),
-            ("inflation_factors", h -> inflation_factors(RampInflation(), h, 4.0), (h,), 1),
-            ("inflation_shape", h -> inflation_shape(LognormalInflation(), h), (h,), 1),
         )
         ref = f(args...)
         offargs = map(offsetcopy, args)
@@ -59,15 +49,6 @@
         @test collect(got) ≈ collect(ref)
         @test axes(got) == axes(offargs[which])
         @test collect(f(map(fullview, args)...)) ≈ collect(ref)
-    end
-
-    # A spike names a coordinate, so it must be given in the coordinates of the cover it applies
-    # to rather than as a 1-based position.
-    @testset "SpikeInflation indexes h's own axes" begin
-        ho = offsetcopy(h)
-        @test inflation_shape(SpikeInflation(-1), ho)[-1] == 1
-        @test sum(inflation_shape(SpikeInflation(-1), ho)) == 1
-        @test_throws BoundsError inflation_shape(SpikeInflation(3), ho)
     end
 
     # The tape numbers its inputs `1:n`, so the programs and the vectors laid out over the inputs
@@ -88,8 +69,6 @@
             t, outidx,
             offsetcopy(h)
         )
-        @test_throws "offset arrays are not supported" jacobian_minimax(offsetcopy(B))
-        @test_throws "offset arrays are not supported" jacobian_representability(offsetcopy(B))
 
         # The declaration is the only thing offset about them: the same data 1-based goes through.
         @test hvp(f, x0, v) == hvp(t, outidx, v)

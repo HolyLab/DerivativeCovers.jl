@@ -7,12 +7,13 @@
 # Everything is scored as *excess* — `max_kj (a_k*b_j)/Ũ_kj` over the nonzero entries, the
 # quantity `jacobian_minimax` minimizes. That makes three references directly comparable on one
 # scale: the unbalanced pair (`a = ones`, one merge b-step), the balanced pair, and the exact
-# rank-1 optimum from `jacobian_minimax`. `jacobian_representability` reports the 2-cycle lower
-# bound alongside it.
+# rank-1 optimum from `jacobian_minimax`.
 
 using DerivativeCovers, LinearAlgebra, Random, Statistics, Printf
-using DerivativeCovers: jacobian_surrogate, balance_cover, jacobian_minimax,
-    jacobian_representability, tape_function, MergeRule, SumMerge, QuadMerge, MaxMerge
+using DerivativeCovers: jacobian_surrogate, balance_cover, tape_function, MergeRule, SumMerge,
+    QuadMerge, MaxMerge
+
+include(joinpath(@__DIR__, "minimax.jl"))
 
 const MERGES = (SumMerge(), QuadMerge(), MaxMerge())
 const ARULES = (:marginal, :geomean)
@@ -22,7 +23,7 @@ const STATUSES = (:converged, :diverging, :stalled, :overbudget, :zeroweight)
     excess(U, a, b) -> e
 
 Worst-case looseness `max_kj (a_k*b_j)/U_kj` over the nonzero entries of `U`: the reciprocal view
-of `jacobian_ratio`, and the quantity [`jacobian_minimax`](@ref) minimizes.
+of `max_coverage_ratio`, and the quantity `jacobian_minimax` minimizes.
 """
 excess(U, a, b) = maximum(a[k] * b[j] / U[k, j] for k in axes(U, 1), j in axes(U, 2) if U[k, j] > 0)
 
@@ -80,10 +81,7 @@ function fixture_table(name, U)
     @printf(
         "--- %s (%d x %d, %d nonzeros) ---\n", name, m, n, count(>(0), U)
     )
-    @printf(
-        "minimax excess %.4g, representability bound %.4g\n",
-        mm.excess, jacobian_representability(U)
-    )
+    @printf("minimax excess %.4g\n", mm.excess)
     @printf("%-10s %-9s %11s %8s %11s %11s\n", "merge", "arule", "unbalanced", "iters", "balanced", "/minimax")
     for merge in MERGES
         e0 = excess(U, ones(m), bstep_from_ones(U, merge))

@@ -31,9 +31,9 @@
         H = ForwardDiff.hessian(p.f, p.x0)
         res = cover_hessian(WithDiagnostics(), p.f, p.x0)
         @test res.grad ≈ ForwardDiff.gradient(p.f, p.x0)
-        @test bound_ratio(H, res.B) <= GATE
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test all(abs.(H) .<= GATE .* res.B)
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
     end
 
@@ -73,8 +73,8 @@
         H = ForwardDiff.hessian(ps.f, ps.x0)
         res = cover_hessian(WithDiagnostics(), ps.f, ps.x0)
         @test res.grad ≈ ForwardDiff.gradient(ps.f, ps.x0)
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
     end
 
     @testset "errors" begin

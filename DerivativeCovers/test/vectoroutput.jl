@@ -102,7 +102,7 @@
 
         bal = balance_cover(Utilde; arule = :geomean)
         @test bal.a[1] == 0 && bal.a[3] == 0
-        @test jacobian_ratio(Utilde, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, Utilde) <= GATE
     end
 
     @testset "malformed vector outputs fail fast" begin

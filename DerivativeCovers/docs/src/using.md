@@ -7,7 +7,7 @@ CurrentModule = DerivativeCovers
 The examples on this page use the following program and its cover:
 
 ```jldoctest use
-julia> using DerivativeCovers, LinearAlgebra
+julia> using DerivativeCovers, LinearAlgebra, MatrixCovers
 
 julia> f(x) = exp(x[1]) + x[1] * x[2] + x[2] * x[3] + x[3] * x[4];
 
@@ -56,8 +56,7 @@ When the inputs are rescaled, `x → D*x`, the cover transforms as `h → inv(D)
 are therefore independent of the units of the inputs:
 
 - the scaled Hessian `Hhat = H ./ (h .* h')`, whose entries lie in `[-1, 1]`;
-- the scaled gradient `g ./ h`, whose norm [`Diagnostics.cover_norm`](@ref DerivativeCovers.Diagnostics.cover_norm)
-  computes, and which serves as a convergence test;
+- the scaled gradient `g ./ h`, whose norm serves as a convergence test;
 - the scaled step `h .* p`, in terms of which the Newton equation `H * p = -g`
   becomes `Hhat * (h .* p) = -(g ./ h)`.
 
@@ -87,8 +86,7 @@ true
 
 Power iteration approaches the spectral radius from below, so the estimate is
 inflated by a safety factor (here 1.1) before use. When `H` is available
-explicitly, [`Diagnostics.psd_shift`](@ref DerivativeCovers.Diagnostics.psd_shift)
-computes the smallest sufficient `τ`.
+explicitly, the smallest sufficient `τ` is `-eigmin(Hhat)`.
 
 ## Tightening a cover
 
@@ -99,12 +97,13 @@ estimate of `λ` needs the same safety factor:
 ```jldoctest use
 julia> hs = sqrt(1.1 * λ) .* h;
 
-julia> round(DerivativeCovers.cover_ratio(H, h); digits=3), round(DerivativeCovers.cover_ratio(H, hs); digits=3)
+julia> round(max_coverage_ratio(h, H); digits=3), round(max_coverage_ratio(hs, H); digits=3)
 (0.449, 0.73)
 ```
 
-[`cover_ratio`](@ref) is the largest value of `abs(H[i,j]) / (h[i] * h[j])`;
-values closer to 1 indicate a tighter cover (see [Tightness](@ref)).
+`max_coverage_ratio`, from MatrixCovers, is the largest value of
+`abs(H[i,j]) / (h[i] * h[j])`; values closer to 1 indicate a tighter cover
+(see [Tightness](@ref)).
 
 ## Jacobians
 

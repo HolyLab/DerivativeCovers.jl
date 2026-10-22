@@ -724,7 +724,7 @@ function _balance_tape(
     if check
         Utilde = surrogate(t, outidxs)
         _check_surrogate_support(t, outidxs, Utilde, li; variance)
-        rworst = jacobian_ratio(Utilde, a, b)
+        rworst = max_coverage_ratio(a, b, Utilde)
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
             variance ?
                 "the variance pair's squared factors do not bound Ũ⁽²⁾: worst ratio $rworst" :
@@ -831,7 +831,7 @@ function _balance_matrix(
             throw(ArgumentError("$(bname(j)) is $(b[j]) on a column with nonzero entries"))
     end
     if check
-        rworst = jacobian_ratio(Utilde, a, b)
+        rworst = max_coverage_ratio(a, b, Utilde)
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
             variance ?
                 "the variance pair's squared factors do not bound the matrix: worst ratio $rworst" :
@@ -1522,141 +1522,5 @@ function _logchange_extrema(v, vprev)
     return lo, hi
 end
 
-"""
-    jacobian_ratio(J, a, b) -> r
-
-Worst-case ratio `max_kj abs(J[k,j]) / (a[k]*b[j])` over the nonzero entries of `J`. `(a, b)` is a
-valid asymmetric cover of `J` exactly when `r ≤ 1`. Zero entries of `J` constrain nothing and are
-skipped; a nonzero entry over a vanishing `a[k]*b[j]` gives `Inf`. The asymmetric counterpart of
-[`cover_ratio`](@ref).
-"""
-function jacobian_ratio(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
-    axes(J, 1) == axes(a, 1) && axes(J, 2) == axes(b, 1) ||
-        throw(DimensionMismatch("J is $(axes(J)); a is $(axes(a)); b is $(axes(b))"))
-    worst = zero(_ratio_type(J, a))
-    for j in axes(J, 2), k in axes(J, 1)
-        Jkj = magnitude(J[k, j])
-        iszero(Jkj) && continue
-        d = a[k] * b[j]
-        worst = max(worst, d > 0 ? Jkj / d : oftype(worst, Inf))
-    end
-    return worst
-end
-
-"""
-    jacobian_minimax(M; atol=eps(eltype(M))^(3//4)) -> (; a, b, excess)
-
-The exact minimax rank-1 cover of the nonnegative matrix `M`: a pair `a_k * b_j ≥ M_kj` whose
-worst-case excess `max_kj (a_k*b_j)/M_kj` over the nonzero entries of `M` is the smallest any
-rank-1 cover can achieve. The optimal value is classical (tropical spectral theory / max-balancing):
-it equals the maximum over bipartite cycles of the support — rows `k_1, …, k_r` and columns
-`j_1, …, j_r`, all entries `(k_i, j_i)` and `(k_i, j_{i+1})` nonzero — of the alternating
-geometric mean
-
-    [ (M_{k_1 j_1} ⋯ M_{k_r j_r}) / (M_{k_1 j_2} ⋯ M_{k_r j_1}) ]^{1/r} .
-
-The `r = 2` cycles give [`jacobian_representability`](@ref); longer cycles can dominate, so this
-is the exact form of the floor that function only bounds. Every unit cancels around a cycle
-(each row and column appears once in the numerator and once in the denominator), so `excess` is
-dimensionless and the pair is equivariant under `M → diag(c)*M*diag(d)` modulo the gauge
-`(a, b) → (γa, γ⁻¹b)`.
-
-Computed by bisection on the log-space excess with Bellman–Ford feasibility (difference
-constraints `log M_kj ≤ log a_k + log b_j ≤ log M_kj + E`), `O(nnz·(m+n))` per probe;
-deterministic, no solver. `atol` is the absolute log-space bisection width — `excess` is exact to
-a relative `atol` and the returned pair attains it. A zero row of `M` gets `a_k = 0`, a zero
-column `b_j = 0`; both are exact. Unlike [`balance_cover`](@ref) this minimizes the worst-case
-excess itself, so it is the tightness yardstick — but the optimum is generally non-unique off
-the critical cycles, so prefer `balance_cover`'s rules when covariance-by-uniqueness matters.
-"""
-function jacobian_minimax(M::AbstractMatrix; atol::Real = eps(float(magtype(eltype(M))))^(3 // 4))
-    Base.require_one_based_indexing(M)
-    all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
-    atol > 0 || throw(ArgumentError("atol must be positive, got $atol"))
-    m, n = size(M)
-    T = float(magtype(eltype(M)))
-    ks, js, cs = Int[], Int[], T[]
-    for j in 1:n, k in 1:m
-        M[k, j] > 0 && (push!(ks, k); push!(js, j); push!(cs, log(M[k, j])))
-    end
-    isempty(cs) && return (; a = zeros(T, m), b = zeros(T, n), excess = one(T))
-
-    lo, hi = zero(T), maximum(cs) - minimum(cs)
-    feasible, pot = _minimax_feasible(m, n, ks, js, cs, hi)
-    feasible || error("Bellman–Ford infeasible at the row-span upper bound; this cannot happen")
-    while hi - lo > atol
-        mid = lo + (hi - lo) / 2
-        f, p = _minimax_feasible(m, n, ks, js, cs, mid)
-        f ? (hi = mid; pot = p) : (lo = mid)
-    end
-
-    a, b = exp.(pot[1:m]), exp.(.-pot[(m + 1):(m + n)])
-    liverow, livecol = falses(m), falses(n)
-    for (k, j) in zip(ks, js)
-        liverow[k] = livecol[j] = true
-    end
-    a[.!liverow] .= 0
-    b[.!livecol] .= 0
-    _regauge!(a, b)
-    excess = maximum(a[k] * b[j] / M[k, j] for (k, j) in zip(ks, js))
-    excess >= 1 - eps(T)^(2 // 3) ||
-        error("minimax pair does not cover M: worst ratio $(1 / excess)")
-    return (; a, b, excess)
-end
-
-# The minimax constraints are feasible iff their difference-constraint graph has no negative
-# cycle. Multi-source Bellman–Ford both tests feasibility and returns valid potentials.
-function _minimax_feasible(m, n, ks, js, cs, E)
-    pot = zeros(eltype(cs), m + n)
-    for _ in 1:(m + n)
-        changed = false
-        for (k, j, c) in zip(ks, js, cs)
-            if pot[k] - c < pot[m + j]
-                pot[m + j] = pot[k] - c
-                changed = true
-            end
-            if pot[m + j] + c + E < pot[k]
-                pot[k] = pot[m + j] + c + E
-                changed = true
-            end
-        end
-        changed || return true, pot
-    end
-    return false, pot
-end
-
-"""
-    jacobian_representability(M) -> excess
-
-A rigorous lower bound on the worst-case excess `max_kj (a[k]*b[j]) / M[k,j]` of *any* rank-1 cover
-`a[k]*b[j] ≥ M[k,j]` of the nonnegative matrix `M`: how much looseness rank-1 structure forces,
-independent of the merge and surrogate. It is `√(max 2×2 defect)`, where a 2×2 submatrix on rows
-`k, k'` and columns `j, j'` (all four entries nonzero) has defect
-`(M_kj*M_k'j') / (M_kj'*M_k'j)`; any valid rank-1 cover has excess `≥ √defect` on that block. A
-rank-1 `M` gives exactly `1`; block structure (partially separable Jacobians) drives it up.
-
-Computed in `O(m²n)` from row-pair differences of `log M` over shared-support columns — a
-diagnostic. Pass [`magnitude`](@ref)`.(J)` (which is `abs.(J)` for a numeric `J`) or a surrogate
-`Ũ` as `M`. This is the 2-cycle restriction of the
-exact forced excess: longer support cycles can dominate it, and [`jacobian_minimax`](@ref)
-computes the exact value together with a pair attaining it.
-"""
-function jacobian_representability(M::AbstractMatrix)
-    Base.require_one_based_indexing(M)
-    m, n = size(M)
-    all(>=(0), M) || throw(ArgumentError("M must be nonnegative"))
-    T = float(magtype(eltype(M)))
-    worst = zero(T)
-    for k in 1:m, l in (k + 1):m
-        lo = T(Inf)
-        hi = T(-Inf)
-        for j in 1:n
-            (M[k, j] > 0 && M[l, j] > 0) || continue
-            d = log(M[k, j]) - log(M[l, j])
-            lo = min(lo, d)
-            hi = max(hi, d)
-        end
-        hi >= lo && (worst = max(worst, hi - lo))     # ≥ 2 shared columns give a finite span
-    end
-    return exp(worst / 2)
-end
+# The type of a ratio of magnitudes of entries of `A` and `B`.
+_ratio_type(A, B) = typeof(float(one(magtype(eltype(A))) / one(magtype(eltype(B)))))

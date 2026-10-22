@@ -14,7 +14,8 @@
 # `sum(abs2, layernorm(z))` is identically `n`, whose zero Hessian no cover can be tight on.
 
 using DerivativeCovers, ForwardDiff, LinearAlgebra, Random, Statistics, Printf
-using DerivativeCovers: value, cover_ratio, jacobian_surrogate, submap
+using MatrixCovers: max_coverage_ratio
+using DerivativeCovers: value, jacobian_surrogate, submap
 
 # Use the same `softmax` and `layernorm` definitions as the tests.
 include(joinpath(@__DIR__, "..", "DerivativeCovers", "test", "composites.jl"))
@@ -72,7 +73,7 @@ end
 """
     looseness(fdec, fprim, z) -> (; scale, sum_dec, sum_prim, quad_dec, quad_prim)
 
-`1/cover_ratio` of both merges for two recordings of one function. `scale` is the largest entry of
+`1/max_coverage_ratio` of both merges for two recordings of one function. `scale` is the largest entry of
 the reference Hessian; a `scale` near zero means the ratios describe a vanishing matrix and carry
 no information.
 """
@@ -82,8 +83,8 @@ function looseness(fdec, fprim, z)
     dp = cover_hessian(WithDiagnostics(), fprim, z)
     return (
         scale = maximum(abs, H),
-        sum_dec = 1 / cover_ratio(H, dd.h_sum), sum_prim = 1 / cover_ratio(H, dp.h_sum),
-        quad_dec = 1 / cover_ratio(H, dd.h_quad), quad_prim = 1 / cover_ratio(H, dp.h_quad),
+        sum_dec = 1 / max_coverage_ratio(dd.h_sum, H), sum_prim = 1 / max_coverage_ratio(dp.h_sum, H),
+        quad_dec = 1 / max_coverage_ratio(dd.h_quad, H), quad_prim = 1 / max_coverage_ratio(dp.h_quad, H),
     )
 end
 

@@ -14,10 +14,10 @@
         J2, J1 = randn(rng, 4, 3), randn(rng, 3, 5)
         a2, b2 = ones(4), vec(maximum(abs.(J2); dims = 1))
         a1, b1 = ones(3), vec(maximum(abs.(J1); dims = 1))
-        @test jacobian_ratio(J2, a2, b2) <= GATE     # the factors are covered...
-        @test jacobian_ratio(J1, a1, b1) <= GATE
+        @test max_coverage_ratio(a2, b2, J2) <= GATE     # the factors are covered...
+        @test max_coverage_ratio(a1, b1, J1) <= GATE
         pair = compose_jacobian_cover(a2, b2, a1, b1)
-        @test jacobian_ratio(J2 * J1, pair.a, pair.b) <= GATE   # ...so the product is too
+        @test max_coverage_ratio(pair.a, pair.b, J2 * J1) <= GATE   # ...so the product is too
 
         # Exact on sign-definite rank-1 factors covered exactly.
         u2, w2 = [2.0, 0.25, 1.0], [4.0, 1.0]
@@ -41,7 +41,7 @@
         @test d.J ≈ ForwardDiff.jacobian(Fsub, x0) rtol = 1.0e-12
         for k in 1:4
             Hk = ForwardDiff.hessian(v -> Fsub(v)[k], x0)
-            @test cover_ratio(Hk, d.S[k, :]) <= GATE
+            @test max_coverage_ratio(d.S[k, :], Hk) <= GATE
         end
         @test all(iszero, d.S[4, :])                 # the linear output declares no curvature
 
@@ -59,8 +59,8 @@
         gamma = abs.(ForwardDiff.gradient(gout, y0))
         res = compose_hessian_cover(hg.h_sum, gamma, jc.a, jc.b_max, d.S)
         H = ForwardDiff.hessian(x -> gout(Fsub(x)), x0)
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(res.h_quad .<= res.h_sum .* GATE)
 
         # Linear F: S = nothing, and the composite Hessian is J'*∇²g*J alone.
@@ -74,7 +74,7 @@
         gammal = abs.(ForwardDiff.gradient(gl, A * xl))
         resl = compose_hessian_cover(hgl.h_sum, gammal, jcl.a, jcl.b_max, nothing)
         Hl = ForwardDiff.hessian(x -> gl(A * x), xl)
-        @test cover_ratio(Hl, resl.h_sum) <= GATE
+        @test max_coverage_ratio(resl.h_sum, Hl) <= GATE
 
         @test_throws DimensionMismatch compose_hessian_cover(hg.h_sum[1:3], gamma, jc.a, jc.b_max)
         @test_throws DimensionMismatch compose_hessian_cover(hg.h_sum, gamma, jc.a, jc.b_max, d.S[:, 1:2])
@@ -101,8 +101,8 @@
 
         @test res.grad ≈ ForwardDiff.gradient(ftraced, x0) rtol = 1.0e-12
         @test res.grad ≈ rtr.grad rtol = 1.0e-12
-        @test cover_ratio(H, res.h_sum) <= GATE
-        @test cover_ratio(H, res.h_quad) <= GATE
+        @test max_coverage_ratio(res.h_sum, H) <= GATE
+        @test max_coverage_ratio(res.h_quad, H) <= GATE
         @test all(abs.(H) .<= res.B .* GATE .+ eps())
         @test nnodes(t) < nnodes(ttr)               # the call is recorded compressed
 
@@ -128,9 +128,9 @@
         t, outidxs = tape_function(progd, x0)
         @test adjoints(t, outidxs)[:, 1:t.ninputs] ≈ J rtol = 1.0e-12
         jc = cover_jacobian(WithDiagnostics(), t, outidxs)
-        @test jacobian_ratio(J, jc.a, jc.b_max) <= GATE
+        @test max_coverage_ratio(jc.a, jc.b_max, J) <= GATE
         bal = balance_cover(t, outidxs)
-        @test jacobian_ratio(J, bal.a, bal.b) <= GATE
+        @test max_coverage_ratio(bal.a, bal.b, J) <= GATE
     end
 
     @testset "nested declared calls" begin
@@ -148,7 +148,7 @@
         @test d.J ≈ ForwardDiff.jacobian(Gtwin, x0) rtol = 1.0e-12
         for k in 1:2
             Hk = ForwardDiff.hessian(x -> Gtwin(x)[k], x0)
-            @test cover_ratio(Hk, d.S[k, :]) <= GATE
+            @test max_coverage_ratio(d.S[k, :], Hk) <= GATE
         end
     end
 
