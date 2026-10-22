@@ -1,5 +1,5 @@
 # Compare matrix-free Jacobian products with ForwardDiff. Equilibration tests verify entrywise
-# bounds, convergence of the singular-value estimate from below, and validity after shrinking.
+# bounds, convergence of the singular-value estimate from below, and validity after rescaling by it.
 
 @testset "equilibration" begin
 
@@ -113,11 +113,11 @@
 
         exact = scaled_singular_value(J, c.a, b)
         est = scaled_singular_value(t, outidxs, c.a, b; rtol = 1.0e-10, maxiter = 2000)
-        # Every iterate is norm(Jhat*v) at a unit v, hence a lower bound. This direction is what
-        # forces `safety > 1` in `jacobian_shrink`; an estimate from above would need no guard.
+        # Every iterate is norm(Jhat*v) at a unit v, hence a lower bound, so rescaling a cover by
+        # the estimate needs a safety factor above 1.
         @test est <= exact * GATE
         @test est ≈ exact rtol = 1.0e-6
-        # The spectral norm dominates every entry, which is the whole basis of the shrink.
+        # The spectral norm dominates every entry, which is what makes rescaling by it valid.
         @test exact >= maximum(abs, equilibrate(J, c.a, b)) / GATE
     end
 
@@ -138,7 +138,7 @@
         )
     end
 
-    @testset "jacobian_shrink" begin
+    @testset "rescaling a cover by its singular value" begin
         f = xs -> [tanh(y) for y in W * xs]
         x0 = [0.3, -0.2, 0.5]
         t, outidxs = tape_function(f, x0)
@@ -146,31 +146,20 @@
         c = cover_jacobian(WithDiagnostics(), t, outidxs)
         a, b = c.a, c.b_max
 
-        # An entrywise-minimal cover saturates an entry, so sigma >= 1 and the clamp makes the
-        # shrink a no-op rather than inflating a cover that has no spectral slack.
+        # An entrywise-minimal cover saturates an entry, so it has no spectral slack.
         sigma = scaled_singular_value(J, a, b)
         @test sigma >= 1
-        @test jacobian_shrink(a, b, sigma) == (a, b)
 
-        # Uniform inflation is pure spectral slack, and the shrink removes it: one pass lands on
-        # sigma == 1 exactly, from either starting inflation, and a second pass changes nothing.
+        # Uniform inflation is pure spectral slack, and rescaling both factors by `sqrt(sigma)`
+        # removes it: one pass lands on sigma == 1 from either starting inflation.
         for factor in (2.0, 5.0)
             ai, bi = a .* factor, b .* factor
             si = scaled_singular_value(J, ai, bi)
             @test si ≈ sigma / factor^2
-            as, bs = jacobian_shrink(ai, bi, si)
-            @test all(abs.(J) .<= (as * bs') .* GATE)         # validity is inherited
-            @test all(as .<= ai) && all(bs .<= bi)            # and it is a strict improvement
+            as, bs = sqrt(si) .* ai, sqrt(si) .* bi
+            @test all(abs.(J) .<= (as * bs') .* GATE)
             @test scaled_singular_value(J, as, bs) ≈ 1
-            @test jacobian_shrink(as, bs, scaled_singular_value(J, as, bs)) == (as, bs)
         end
-
-        # The slack is split evenly, so the product a*b' carries exactly one factor of it.
-        as, bs = jacobian_shrink(a, b, 0.25)
-        @test as * bs' ≈ 0.25 .* (a * b')
-
-        @test_throws "sigma must be nonnegative" jacobian_shrink(a, b, -1.0)
-        @test_throws "safety must be positive" jacobian_shrink(a, b, 0.5; safety = 0.0)
     end
 
 end

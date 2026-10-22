@@ -31,13 +31,11 @@ import MatrixCovers: support_components, gramcover, gramcover!
 # Main entry points and result types.
 export Tape, TVar, tape_function
 export FVar, forward_cover, ForwardCover
-export cover_hessian, cover_jacobian, cover_nls, cover_variance
-export cover_hybrid, cover_jacobian_hybrid, cover_lattice
+export cover_hessian, cover_jacobian, cover_nls
 export CoverOnly, WithDiagnostics
-export TangentChannel, AbsoluteTangents, SignedTangents
-export CoverLattice, HessianCover, HessianDiagnostics
+export HessianCover, HessianDiagnostics
 export JacobianCover, JacobianDiagnostics
-export NLSCover, NLSDiagnostics, VarianceCover
+export NLSCover, NLSDiagnostics
 export hvp, hvp!, jvp, jvp!, vjp, vjp!
 
 # Public but unexported extension points and cover utilities. Julia 1.10 cannot parse `public`,
@@ -50,7 +48,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :constantnode, :atom_slots, :check_finite_partials, :submapnode,
             :split_scales, :split_block, :split_ratio, :guards_any_block, :sensitivity_scales,
             :SplitScale, :dead_slot, :value, :isconstant, :nnodes, :natoms, :CoverVar,
-            :constantvar, :tangent_channel, :forward_scale, :magnitude, :magtype, :boundtype, :Upward, :separation,
+            :constantvar, :forward_scale, :magnitude, :magtype, :boundtype, :Upward, :separation,
             :decided_sign, :check_values, :adjoints
         )
     )
@@ -66,12 +64,13 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     # Ratios, bounds, and rescalings defined on a cover from any source.
     eval(
         Expr(
-            :public, :cover_ratio, :bound_ratio, :rank1_ratio, :tightness, :jacobian_ratio,
-            :jacobian_representability, :jacobian_minimax, :dependency_severity,
-            :scaled_spectral_radius, :scaled_singular_value, :spectral_shrink, :jacobian_shrink,
-            :equilibrate
+            :public, :cover_ratio, :bound_ratio, :tightness, :jacobian_ratio,
+            :jacobian_representability, :jacobian_minimax,
+            :scaled_spectral_radius, :scaled_singular_value, :equilibrate
         )
     )
+    # Covers that merge in groups, interpolating between the sum and quadrature merges.
+    eval(Expr(:public, :cover_hybrid, :cover_jacobian_hybrid))
     # Adapters between the result types and the functions that take bare vectors.
     eval(
         Expr(

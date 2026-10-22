@@ -1,6 +1,7 @@
-# A forward propagation reaches one specific corner of the lattice — signed tangents, absolute
-# adjoints — and these tests hold it there. Equality against `h_quad_forward` is the acceptance
-# criterion: it pins the construction, not merely the validity of what comes out.
+# A forward propagation keeps the signs of the intermediate gradients and discards those of the
+# adjoints, and these tests hold it there. Equality against `forward_corner`, which assembles that
+# cover from a tape, is the acceptance criterion: it pins the construction, not merely the
+# validity of what comes out.
 
 # Array heads exercise the recorders `PROBLEMS` reaches only in part: `dotnode` for a bilinear
 # pair, `linearnode` for a constant-coefficient combination, and both through `sum` and `*`.
@@ -15,25 +16,24 @@ const FORWARD_ARRAY = [
 const FORWARD_FIXTURES = vcat(PROBLEMS, FORWARD_ARRAY)
 
 # Two routes to the same number differ in the order they accumulate it, and the split weights
-# differ by a factor `sqrt(acheck)` between them, so equality is to roundoff rather than to the
-# bit. Measured worst case over these fixtures is 4e-16.
+# differ between them by the square root of the unsigned path sum to the output, so equality is
+# to roundoff rather than to the bit. Measured worst case over these fixtures is 4e-16.
 const FORWARD_RTOL = 1.0e-12
 
 # The propagation carries both of the split's scale references, so it takes the same split a tape
 # does at every block and the two are comparable coordinate by coordinate. The threshold and the
-# declared scales are swept alongside, since the corner must hold for any of them.
+# declared scales are swept alongside, since the equality must hold for any of them.
 const FORWARD_SPLITS = (
     (;), (; ratio = 0.5), (; ratio = 0.0), (; scales = nothing, ratio = 1.0e-4),
 )
 
 @testset "forward.jl" begin
 
-    @testset "the cover is the lattice's forward corner — $name" for
+    @testset "the cover is the tape's forward cover — $name" for
         (name, f, x0) in FORWARD_FIXTURES
         for kw in FORWARD_SPLITS
             fc = forward_cover(f, x0; kw...)
-            lat = cover_lattice(f, x0; kw...)
-            @test fc.h_quad ≈ lat.h_quad_forward rtol = FORWARD_RTOL
+            @test fc.h_quad ≈ forward_corner(f, x0; kw...) rtol = FORWARD_RTOL
             @test fc.grad ≈ ForwardDiff.gradient(f, x0) rtol = FORWARD_RTOL
         end
     end
@@ -74,7 +74,7 @@ const FORWARD_SPLITS = (
         @test captured[].sigma == 0
         @test !DerivativeCovers.dead_slot(DerivativeCovers.forward_scale(captured[]))
         @test cover_ratio(ForwardDiff.hessian(f, x0), fc.h_quad) <= GATE
-        @test fc.h_quad ≈ cover_lattice(f, x0; scales = w).h_quad_forward rtol = FORWARD_RTOL
+        @test fc.h_quad ≈ forward_corner(f, x0; scales = w) rtol = FORWARD_RTOL
 
         # The slots a tangent really does empty are dropped by both backends alike.
         deadprograms = (
@@ -85,7 +85,7 @@ const FORWARD_SPLITS = (
         )
         @testset "$name" for (name, fd, xd) in deadprograms
             fc = forward_cover(fd, xd)
-            @test fc.h_quad ≈ cover_lattice(fd, xd).h_quad_forward rtol = FORWARD_RTOL
+            @test fc.h_quad ≈ forward_corner(fd, xd) rtol = FORWARD_RTOL
             @test cover_ratio(ForwardDiff.hessian(fd, xd), fc.h_quad) <= GATE
         end
     end

@@ -678,8 +678,8 @@ tridiagonal rather than block diagonal, and the separation is a property of each
 of the problem size: **it is the same at every `n`**, which is what makes the family usable in a
 size sweep.
 
-Each input reaches the output along one path per unit, so the tangent channel is exactly inert:
-`cover_lattice`'s tangent corners coincide and the family isolates the adjoint channel. `sigma`
+Each input reaches the output along one path per unit, so no intermediate gradient cancels: its
+absolute-value bound is exact, and the family isolates the cancellation in the adjoints. `sigma`
 spreads the log-magnitudes of the odd coordinates, spreading the per-unit index without touching
 the mechanism.
 """

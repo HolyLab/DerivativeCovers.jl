@@ -194,30 +194,22 @@ The two endpoints, on a tape carrying three atoms:
 ```jldoctest
 julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
 
-julia> round.(cover_hybrid(f, [0.5, 2.0], 1); digits=4)   # one group: the sum merge
+julia> round.(DerivativeCovers.cover_hybrid(f, [0.5, 2.0], 1); digits=4)   # one group: the sum merge
 2-element Vector{Float64}:
  4.1125
  2.4142
 
-julia> round.(cover_hybrid(f, [0.5, 2.0], 3); digits=4)   # a group per atom: the quadrature merge
+julia> round.(DerivativeCovers.cover_hybrid(f, [0.5, 2.0], 3); digits=4)   # a group per atom: the quadrature merge
 2-element Vector{Float64}:
  3.1062
  1.7321
 ```
 """
 function cover_hybrid(
-        t::Tape, outidx::Integer, spec; check::Bool = true,
+        t::Tape{T}, outidx::Integer, spec; check::Bool = true,
         scales = nothing, ratio = nothing
-    )
-    return _cover_hybrid(t, adjoints(t, outidx), spec; check, scales, ratio)
-end
-
-# Accept precomputed adjoints so callers such as cover_nls can reuse their gradient sweep.
-function _cover_hybrid(
-        t::Tape{T}, vbar::AbstractVector, spec;
-        check::Bool = true, scales = nothing, ratio = nothing
     ) where {T}
-    rhos, _ = local_covers(t, vbar; check, scales, ratio)
+    rhos, _ = local_covers(t, adjoints(t, outidx); check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, rhos, spec))
     return tomag(T, [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs])
 end

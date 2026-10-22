@@ -172,6 +172,12 @@ Largest singular value of the equilibrated Jacobian `Jhat = diag(a)^-1 J diag(b)
 `(a, b)` is valid iff every entry of `Jhat` is at most 1 in magnitude, and
 `sigma >= max_kj abs(Jhat[k,j])`.
 
+Because every entry of `Jhat` is bounded by its spectral norm,
+`abs(J[k,j]) <= sigma * a[k] * b[j]`, so `(sqrt(sigma) * a, sqrt(sigma) * b)` is also a cover of
+`J`, tighter than `(a, b)` when `sigma < 1`. `sigma` must bound the scaled norm wherever the cover
+is meant to hold: for a cover computed over a set of points, such as a box of intervals, that is
+the supremum over the set.
+
 The dense method is exact, and drops zero weights on the same terms as [`equilibrate`](@ref).
 
 The tape method is matrix-free: power iteration on `Jhat'Jhat` driven by [`jvp`](@ref) and
@@ -180,8 +186,8 @@ changes by less than `rtol` relative. It requires `a` and `b` to be strictly pos
 whose element type is its own [`magtype`](@ref): power iteration evaluates at a point, so a
 set-valued tape (such as one recorded on intervals) is an error. Each iterate
 `norm(Jhat*v)` with `norm(v) == 1` is a *lower* bound on `sigma` and the sequence converges to it
-from below, so the estimate must carry a safety-factor inflation before it may shrink a cover
-(see [`jacobian_shrink`](@ref)). Failure to converge within `maxiter` is an error, not a silently
+from below, so rescaling a cover by `sqrt(safety * sigma)` is valid only for a `safety > 1` large
+enough to make `safety * sigma` an upper bound. Failure to converge within `maxiter` is an error, not a silently
 returned partial result.
 """
 function scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
@@ -234,46 +240,4 @@ function scaled_singular_value(
         converged && return sigma
     end
     error("power iteration did not converge in $maxiter iterations (last estimate $sigma)")
-end
-
-"""
-    jacobian_shrink(a::AbstractVector, b::AbstractVector, sigma::Real; safety::Real=1) -> (as, bs)
-
-Shrink the cover pair `(a, b)` by the spectral slack `sigma = scaled_singular_value(J, a, b)`,
-returning `as = sqrt(s)*a` and `bs = sqrt(s)*b` with `s = min(1, safety*sigma)`.
-
-Validity is inherited: `abs(J[k,j]) <= sigma * a[k] * b[j]` for every `k`, `j`, because every entry
-of the equilibrated Jacobian is bounded by its spectral norm. The slack is split evenly between the
-two sides so that the shrink commutes with rescaling of the outputs and of the inputs; any other
-split of `s` between `as` and `bs` is equally valid. The shrink is a strict improvement exactly
-when `safety*sigma < 1`; the clamp keeps a spectrally saturated cover (`sigma >= 1`) from being
-inflated, which would be valid but looser.
-
-`safety` inflates `sigma` before it is used. It must be large enough that `safety*sigma` is an
-upper bound on the true spectral norm: with an exact `sigma` the default `1` is correct, but the
-power-iteration estimate converges from below and needs `safety > 1`.
-
-`sigma` must bound the scaled norm wherever the cover is meant to hold: for a cover computed over
-a set of points, such as a box of intervals, that is the supremum over the set. It must be a plain
-number (its type is its own [`magtype`](@ref)); a set-valued `sigma`, such as an interval, is an
-error.
-"""
-function jacobian_shrink(a::AbstractVector, b::AbstractVector, sigma::Real; safety::Real = 1)
-    _check_pointwise_slack(sigma, "sigma")
-    sigma >= 0 || throw(ArgumentError("sigma must be nonnegative, got $sigma"))
-    safety > 0 || throw(ArgumentError("safety must be positive, got $safety"))
-    scale = sqrt(min(one(float(sigma)), safety * sigma))
-    return a .* scale, b .* scale
-end
-
-# A spectral slack that shrinks a cover must be a single number bounding the norm everywhere the
-# cover holds; a set-valued one does not say which member bounds it.
-function _check_pointwise_slack(x, name)
-    magtype(typeof(x)) === typeof(x) || throw(
-        ArgumentError(
-            "$name must be a plain number bounding the scaled norm wherever the cover holds; " *
-                "got a $(typeof(x)), whose values stand for sets"
-        )
-    )
-    return nothing
 end

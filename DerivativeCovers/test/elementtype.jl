@@ -85,8 +85,8 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test d isa HessianDiagnostics{Float32}
         @test fieldeltypes(d) == [Float32]
 
-        vc = cover_variance(t, outidx)
-        @test vc isa VarianceCover{Float32}
+        vc = cover_hessian(t, outidx)
+        @test vc isa HessianCover{Float32}
         @test fieldeltypes(vc) == [Float32]
 
         @test cover_hybrid(t, outidx, 3) isa Vector{Float32}
@@ -215,7 +215,6 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test NLSCover{Float32}(v, v, v, v, v, 2) isa NLSCover{Float32, Float32}
         @test NLSDiagnostics{Float32}(v, v, v, v, v, Float32[1 2; 3 4], 2) isa
             NLSDiagnostics{Float32, Float32}
-        @test VarianceCover{Float32}(v, v, v, v) isa VarianceCover{Float32, Float32}
         @test HessianCover{Float32}(v, v, v) isa HessianCover{Float32, Float32}
         fc = ForwardCover{Float32}([1.0, 2.0], [1.0, 2.0])
         @test fc isa ForwardCover{Float32, Float32, Vector{Float32}, Vector{Float32}}

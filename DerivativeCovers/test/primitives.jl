@@ -121,11 +121,11 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         v = Float64[cos(3i) for i in eachindex(x0)]
         @test hvp(fp, x0, v) ≈ hvp(fs, x0, v) rtol = 1.0e-12
 
-        vp = cover_variance(fp, x0)
-        vs = cover_variance(fs, x0)
+        vp = cover_hessian(fp, x0)
+        vs = cover_hessian(fs, x0)
         @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
         @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
-        @test vp.severity ≈ vs.severity rtol = 1.0e-12
+        @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
     end
 
     @testset "validity vs ForwardDiff — $name" for (name, f, x0) in PRIMITIVE_VALIDITY

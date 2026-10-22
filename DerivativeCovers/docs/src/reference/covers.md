@@ -22,15 +22,9 @@ DerivativeCovers
 ```@docs
 cover_hessian
 cover_hybrid
-cover_variance
 forward_cover
-cover_lattice
 CoverOnly
 WithDiagnostics
-TangentChannel
-AbsoluteTangents
-SignedTangents
-tangent_channel
 ```
 
 ## Least-squares objectives
@@ -55,9 +49,7 @@ cover_jacobian_hybrid
 ```@docs
 HessianCover
 HessianDiagnostics
-VarianceCover
 ForwardCover
-CoverLattice
 NLSCover
 NLSDiagnostics
 JacobianCover
@@ -81,15 +73,11 @@ adjoints
 ```@docs
 cover_ratio
 bound_ratio
-rank1_ratio
 tightness
-dependency_severity
 jacobian_ratio
 jacobian_representability
 jacobian_minimax
 scaled_spectral_radius
-spectral_shrink
 scaled_singular_value
-jacobian_shrink
 equilibrate
 ```
