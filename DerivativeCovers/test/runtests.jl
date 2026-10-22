@@ -808,6 +808,16 @@ include("maxpath.jl")
         @test DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 1.0e-20, 1.0, 0.0)
         @test !DerivativeCovers.value_bounds_split(0.0, 10.0, 0.0, 0.0, 1.0, 0.0)
 
+        # A quotient's numerator diagonal `2u/w^3` vanishes with the numerator, so a lopsided pair
+        # there still fixes the split, at the clamped endpoint `1/sqrt(2|u*w|)`: the cover grows
+        # without bound as `u` approaches zero, past the default threshold too, and only the
+        # exact zero hands over to the declared scales.
+        fquo = x -> (x[1] - 1) / x[2]
+        for d in (2.0^-10, 2.0^-20, 2.0^-30)
+            @test cover_hessian(fquo, [1 + d, 2.0]).h_sum ≈ [1 / sqrt(4d), sqrt(4d) / 4]
+        end
+        @test cover_hessian(fquo, [1.0, 2.0]).h_sum ≈ [0.5, 0.5]
+
         # Scale references whose ratio no product of them can hold: the split is theirs all the
         # same, and the cover is the exact one for `H = [0 1; 1 0]`.
         fwide = x -> (1.0e-200 * x[1]) * (1.0e200 * x[2])
