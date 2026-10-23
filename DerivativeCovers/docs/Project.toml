@@ -14,5 +14,5 @@ MatrixCovers = {path = "/home/tim/.julia/dev/MatrixCovers"}
 [compat]
 Documenter = "1.17.0"
 IntervalArithmetic = "1"
-LinearAlgebra = "1"
+LinearAlgebra = "<0.0.1, 1"
 MatrixCovers = "1.1"
