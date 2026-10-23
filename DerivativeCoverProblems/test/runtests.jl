@@ -87,6 +87,44 @@ using Test
         @test_throws ArgumentError rescale(p, [1.0, 2.0, 0.0, 1.0])
     end
 
+    @testset "planted deep composition" begin
+        p = deep_composition(5; depth = 3, width = 5, planted = 0.5, rng = MersenneTwister(3))
+        q = deep_composition(5; depth = 3, width = 5, rng = MersenneTwister(3))
+        @test p.x0 == q.x0
+        @test p.twin(p.x0) ≈ p.f(p.x0)
+        @test has_xstar(p) && !has_xstar(q)
+        # With width == n the planted point is the unique zero of the first layer, W*x + b.
+        W, b = p.twin.W, p.twin.b
+        @test p.xstar ≈ -(W \ b)
+        @test p.f(p.xstar) <= 1e-24
+        @test p.twin(p.xstar) <= 1e-24
+        @test 0 < norm(p.xstar - p.x0) < 10
+        d = [1.0, 2.0, 0.5, 3.0, 0.25]
+        @test rescale(p, d).xstar == d .* p.xstar
+        @test_throws ArgumentError deep_composition(4; planted = -1.0)
+    end
+
+    @testset "Lotka-Volterra parameter estimation" begin
+        p = lotka_volterra(3; delta = 0.2, nsteps = 20, every = 4, rng = MersenneTwister(2))
+        @test nvars(p) == 3 + 9
+        @test has_xstar(p)
+        @test p.f(p.xstar) == 0
+        @test p.twin(p.xstar) <= 1e-20
+        @test isfinite(p.f(p.x0)) && p.f(p.x0) > 0
+        @test p.twin(p.x0) ≈ p.f(p.x0)
+        @test ForwardDiff.gradient(p.twin, p.x0) ≈ ForwardDiff.gradient(p.f, p.x0)
+        @test ForwardDiff.hessian(p.twin, p.x0) ≈ ForwardDiff.hessian(p.f, p.x0)
+        # The planted equilibrium r = -A*ybar is stable: the symmetric part of A*Diagonal(ybar) is negative definite.
+        A = reshape(p.xstar[4:end], 3, 3)
+        ybar = -(A \ p.xstar[1:3])
+        @test all(>(0), ybar)
+        @test maximum(eigvals(Symmetric(A * Diagonal(ybar) + (A * Diagonal(ybar))'))) < 0
+        @test p.x0 == lotka_volterra(3; delta = 0.2, nsteps = 20, every = 4, rng = MersenneTwister(2)).x0
+        @test_throws ArgumentError lotka_volterra(3; every = 0)
+        @test_throws ArgumentError lotka_volterra(3; delta = -0.1)
+        @test_throws DimensionMismatch p.f(zeros(5))
+    end
+
     @testset "generator argument checks" begin
         @test_throws ArgumentError quadratic(4; rank = 5)
         @test_throws ArgumentError quadratic(4; form = :bogus)
