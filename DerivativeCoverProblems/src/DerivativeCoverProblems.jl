@@ -31,11 +31,11 @@ the units of the *inputs*.
 """
 module DerivativeCoverProblems
 
-using LinearAlgebra: Diagonal, dot, norm
+using LinearAlgebra: Diagonal, I, Symmetric, dot, eigvals, norm
 using Random: AbstractRNG, MersenneTwister
 
-export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin
-export quadratic, deep_composition, random_dag, mlp, cancellation, rescale, logscales, families
+export CoverProblem, nvars, exact_hessian, has_exact_hessian, has_twin, has_xstar
+export quadratic, deep_composition, random_dag, mlp, lotka_volterra, cancellation, rescale, logscales, families
 export adjoint_cancellation, converged_inner_solve
 export JacobianProblem, noutputs, exact_jacobian, has_exact_jacobian, jacobian_cancellation
 
@@ -56,17 +56,21 @@ A scalar program together with the references needed to judge a cover of its Hes
   be.
 - `hessian`: `x -> H`, the analytic Hessian, or `nothing` when no closed form is available. Use
   [`exact_hessian`](@ref) rather than the field.
+- `xstar`: a global minimizer of `f`, or `nothing` when none is known. Problems built with a
+  planted solution carry it.
 """
-struct CoverProblem{F, G, H}
+struct CoverProblem{F, G, H, X}
     name::String
     f::F
     x0::Vector{Float64}
     twin::G
     hessian::H
+    xstar::X
 end
 
-CoverProblem(name::AbstractString, f, x0::AbstractVector; twin = nothing, hessian = nothing) =
-    CoverProblem(String(name), f, Vector{Float64}(x0), twin, hessian)
+CoverProblem(name::AbstractString, f, x0::AbstractVector; twin = nothing, hessian = nothing, xstar = nothing) =
+    CoverProblem(String(name), f, Vector{Float64}(x0), twin, hessian,
+                 xstar === nothing ? nothing : Vector{Float64}(xstar))
 
 """
     nvars(p::CoverProblem)
@@ -89,6 +93,13 @@ has_exact_hessian(p::CoverProblem) = p.hessian !== nothing
 Whether `p` carries an independent reference implementation of its program.
 """
 has_twin(p::CoverProblem) = p.twin !== nothing
+
+"""
+    has_xstar(p::CoverProblem)
+
+Whether `p` carries a known global minimizer `p.xstar`.
+"""
+has_xstar(p::CoverProblem) = p.xstar !== nothing
 
 """
     exact_hessian(p::CoverProblem, x=p.x0) -> H
@@ -204,7 +215,7 @@ end
 # ---- deep compositions -----------------------------------------------------------------------
 
 """
-    deep_composition(n; depth=4, width=4, sigma=0.0, rng=MersenneTwister(1)) -> CoverProblem
+    deep_composition(n; depth=4, width=4, sigma=0.0, planted=nothing, rng=MersenneTwister(1)) -> CoverProblem
 
 A depth-`depth` composition of layers, each of which sums its `width` channels into a single
 trunk node and then feeds that node back into all `width` channels:
@@ -224,20 +235,31 @@ unit scale (`1/sqrt(width)` per fan-in), because a wide spread there drives `tan
 saturation and flattens the Hessian to nothing. Heterogeneous units belong on the inputs, which is
 where `sigma` puts them.
 
+A real `planted` replaces the biases by `b = -W*xstar` with `xstar = x0 .+ planted .* randn(n)`,
+so that the first layer, and with it every later layer, vanishes at `xstar`: `f(xstar) = 0`, the
+minimum of `f`. For `width >= n` and `W` of full rank, `xstar` is the only zero of the first
+layer. `planted` sets the distance of `x0` from `xstar` in units of the inputs; `W`, `a`, `c`, and
+`x0` are those of the unplanted problem drawn from the same `rng` state. The problem carries
+`xstar` as `p.xstar`.
+
 No closed-form Hessian; differentiate `p.f`.
 """
 function deep_composition(
         n::Integer; depth::Integer = 4, width::Integer = 4, sigma::Real = 0.0,
-        rng::AbstractRNG = MersenneTwister(1)
+        planted::Union{Nothing, Real} = nothing, rng::AbstractRNG = MersenneTwister(1)
     )
     n >= 1 || throw(ArgumentError("n must be positive, got $n"))
     depth >= 1 || throw(ArgumentError("depth must be positive, got $depth"))
     width >= 1 || throw(ArgumentError("width must be positive, got $width"))
+    (planted === nothing || (isfinite(planted) && planted >= 0)) ||
+        throw(ArgumentError("planted must be nothing or a finite nonnegative distance, got $planted"))
     W = _coeffs(rng, width, n; sigma) ./ sqrt(n)
-    b = _coeffs(rng, width; sigma)
+    b0 = _coeffs(rng, width; sigma)
     a = _coeffs(rng, depth, width; sigma = 0) ./ sqrt(width)
     c = _coeffs(rng, depth, width; sigma = 0)
     x0 = randn(rng, n)
+    xstar = planted === nothing ? nothing : x0 .+ planted .* randn(rng, n)
+    b = xstar === nothing ? b0 : -(W * xstar)
 
     function f(x)
         z = [tanh(_lincomb(view(W, j, :), x) + b[j]) for j in 1:width]
@@ -257,7 +279,8 @@ function deep_composition(
         return sum(abs2, z) / 2
     end
 
-    return CoverProblem("deep d=$depth w=$width n=$n", f, x0; twin)
+    name = planted === nothing ? "deep d=$depth w=$width n=$n" : "deep d=$depth w=$width n=$n planted=$planted"
+    return CoverProblem(name, f, x0; twin, xstar)
 end
 
 # ---- random DAGs -----------------------------------------------------------------------------
@@ -533,6 +556,114 @@ function mlp(
 
     name = "mlp $(join(ns, '-')) b=$batch"
     return CoverProblem(name, f, x0; twin)
+end
+
+# ---- Lotka--Volterra parameter estimation -------------------------------------------------------
+
+"""
+    lotka_volterra(m; delta=0.3, decades=2.0, ntraj=3, h=0.1, nsteps=50, every=5,
+                   rng=MersenneTwister(1)) -> CoverProblem
+
+Least-squares estimation of the parameters of a generalized Lotka--Volterra system of `m`
+species,
+
+    dy_i/dt = y_i * (r_i + sum_j A[i,j] * y_j),
+
+from its own simulated trajectories. The inputs are the parameters `x = vcat(r, vec(A))`, so
+`n = m + m^2`. The program integrates `ntraj` trajectories by `nsteps` classical Runge--Kutta
+steps of size `h`, observes every `every`-th step, and sums the squared misfits to the data, each
+divided by the equilibrium abundance of its species:
+
+    f(x) = sum over trajectories, observations o, species i of ((y_i(o; x) - data_i(o)) / ybar_i)^2 / 2
+
+The data come from planted parameters `xstar`, built around a positive equilibrium `ybar` whose
+entries are spread log-uniformly over `decades` decades: `A[i,j] = B[i,j] / ybar[j]` with `B` the
+negative identity plus a random perturbation whose symmetric part is kept negative definite, and
+`r = -A*ybar`, so `ybar` is a stable equilibrium. The parameters of the abundant and the rare
+species therefore differ in units by `decades` decades. Initial conditions are `ybar` times
+log-normal factors of standard deviation 1/2. The data are simulated by `f`'s own arithmetic, so
+`f(xstar) = 0` exactly, the minimum of `f`; the problem carries `xstar` as `p.xstar`.
+
+The start is `x0 = xstar .+ delta .* abs.(xstar) .* randn(n)`: `delta` is the relative
+perturbation of each parameter. Far from `xstar` the dynamics can blow up within the horizon, and
+`f` then returns `Inf` or `NaN`.
+
+Every step of the integrator reuses every species' state in every right-hand side, so paths from a
+parameter to the output reconverge at each of the `4 * nsteps` stages.
+
+No closed-form Hessian; differentiate `p.f`.
+"""
+function lotka_volterra(
+        m::Integer; delta::Real = 0.3, decades::Real = 2.0, ntraj::Integer = 3, h::Real = 0.1,
+        nsteps::Integer = 50, every::Integer = 5, rng::AbstractRNG = MersenneTwister(1)
+    )
+    m >= 1 || throw(ArgumentError("m must be positive, got $m"))
+    (isfinite(delta) && delta >= 0) || throw(ArgumentError("delta must be finite and nonnegative, got $delta"))
+    (isfinite(decades) && decades >= 0) || throw(ArgumentError("decades must be finite and nonnegative, got $decades"))
+    ntraj >= 1 || throw(ArgumentError("ntraj must be positive, got $ntraj"))
+    (isfinite(h) && h > 0) || throw(ArgumentError("h must be finite and positive, got $h"))
+    nsteps >= 1 || throw(ArgumentError("nsteps must be positive, got $nsteps"))
+    1 <= every <= nsteps || throw(ArgumentError("every must lie in 1:$nsteps, got $every"))
+    n = m + m^2
+
+    ybar = 10 .^ (decades .* (rand(rng, m) .- 0.5))
+    B = -Matrix{Float64}(I, m, m) .+ 0.4 .* randn(rng, m, m) ./ sqrt(m)
+    # Shift B so the largest eigenvalue of its symmetric part is at most -0.2.
+    λ = maximum(eigvals(Symmetric((B .+ B') ./ 2)))
+    λ > -0.2 && (B .-= (λ + 0.2) .* Matrix{Float64}(I, m, m))
+    A = B ./ ybar'
+    r = -(A * ybar)
+    xstar = vcat(r, vec(A))
+    inits = [ybar .* exp.(0.5 .* randn(rng, m)) for _ in 1:ntraj]
+
+    # Observed states of the trajectory from `y0` under parameters `x`, by scalar arithmetic.
+    function simulate(x, y0)
+        Base.require_one_based_indexing(x)
+        length(x) == n || throw(DimensionMismatch("lotka_volterra expects $n parameters, got $(length(x))"))
+        rhs(y) = [y[i] * (x[i] + _sum([x[m + (j - 1) * m + i] * y[j] for j in 1:m])) for i in 1:m]
+        obs = Vector{typeof(x[1] * y0[1])}[]
+        y = y0
+        for k in 1:nsteps
+            k1 = rhs(y)
+            k2 = rhs([y[i] + (h / 2) * k1[i] for i in 1:m])
+            k3 = rhs([y[i] + (h / 2) * k2[i] for i in 1:m])
+            k4 = rhs([y[i] + h * k3[i] for i in 1:m])
+            y = [y[i] + (h / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]) for i in 1:m]
+            k % every == 0 && push!(obs, y)
+        end
+        return obs
+    end
+    data = [[Float64.(o) for o in simulate(xstar, y0)] for y0 in inits]
+
+    function f(x)
+        terms = [((o[i] - d[i]) / ybar[i])^2 for (y0, dt) in zip(inits, data)
+                 for (o, d) in zip(simulate(x, y0), dt) for i in 1:m]
+        return _sum(terms) / 2
+    end
+
+    function twin(x)
+        Base.require_one_based_indexing(x)
+        rr = x[1:m]
+        AA = reshape(x[(m + 1):end], m, m)
+        rhs(y) = y .* (rr .+ AA * y)
+        total = zero(eltype(x))
+        for (y0, dt) in zip(inits, data)
+            y = y0
+            for k in 1:nsteps
+                k1 = rhs(y)
+                k2 = rhs(y .+ (h / 2) .* k1)
+                k3 = rhs(y .+ (h / 2) .* k2)
+                k4 = rhs(y .+ h .* k3)
+                y = y .+ (h / 6) .* (k1 .+ 2 .* k2 .+ 2 .* k3 .+ k4)
+                k % every == 0 && (total += sum(abs2, (y .- dt[k ÷ every]) ./ ybar))
+            end
+        end
+        return total / 2
+    end
+
+    x0 = xstar .+ delta .* abs.(xstar) .* randn(rng, n)
+    name = "lotka-volterra m=$m δ=$delta K=$nsteps"
+    return CoverProblem(name, f, x0; twin, xstar)
 end
 
 # ---- cancellation pairs ------------------------------------------------------------------------
@@ -973,14 +1104,15 @@ function rescale(p::CoverProblem, d::AbstractVector)
         throw(DimensionMismatch("need one scale per input: got $(length(d)) for $(nvars(p)) inputs"))
     all(>(0), d) || throw(ArgumentError("scale factors must be positive"))
     dv = Vector{Float64}(d)
-    f, tw, hs = p.f, p.twin, p.hessian
+    f, tw, hs, xs = p.f, p.twin, p.hessian, p.xstar
     D = Diagonal(inv.(dv))
     return CoverProblem(
         p.name * " rescaled",
         y -> f(y ./ dv),
         dv .* p.x0,
         tw === nothing ? nothing : y -> tw(y ./ dv),
-        hs === nothing ? nothing : y -> D * hs(y ./ dv) * D
+        hs === nothing ? nothing : y -> D * hs(y ./ dv) * D,
+        xs === nothing ? nothing : dv .* xs
     )
 end
 
