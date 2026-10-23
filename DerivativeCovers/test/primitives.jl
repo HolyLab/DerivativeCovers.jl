@@ -279,7 +279,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test Hw ≈ Aconst' * Aconst
     end
 
-    @testset "merges and variance compose on the matvec program" begin
+    @testset "merges and the sign-averaged cover compose on the matvec program" begin
         f, x0 = matvec_prim, [0.3, -0.7, 1.1, -0.2, 0.5, 0.9, -1.3, 2.0, 0.4]
         H = ForwardDiff.hessian(f, x0)
         res = cover_hessian(WithDiagnostics(), f, x0)

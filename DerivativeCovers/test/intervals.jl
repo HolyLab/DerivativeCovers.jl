@@ -80,7 +80,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
 
     samples(rng, lo, hi, k = 150) = [lo .+ rand(rng, length(lo)) .* (hi .- lo) for _ in 1:k]
 
-    @testset "variance, hybrid and forward covers hold over the box — $name" for
+    @testset "sign-averaged, hybrid and forward covers hold over the box — $name" for
         (name, f, lo, hi) in box_programs
         X = interval.(lo, hi)
         vc = cover_hessian(f, X)
@@ -174,7 +174,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
 
     # The partial magnitudes over the box bound those at each point, so the box's scale bounds
     # every pointwise scale.
-    @testset "the Gram variance scale over the box bounds the pointwise scale — $name" for
+    @testset "the sign-averaged Gram cover over the box bounds the pointwise one — $name" for
         (name, r, lo, hi) in vector_programs
         X = interval.(lo, hi)
         t, outidxs = tape_function(r, X)
@@ -194,18 +194,18 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         @test ok
     end
 
-    # The squared channel over the box bounds the pointwise one, so the variance pair's squares,
-    # which cover the box's `Ũ⁽²⁾`, cover every pointwise `Ũ⁽²⁾` too.
-    @testset "the variance pair over the box — $name" for (name, r, lo, hi) in vector_programs
+    # The squared channel over the box bounds the pointwise one, so the sign-averaged pair's
+    # squares, which cover the box's `Ũ⁽²⁾`, cover every pointwise `Ũ⁽²⁾` too.
+    @testset "the sign-averaged pair over the box — $name" for (name, r, lo, hi) in vector_programs
         t, outidxs = tape_function(r, interval.(lo, hi))
-        U2 = DerivativeCovers.variance_surrogate(t, outidxs)
+        U2 = DerivativeCovers.squared_surrogate(t, outidxs)
         @test U2 isa Matrix{Float64}
         for kw in ((;), (; rounds = nothing), (; start = :equal))
-            v = balance_cover(t, outidxs; merge = VarianceMerge(), check = true, kw...)
+            v = balance_cover(t, outidxs; merge = SignAveragedMerge(), check = true, kw...)
             @test v.a isa Vector{Float64} && v.b isa Vector{Float64}
             ok = true
             for x in samples(Xoshiro(47), lo, hi)
-                U2x = DerivativeCovers.variance_surrogate(tape_function(r, x)...)
+                U2x = DerivativeCovers.squared_surrogate(tape_function(r, x)...)
                 ok &= all(U2x .<= U2 .* slack) && all(U2x .<= (v.a .* v.b') .^ 2 .* slack)
             end
             @test ok

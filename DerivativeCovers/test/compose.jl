@@ -106,7 +106,7 @@
         @test all(abs.(H) .<= res.B .* GATE .+ eps())
         @test nnodes(t) < nnodes(ttr)               # the call is recorded compressed
 
-        # The variance channel runs through the declared node and shares the hard channel.
+        # The squared channel runs through the declared node and shares the hard channel.
         vres = cover_hessian(t, o)
         @test vres.h_sum ≈ res.h_sum rtol = 1.0e-12
         @test all(severity(vres) .>= 1 - 1.0e-12)

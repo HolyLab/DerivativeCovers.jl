@@ -8,9 +8,9 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
     nls_partition, adjoints, sensitivities, intermediate_gradients, abs_reverse, abs_forward,
-    local_covers, merge_atoms, balanced_split, variance_seeds, dependency_sweep,
+    local_covers, merge_atoms, balanced_split, squared_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
-    MergeRule, SumMerge, QuadMerge, MaxMerge, VarianceMerge, variance_surrogate,
+    MergeRule, SumMerge, QuadMerge, MaxMerge, SignAveragedMerge, squared_surrogate,
     Curvature, NoCurvature, UnaryCurvature, BinaryCurvature, DenseCurvature
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
@@ -31,7 +31,7 @@ include("programs.jl")
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1.0e-10
 
-# Per-coordinate ratio of a cover's sum and variance channels: 1 where a single contribution
+# Per-coordinate ratio of a cover's sum and squared channels: 1 where a single contribution
 # reaches a coordinate, growing with the overlap of the contributions it sums. Both channels vanish
 # together, and such a coordinate gets 1.
 severity(c) = map((s, v) -> (r = float(s) / float(v); isnan(r) ? one(r) : r), c.h_sum, c.h_var)
@@ -57,13 +57,13 @@ end
 function staged_channels(t, outidx)
     n = t.ninputs
     rhos, theta = local_covers(t, adjoints(t, outidx))
-    abar, qbar = dependency_sweep(t, theta, variance_seeds(t, rhos))
+    abar, qbar = dependency_sweep(t, theta, squared_seeds(t, rhos))
     return DerivativeCovers.plainvalue.(abar[1:n]), sqrt.(qbar[1:n])
 end
 
 # `U2[k, j]` sums, over the paths from input `j` to output `k`, the squared path product: the
-# squared channel behind `gramvariance` and the variance pair. The dense forward recurrence over
-# the tape builds it for comparison with the sweeps.
+# squared channel behind `gramvariance` and the sign-averaged pair. The dense forward recurrence
+# over the tape builds it for comparison with the sweeps.
 function squared_path_sums(t, outidxs)
     N, n = nnodes(t), t.ninputs
     U2 = zeros(N, n)
@@ -179,8 +179,8 @@ include("maxpath.jl")
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
-            :variance_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :VarianceMerge, :variance_surrogate,
+            :squared_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
+            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :SignAveragedMerge, :squared_surrogate,
             :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
         )
         for sym in private
@@ -1115,7 +1115,7 @@ include("maxpath.jl")
         end
     end
 
-    # Independent reference for the variance channel: propagate the squared partials forward from
+    # Independent reference for the squared channel: propagate the squared partials forward from
     # each input, so `u2[k][a]` is the sum over paths from input `a` to node `k` of the squared
     # partials along the path. Contracting with the squared seeds gives the channel's value.
     function squared_sensitivities(t)
@@ -1130,7 +1130,7 @@ include("maxpath.jl")
         return u2
     end
 
-    @testset "variance channel — $name" for (name, f, x0) in PROBLEMS
+    @testset "squared channel — $name" for (name, f, x0) in PROBLEMS
         t, outidx = tape_function(f, x0)
         res = cover_hessian(WithDiagnostics(), t, outidx)
         vc = cover_hessian(t, outidx)
@@ -1147,13 +1147,13 @@ include("maxpath.jl")
         @test all(isfinite, severity(vc))
 
         rhos, _ = local_covers(t, adjoints(t, outidx))
-        theta2 = variance_seeds(t, rhos)
+        theta2 = squared_seeds(t, rhos)
         u2 = squared_sensitivities(t)
         ref = [sqrt(sum(theta2[j] * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
         @test vc.h_var ≈ ref rtol = 1.0e-12
     end
 
-    @testset "variance channel is exact on tree-structured graphs" begin
+    @testset "squared channel is exact on tree-structured graphs" begin
         # Each input reaches each node along a single path, and no node has two parents sharing an
         # input, so there is no covariance to drop: the estimate attains the quadrature merge.
         for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
@@ -1165,7 +1165,7 @@ include("maxpath.jl")
         @test cover_hessian(quad_factored(WQ), XQ).h_var ≈ abs.(WQ)
     end
 
-    @testset "variance channel underestimates where paths reconverge" begin
+    @testset "squared channel underestimates where paths reconverge" begin
         # The entrywise quadratic routes each input through n nonlinear nodes whose contributions
         # overlap — exactly the covariances the independence assumption drops.
         f, x0 = quad_entrywise(AQ), XQ
@@ -1174,7 +1174,7 @@ include("maxpath.jl")
 
         # The estimate is not a cover. The diamond makes that concrete: its quadrature merge
         # attains the minimal cover [3, 1], so any undershoot loses the guarantee. x₁ reaches the
-        # squaring node along two paths of strength 2 and 1, which the variance channel combines
+        # squaring node along two paths of strength 2 and 1, which the squared channel combines
         # in quadrature as sqrt(5) instead of summing to 3.
         H = ForwardDiff.hessian(reconvergent_diamond, [0.4, -0.9])
         res = cover_hessian(WithDiagnostics(), reconvergent_diamond, [0.4, -0.9])
@@ -1186,7 +1186,7 @@ include("maxpath.jl")
         @test max_coverage_ratio(vc.h_var, H) ≈ 9 / 5     # the (1,1) entry is no longer covered
     end
 
-    @testset "variance channel counts each parent slot as its own path" begin
+    @testset "squared channel counts each parent slot as its own path" begin
         # `x*x` seeds two slots that share a sign in the program; the channel squares them apart.
         vc = cover_hessian(x -> x[1] * x[1], [3.0])
         @test vc.h_sum ≈ [2.0]
@@ -1215,7 +1215,7 @@ include("maxpath.jl")
             vc = cover_hessian(f, x0)
 
             # Rescaling the inputs puts a factor 1/d[a] on each input edge, whose square the
-            # variance channel picks up; the severity, a ratio of the two channels, is invariant.
+            # squared channel picks up; the severity, a ratio of the two channels, is invariant.
             vcd = cover_hessian(xt -> f(xt ./ d), d .* x0)
             @test vcd.h_var ≈ vc.h_var ./ d rtol = 1.0e-12
             @test severity(vcd) ≈ severity(vc) rtol = 1.0e-12
@@ -1233,11 +1233,11 @@ include("maxpath.jl")
         N = nnodes(t)
         theta = Float64[k == outidx ? 1.0 : 0.0 for k in 1:N]
 
-        # A zero variance seed leaves the hard channel exactly the single-channel sweep.
+        # A zero squared seed leaves the hard channel exactly the single-channel sweep.
         abar, vbar = dependency_sweep(t, theta, zeros(N))
         @test abar ≈ abs_reverse(t, theta)
         @test all(iszero, vbar)
-        # Seeding only the variance channel squares the coefficients along the way.
+        # Seeding only the squared channel squares the coefficients along the way.
         _, vbar = dependency_sweep(t, zeros(N), theta)
         @test vbar[1] ≈ (t.ds[outidx][1] * t.ds[outidx - 1][1])^2
 
@@ -1355,7 +1355,7 @@ include("maxpath.jl")
         [(p.name, p.f, p.x0) for p in (mlp((4, 6, 5, 2); batch = 3),)],
         [("tree", tree_program, TREE_X), ("diamond", reconvergent_diamond, [0.4, -0.9])],
     )
-    @testset "fused variance channel matches the staged form — $name" for (name, f, x0) in FUSED_CORPUS
+    @testset "fused squared channel matches the staged form — $name" for (name, f, x0) in FUSED_CORPUS
         t, outidx = tape_function(f, x0)
         c = cover_hessian(t, outidx)
         h_sum, h_var = staged_channels(t, outidx)
