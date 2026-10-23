@@ -1,7 +1,7 @@
 name = "DerivativeCoverProblems"
 uuid = "37db61e4-0844-41b4-bf47-3d76f271524d"
 authors = ["Tim Holy <tim.holy@gmail.com> and contributors"]
-version = "1.0.0-DEV"
+version = "1.0.0"
 
 [deps]
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
