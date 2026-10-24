@@ -1,12 +1,5 @@
 using DerivativeCovers
-# Load the unregistered sibling package directly; test targets cannot declare path dependencies.
-include(
-    joinpath(
-        @__DIR__, "..", "..", "DerivativeCoverProblems", "src",
-        "DerivativeCoverProblems.jl"
-    )
-)
-using .DerivativeCoverProblems
+using DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
 using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,

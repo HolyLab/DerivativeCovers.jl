@@ -7,7 +7,8 @@ Jacobian pair is scored against the matrix it covers—either the surrogate `Ũ`
 the *excess* `max_kj (a_k*b_j)/A_kj`. On both scales, `1` is exact and larger values are looser.
 
 The environment is not registered. `[sources]` points it at the two packages in this repository;
-MatrixCovers lives outside the repository, so supply that working copy before the first run:
+MatrixCovers comes from the registry. To measure a working copy of MatrixCovers instead, develop
+it before the first run:
 
 ```julia
 using Pkg
@@ -16,11 +17,8 @@ Pkg.develop(PackageSpec(path=<path to MatrixCovers>))
 Pkg.instantiate()
 ```
 
-MatrixCovers is deliberately left out of `[sources]`. A URL there would let `instantiate` succeed
-on its own, but could silently measure a copy other than the one under development—defeating the
-purpose of these scripts. An unregistered-package error is preferable. Note that
-`[sources]` needs Julia 1.11 or later; on 1.10 it is ignored, and all three packages need the
-`develop`.
+`[sources]` needs Julia 1.11 or later; on 1.10 it is ignored, and the two packages of this
+repository also need `Pkg.develop`.
 
 ## `declaration_penalty.jl`
 

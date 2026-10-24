@@ -64,10 +64,12 @@ jobs:
           # 'min' reads the julia compat bound from this project; there is none at the root.
           project: ${{ matrix.package }}
       - uses: julia-actions/cache@v3
-      # MatrixCovers is not registered; clone it into the project's manifest.
-      - name: Develop MatrixCovers
+      # Test against this repository's DerivativeCoverProblems rather than the registered one. The
+      # source cannot be committed: an installed copy of DerivativeCovers lacks the sibling directory.
+      # Julia 1.10 ignores `[sources]`, so the 'min' job uses the registered DerivativeCoverProblems.
+      - name: Use the local DerivativeCoverProblems
         if: matrix.package == 'DerivativeCovers'
-        run: julia --project=DerivativeCovers -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
+        run: printf '\n[sources]\nDerivativeCoverProblems = {path = "../DerivativeCoverProblems"}\n' >> DerivativeCovers/Project.toml
       - uses: julia-actions/julia-buildpkg@v1
         with:
           project: ${{ matrix.package }}
@@ -96,13 +98,10 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       # The site documents both packages in this repository, which the docs environment's
-      # `[sources]` resolves. MatrixCovers is unregistered and lives elsewhere, so it is cloned
-      # into both manifests.
-      - name: Develop MatrixCovers
+      # `[sources]` resolves.
+      - name: Instantiate the docs environment
         working-directory: DerivativeCovers
-        run: |
-          julia --project=. -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
-          julia --project=docs -e 'using Pkg; Pkg.develop(url="https://github.com/HolyLab/MatrixCovers.jl")'
+        run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'
       - uses: julia-actions/julia-buildpkg@v1
         with:
           project: DerivativeCovers
