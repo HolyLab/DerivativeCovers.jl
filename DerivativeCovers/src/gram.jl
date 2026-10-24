@@ -185,8 +185,9 @@ end
     gramvariance(t::Tape, outidxs, w::AbstractVector) -> h
     gramvariance(t::Tape, outidxs, W::Diagonal) -> h
 
-Root-mean-square column scale of the Gram matrix `G = J'*W*J` of the Jacobian `J` of the tape
-outputs `outidxs`: a nonnegative vector `h`, one entry per input (`1:t.ninputs`), with
+Sign-averaged cover, the root-mean-square column scale, of the Gram matrix `G = J'*W*J` of the
+Jacobian `J` of the tape outputs `outidxs`: a nonnegative vector `h`, one entry per input
+(`1:t.ninputs`), with
 
     h[j] = sqrt(∑_k abs(w[k]) * Ũ⁽²⁾[k,j]),
 
@@ -195,17 +196,18 @@ local partial magnitudes along the path. `W` defaults to the identity, and a vec
 `W = Diagonal(w)`, indexed like `outidxs`; only `abs.(w)` enters, so an output with zero weight
 contributes nothing, and a repeated entry of `outidxs` adds its weights.
 
-Model each parent slot's local partial as carrying an independent, equiprobable sign. Distinct
-paths then contribute uncorrelated terms, so `E[J[k,j]^2] = Ũ⁽²⁾[k,j]` and
+Model each parent slot's local partial as carrying an independent, equiprobable sign (the *sign
+ensemble*). Distinct paths then contribute uncorrelated terms, so `E[J[k,j]^2] = Ũ⁽²⁾[k,j]` and
 `h[j]^2 = E[(J'*abs.(W)*J)[j,j]]`: `h` is the root-mean-square column norm of `sqrt.(abs.(W))*J`,
 the column (MINPACK) scaling of the Gram matrix in expectation. The entries of `J` for distinct
 outputs are uncorrelated too, so off-diagonal weights contribute nothing to this expectation; a
 general `W::AbstractMatrix` is an error. On an interval tape the magnitudes are the largest over
 the box, so `h` bounds the pointwise `h` at every point of the box.
 
-`h` is a scale, **not a cover**: where several paths reach one entry of `J` with the same sign it
-can fall below that column's norm. Per entry `Ũ⁽²⁾ <= Ũ.^2` (a sum of squares is at most the square of
-the sum), where `Ũ` is the absolute-sensitivity surrogate ([`jacobian_surrogate`](@ref)), so
+`h` covers the ensemble's mean magnitudes, `E[abs(G[i,j])] <= h[i]*h[j]`, **not `G`** itself:
+where several paths reach one entry of `J` with the same sign it can fall below that column's norm.
+Per entry `Ũ⁽²⁾ <= Ũ.^2` (a sum of squares is at most the square of the sum), where `Ũ` is the
+absolute-sensitivity surrogate ([`jacobian_surrogate`](@ref)), so
 
     h[j] <= h_gn[j] = sqrt(∑_k abs(w[k]) * Ũ[k,j]^2) <= gramcover(t, outidxs, w)[j].
 
@@ -214,7 +216,7 @@ each entry of `J` has a single path, `Ũ⁽²⁾ = Ũ.^2 = abs2.(J)` on a point 
 and the column norms of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`;
 rescaling the outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
 
-`h` comes from one reverse sweep with squared local partials (the variance channel of
+`h` comes from one reverse sweep with squared local partials (the squared channel of
 [`dependency_sweep`](@ref), without its linear channel) seeded `abs(w[k])` at output node
 `outidxs[k]`, so it costs `O(L)` for a tape of length `L`, where `h_gn` needs one channel per
 output. [`gramvariance!`](@ref) writes `h` into a supplied vector.
@@ -257,13 +259,13 @@ Write [`gramvariance`](@ref)'s scale of the Gram matrix of the tape outputs `out
 return it. `h` must be indexed like the inputs (`eachindex(h) == 1:t.ninputs`).
 """
 gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}) =
-    _output_variance_sweep!(h, t, outidxs, Iterators.repeated(1, length(outidxs)))
+    _output_squared_sweep!(h, t, outidxs, Iterators.repeated(1, length(outidxs)))
 
 function gramvariance!(
         h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector
     )
     _check_diagonal_weight(outidxs, w)
-    return _output_variance_sweep!(h, t, outidxs, (abs(w[k]) for k in eachindex(w)))
+    return _output_squared_sweep!(h, t, outidxs, (abs(w[k]) for k in eachindex(w)))
 end
 
 gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
@@ -278,7 +280,7 @@ gramvariance!(::AbstractVector, ::Tape, ::AbstractVector{<:Integer}, W::Abstract
 )
 
 # `h .= sqrt.(∑_k seeds[k] * Ũ⁽²⁾[k, :])` from a reverse sweep through squared partials.
-function _output_variance_sweep!(h::AbstractVector, t::Tape, outidxs, seeds)
+function _output_squared_sweep!(h::AbstractVector, t::Tape, outidxs, seeds)
     eachindex(h) == Base.OneTo(t.ninputs) || throw(
         DimensionMismatch(
             "h has indices $(eachindex(h)), expected $(Base.OneTo(t.ninputs)) (one per input)"

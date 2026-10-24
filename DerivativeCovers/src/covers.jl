@@ -21,18 +21,19 @@ The standard result returned by [`cover_hessian`](@ref). `T` is the element type
 
 - `grad::Vector{T}`: gradient of the scalar function at the evaluation point.
 - `h_sum::Vector{M}`: certified Hessian cover computed with the sum merge.
-- `h_var::Vector{M}`: the variance channel, the root-sum-square of the path contributions that
-  `h_sum` adds. This is a scale, **not a certified cover**.
+- `h_var::Vector{M}`: the sign-averaged cover, the root-sum-square of the path contributions that
+  `h_sum` adds. It covers the mean magnitude of the sign ensemble described below, **not the
+  Hessian**.
 
 `h_sum[i]` adds one contribution per pair of a seeded parent slot and a path from that slot to
 input `i`: the slot's seed times the product of the absolute first partials along the path.
 `h_var[i]^2` sums the squares of the same contributions. That is the expected square of their sum
 when each parent slot carries an independent, equiprobable sign, on its first partial and on its
-seed — the model [`gramvariance`](@ref) uses. The estimates satisfy `h_var <= h_quad <= h_sum`
-coordinatewise, with `h_quad` the quadrature merge of [`HessianDiagnostics`](@ref). A coordinate
-reached by a single contribution has `h_sum == h_var`; one built by summing many overlapping
-contributions has `h_sum` grow like their sum and `h_var` like their root-sum-square, so the ratio
-`h_sum ./ h_var` grows with the effective overlap.
+seed: the *sign ensemble*, the model [`gramvariance`](@ref) uses. The estimates satisfy
+`h_var <= h_quad <= h_sum` coordinatewise, with `h_quad` the quadrature merge of
+[`HessianDiagnostics`](@ref). A coordinate reached by a single contribution has `h_sum == h_var`;
+one built by summing many overlapping contributions has `h_sum` grow like their sum and `h_var`
+like their root-sum-square, so the ratio `h_sum ./ h_var` grows with the effective overlap.
 
 A variable that enters one elemental through two slots is two paths whose contributions combine
 in quadrature, although in the program they share a sign: `x[1] * x[1]` seeds each of its two
@@ -942,7 +943,7 @@ _sqslot(d, k, i, p) = magnitude(d)^2
     CoverOnly()
 
 Return only the covers a sweep-tier computation yields: the gradient, sum-merge cover, and
-variance channel from [`cover_hessian`](@ref) at `O(L)`, or the gradient, two covers, and two
+sign-averaged cover from [`cover_hessian`](@ref) at `O(L)`, or the gradient, two covers, and two
 scales from [`cover_nls`](@ref) at `O(G * L)` for `G` residual channels, `O(L)` by default. This is
 the default mode of both.
 """
@@ -970,8 +971,8 @@ Compute a certified rank-1 cover of a scalar function's Hessian.
 
 Pass either a tape and scalar output node, or a function and evaluation point. The default
 [`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient, the
-sum-merge cover, and the uncertified variance channel. [`WithDiagnostics`](@ref) additionally computes an explicit elementwise bound
-and a tighter quadrature cover.
+sum-merge cover, and the sign-averaged cover. [`WithDiagnostics`](@ref) additionally computes an
+explicit elementwise bound and a tighter quadrature cover.
 
 The `scales` keyword declares the input scales the split falls back on where a block's parent
 values carry none, and `ratio` the threshold at which it does so; see [`split_block`](@ref) and
@@ -1005,12 +1006,12 @@ intervals, raises an error, as does an elemental evaluated outside its domain so
 # `CoverOnly()`
 
 This mode takes one forward pass and one reverse sweep, or `O(L)` time and memory. The reverse
-sweep carries the ordinary adjoint, the absolute cover channel, and the variance channel
+sweep carries the ordinary adjoint, the absolute cover channel, and the squared channel
 together:
 
     vbar[p_i] += d_i * vbar[k]                              # signed channel: reverse-mode AD
     abar[p_i] += magnitude(d_i) * abar[k] + rho_k[i]        # absolute channel: the cover
-    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + rho_k[i]^2    # variance channel
+    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + rho_k[i]^2    # squared channel: h_var^2
 
 with `rho_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
@@ -1020,8 +1021,8 @@ roundoff.
 
 `abar` sums, over every path from a parent slot of a node to an input, the slot's seed times the
 product of the absolute first partials along the path. `qbar` sums the squares of the same path
-contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the variance channel of
-[`HessianCover`](@ref): a scale, not a cover.
+contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the sign-averaged cover of
+[`HessianCover`](@ref), which does not cover the Hessian.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
 
@@ -1116,7 +1117,7 @@ function cover_hessian(
     return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
 end
 
-# The reverse sweep of `CoverOnly`, returning the absolute and variance channels `(abar, qbar)`.
+# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, qbar)`.
 # With `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the
 # adjoints into it alongside the two channels. With `Val(false)`, `vbar` holds finished adjoints
 # and is only read. Both forms perform the same channel operations in the same order, so they

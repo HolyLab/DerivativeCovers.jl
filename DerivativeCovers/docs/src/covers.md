@@ -84,12 +84,13 @@ julia> round.(d.B; digits=4)
 
 Here `B` equals `abs.(H)`, because no cancellation occurs in this program.
 
-The default result also includes `h_var`, the root-sum-square of the same
-contributions that `h_sum` adds. It is the expected size of the sum if each
-contribution carried an independent random sign. **`h_var` is not a certified
-cover**: it can fall below the true scale where several contributions share a
-sign. It costs nothing extra, and the ratio `h_sum ./ h_var` indicates how
-much the contributions to each coordinate overlap.
+The default result also includes the sign-averaged cover `h_var`, the
+root-sum-square of the same contributions that `h_sum` adds. It is the
+root-mean-square size of the sum if each contribution carried an independent
+random sign. **`h_var` does not cover the Hessian**: it can fall below the true
+scale where several contributions share a sign. It costs nothing extra, and the
+ratio `h_sum ./ h_var` indicates how much the contributions to each coordinate
+overlap.
 
 ### Between the two merges
 
@@ -143,7 +144,7 @@ cost to ``O(GL)``; `ngroups=nothing` gives each of the `m` residuals its own
 channel, the tightest covers available. Summing residuals into one channel
 loosens `h_gn[j]` by at most ``\sqrt{n_j}``, where ``n_j`` is the number of
 residuals input `j` reaches. The
-uncertified scales `h_var` and `h_var_gn` are the analogs of `h_var` for
+sign-averaged covers `h_var` and `h_var_gn` are the analogs of `h_var` for
 [`cover_hessian`](@ref).
 
 ## Jacobian covers

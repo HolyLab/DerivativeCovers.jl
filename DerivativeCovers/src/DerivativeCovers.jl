@@ -70,7 +70,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :declare_submap, :submap
         )
     )
-    # A scale, not a cover, of a tape's Gram matrix.
+    # A sign-averaged cover of a tape's Gram matrix.
     eval(Expr(:public, :gramvariance, :gramvariance!))
 end
 
@@ -81,7 +81,7 @@ include("overloads.jl")
 include("covers.jl")
 include("forward.jl")
 include("merges.jl")
-include("variance.jl")
+include("squared.jl")
 include("maxpath.jl")
 include("spectral.jl")
 include("nls.jl")

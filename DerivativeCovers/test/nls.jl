@@ -134,7 +134,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
         @test lin.h ≈ lin.h_gn
     end
 
-    @testset "variance scale of the full Hessian" begin
+    @testset "sign-averaged cover of the full Hessian" begin
         rtol = 1.0e-13
         # Single paths and no residual curvature: all four channels agree.
         lin = cover_nls(

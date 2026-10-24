@@ -27,15 +27,17 @@
 # h_gn[j] ≤ c[j] ≤ √n_j h_gn[j], with n_j the number of residuals that input j reaches.
 #
 # Squaring the local partials instead sums squared path products, Ũ⁽²⁾ ≤ Ũ², and one O(L) sweep
-# seeded at the residuals gives h_var_gn[j] = √(∑ₖ Ũ⁽²⁾_kj) ≤ h_gn[j] (`gramvariance`), the expected
-# column norm of J under random local signs. It is a scale, not a cover.
+# seeded at the residuals gives h_var_gn[j] = √(∑ₖ Ũ⁽²⁾_kj) ≤ h_gn[j] (`gramvariance`), the
+# root-mean-square column norm of J under random local signs. It is a sign-averaged cover, which
+# does not cover JᵀJ.
 #
 # The same squared sweep carries a second channel, seeded with the squared atoms of the
-# residual-curvature nodes: its root c_var is the variance form of the residual-curvature channel c,
-# and c_var ≤ c because a sum of squares of nonnegative contributions is at most the square of their
-# sum. h_var = √(h_var_gn² + c_var²) is the variance scale of the full Hessian, with
-# h_var_gn ≤ h_var ≤ h. Because the variance channel is linear in its seeds and each square node's
-# atom is 1, h_var is `cover_hessian`'s `h_var` of the loss tape, split into its two sources.
+# residual-curvature nodes: its root c_var is the sign-averaged form of the residual-curvature
+# channel c, and c_var ≤ c because a sum of squares of nonnegative contributions is at most the
+# square of their sum. h_var = √(h_var_gn² + c_var²) is the sign-averaged cover of the full
+# Hessian, with h_var_gn ≤ h_var ≤ h. Because the squared channel is linear in its seeds and each
+# square node's atom is 1, h_var is `cover_hessian`'s `h_var` of the loss tape, split into its two
+# sources.
 
 """
     NLSCover{T, M}
@@ -47,13 +49,14 @@ the [`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the ty
 - `grad::Vector{T}`: gradient of the loss.
 - `h::Vector{M}`: certified cover of the full Hessian `JᵀJ + ∑ₖ rₖ ∇²rₖ`.
 - `h_gn::Vector{M}`: certified cover of the Gauss–Newton matrix `JᵀJ`; always `h_gn <= h`.
-- `h_var::Vector{M}`: root-mean-square column scale of the full Hessian under random local signs,
-  `h_var² = h_var_gn² + c_var²`, where `c_var` is the variance form of the residual-curvature
-  channel (one independent sign per parent slot, as for `h_var` of [`cover_hessian`](@ref)). This
-  is **not a certified cover**; always `h_var_gn <= h_var <= h`.
-- `h_var_gn::Vector{M}`: root-mean-square column scale of `JᵀJ` under random local signs,
-  [`gramvariance`](@ref) of the residuals. This is **not a certified cover**; always
-  `h_var_gn <= h_gn`.
+- `h_var::Vector{M}`: sign-averaged cover of the full Hessian, its root-mean-square column scale
+  under random local signs, `h_var² = h_var_gn² + c_var²`, where `c_var` is the sign-averaged form
+  of the residual-curvature channel (one independent sign per parent slot, as for `h_var` of
+  [`cover_hessian`](@ref)). It covers the sign ensemble's mean magnitude, **not the Hessian**;
+  always `h_var_gn <= h_var <= h`.
+- `h_var_gn::Vector{M}`: sign-averaged cover of `JᵀJ`, its root-mean-square column scale under
+  random local signs, [`gramvariance`](@ref) of the residuals. It covers the sign ensemble's mean
+  magnitude, **not `JᵀJ`**; always `h_var_gn <= h_gn`.
 - `m`: the number of residuals.
 
 Both covers are read off one grouped reverse sweep with `G` residual channels and one
@@ -174,9 +177,10 @@ Compute covers for the least-squares loss `f(x) = ½∑ₖ rₖ(x)²` at `x0`.
 
 `r` must map a vector of [`TVar`](@ref)s to a vector of residuals. The default
 [`CoverOnly`](@ref) mode returns an [`NLSCover`](@ref) holding a cover `h` of the full loss
-Hessian, a cover `h_gn` of the Gauss–Newton matrix `JᵀJ`, and the uncertified root-mean-square
-scales `h_var <= h` of the full Hessian and `h_var_gn <= h_gn` of `JᵀJ` (the latter from
-[`gramvariance`](@ref)). [`WithDiagnostics`](@ref) returns an
+Hessian, a cover `h_gn` of the Gauss–Newton matrix `JᵀJ`, and the sign-averaged covers
+`h_var <= h` of the full Hessian and `h_var_gn <= h_gn` of `JᵀJ` (the latter from
+[`gramvariance`](@ref)), which cover the mean magnitudes of a sign ensemble rather than these
+matrices. [`WithDiagnostics`](@ref) returns an
 [`NLSDiagnostics`](@ref), which adds the absolute-sensitivity surrogate `Utilde` for a further
 `O(m * L)`.
 
@@ -188,7 +192,7 @@ residuals and both covers cost `O(L)`. `ngroups=nothing` gives every residual a 
 (`G = m`), the tightest pair of covers available, at `O(m * L)`; its `h_gn[j]` is smaller than the
 default's by a factor of at most `sqrt(n_j)`, where `n_j` is the number of residuals input `j`
 reaches. That factor varies with `j`, so it changes the profile of the cover as well as its
-level. The two variance scales take one further `O(L)` sweep and do not depend on `G`.
+level. The two sign-averaged covers take one further `O(L)` sweep and do not depend on `G`.
 
 `scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and reach only the
 residual-curvature channel, and through it `h` and `h_var`: the residual channels carry unit
@@ -259,16 +263,16 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     T = eltype(t)
     h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n])
     h_gn = tomag(T, [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n])
-    Qbar = _reverse_sweep(_sqslot, t, _nls_variance_seeds(t, rhos, groups, gres + 1, residx))
+    Qbar = _reverse_sweep(_sqslot, t, _nls_squared_seeds(t, rhos, groups, gres + 1, residx))
     h_var_gn = tomag(T, [sqrt(Qbar[1, j]) for j in 1:n])
     h_var = tomag(T, [sqrt(Qbar[1, j] + Qbar[2, j]) for j in 1:n])
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var, h_var_gn)
 end
 
-# Seeds of the two variance channels. Row 1 places unit weight at each residual, as
-# `gramvariance` does; row 2 holds the `variance_seeds` of the nodes in the residual-curvature
+# Seeds of the two squared channels. Row 1 places unit weight at each residual, as
+# `gramvariance` does; row 2 holds the `squared_seeds` of the nodes in the residual-curvature
 # group `curv`.
-function _nls_variance_seeds(t::Tape{T}, rhos, groups, curv, residx) where {T}
+function _nls_squared_seeds(t::Tape{T}, rhos, groups, curv, residx) where {T}
     Theta2 = zeros(boundtype(T), 2, nnodes(t))
     for k in residx
         Theta2[1, k] += 1
