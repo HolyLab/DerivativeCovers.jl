@@ -9,10 +9,13 @@ upward. The covers they compute from such a tape are plain floating-point vector
 every point of the box, exactly rather than up to rounding, and the gradient is an interval vector
 enclosing the gradient over the box.
 
-Control flow in the program that the box does not decide, such as `x > 0` for an `x` whose
-interval contains zero, raises IntervalArithmetic's `InconclusiveBooleanOperation` while
-recording. `abs` of an interval containing zero is accepted only as the base of a constant power
-`p >= 2` (see [`DerivativeCovers.decided_sign`](@ref)). An elemental evaluated outside its domain
+Control flow that the box does not decide raises IntervalArithmetic's
+`InconclusiveBooleanOperation` while recording: a comparison the program makes on a variable's
+value, such as `value(x) > 0` for an `x` whose interval contains zero, or one an elemental makes,
+such as the positive-base check of `x^y`. (Comparisons of the variables themselves are not
+defined.) `abs` of an interval containing zero is accepted only as the base of a constant power
+`p >= 2` (see [`DerivativeCovers.decided_sign`](@ref)), and `atan(y, x)` refuses a box that touches
+its branch cut, `y = 0` with `x <= 0`. An elemental evaluated outside its domain
 on part of the box, such as `log` of an interval containing zero, does not raise in
 IntervalArithmetic; it returns an interval decorated `trv`. `check_values` looks for that decoration on every recorded value, first partial and unary
 or binary second partial, and throws a `DomainError` naming the first node that carries it.

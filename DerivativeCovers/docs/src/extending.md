@@ -14,8 +14,9 @@ only the supported operations:
 
 - arithmetic: `+`, `-`, `*`, `/`, `inv`, and `^` (with a constant or variable
   exponent);
-- functions: `abs`, `abs2`, `sqrt`, `exp`, `log`, `sin`, `cos`, `tan`, `tanh`,
-  and `atan`;
+- functions: `abs`, `abs2`, `sqrt`, `exp`, `log`, `sin`, `cos`, `sincos`,
+  `sinpi`, `cospi`, `sincospi`, `tan`, `tanh`, `atan`, and two-argument
+  `atan(y, x)` away from its branch cut (`y = 0`, `x ≤ 0`);
 - array operations: `sum`, `dot`, and matrix-vector and matrix-matrix
   products, which record one operation per entry of the result rather than a
   sequence of scalar operations.

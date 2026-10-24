@@ -65,6 +65,15 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test value(eltype(x)(2.75)) === 2.75f0
         @test convert(eltype(x), 3) isa TVar{Float32}
         @test eltype(x)[1.5, -2.5] isa Vector{TVar{Float32}}
+        # A variable is already floating-point, so `float` returns it, node and all.
+        @test float(x[1]) === x[1]
+        @test float(eltype(x)) === TVar{Float32}
+        fc = forward_cover(x032) do v
+            @test float(v[1]) === v[1]
+            @test float(eltype(v)) === eltype(v)
+            v[1] * v[2]
+        end
+        @test fc.grad isa Vector{Float32}
         # An accumulator seeded that way records on the tape it is combined with.
         acc = zero(eltype(x))
         for xi in x
