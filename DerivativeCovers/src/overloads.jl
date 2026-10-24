@@ -2,8 +2,8 @@
 # use. They are written against [`CoverVar`](@ref) and reach a backend only through the recorders
 # `unarynode`, `binarynode`, `dotnode` and `linearnode`, so one table serves every backend.
 
-import Base: +, -, *, /, ^, exp, log, sin, cos, tan, atan, tanh, sqrt, inv, abs, abs2, adjoint,
-    transpose
+import Base: +, -, *, /, ^, exp, log, sin, cos, sinpi, cospi, sincospi, tan, atan, tanh, sqrt, inv,
+    abs, abs2, adjoint, transpose
 import LinearAlgebra: dot, Adjoint, Transpose, AbstractTriangular
 # The in-place rules below extend LinearAlgebra's generic product entry points, which are reached
 # by qualification rather than by name.
@@ -98,6 +98,12 @@ Base.one(x::CoverVar) = one(typeof(x))
 Base.oneunit(x::CoverVar) = oneunit(typeof(x))
 Base.convert(::Type{V}, c::Real) where {V <: CoverVar} = constantvar(V, c)
 
+# The value a CoverVar carries is already floating-point (or a set of such values), so `float` is
+# the identity, as it is for a `Float64`. Base functions that float an untyped argument before
+# evaluating it, such as `sincos`, then reach the elementals below.
+Base.float(x::CoverVar) = x
+Base.float(::Type{V}) where {V <: CoverVar} = V
+
 # --- power with a constant exponent ---
 # Apply zero derivative factors before singular powers so x^0 and x^1 remain constant and linear
 # at x = 0. Genuine singularities remain singular.
@@ -153,6 +159,21 @@ function cos(x::CoverVar)
     v = value(x)
     return unarynode(x, cos(v), -sin(v), -cos(v))
 end
+# The factors of π multiply one at a time: an interval type encloses each product with the
+# irrational π, where `π^2` would be a rounded `Float64` that need not enclose π².
+function sinpi(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), sinpi(value(x)))
+    v = value(x)
+    s = sinpi(v)
+    return unarynode(x, s, π * cospi(v), -π * (π * s))
+end
+function cospi(x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), cospi(value(x)))
+    v = value(x)
+    c = cospi(v)
+    return unarynode(x, c, -π * sinpi(v), -π * (π * c))
+end
+sincospi(x::CoverVar) = (sinpi(x), cospi(x))
 function tan(x::CoverVar)
     isconstant(x) && return constantvar(typeof(x), tan(value(x)))
     t = tan(value(x))
@@ -164,6 +185,45 @@ function atan(x::CoverVar)
     v = value(x)
     d = 1 / (1 + v^2)
     return unarynode(x, atan(v), d, -2v * d^2)
+end
+
+# --- two-argument arctangent ---
+# `atan(y, x)` jumps by 2π across its branch cut, the ray `y = 0, x <= 0`, although its partials
+# are continuous there. Its operands must be off the cut: `x` positive or the sign of `y` decided,
+# in the sense of `decided_sign`. That refuses a point on the cut, where the value is a convention
+# on the sign of a zero `y`, and a set of operands that touches the cut.
+@noinline atan_cut(u, w) = throw(
+    DomainError(
+        (u, w),
+        "atan(y, x) is discontinuous across its branch cut, y = 0 with x <= 0; the operands " *
+            "(y, x) must be off it, with x > 0 or the sign of y decided"
+    )
+)
+check_atan_cut(u, w) = decided_sign(w) > 0 || !iszero(decided_sign(u)) || atan_cut(u, w)
+
+function atan(y::CoverVar, x::CoverVar)
+    eitherconstant(y, x) && return fold(typeof(y), atan(unfold(y), unfold(x)))
+    u, w = value(y), value(x)
+    check_atan_cut(u, w)
+    r2 = u^2 + w^2
+    return binarynode(
+        y, x, atan(u, w), w / r2, -u / r2,
+        -2u * w / r2^2, (u^2 - w^2) / r2^2, 2u * w / r2^2
+    )
+end
+function atan(y::CoverVar, c::Real)
+    isconstant(y) && return constantvar(typeof(y), atan(value(y), c))
+    u = value(y)
+    check_atan_cut(u, c)
+    r2 = u^2 + c^2
+    return unarynode(y, atan(u, c), c / r2, -2u * c / r2^2)
+end
+function atan(c::Real, x::CoverVar)
+    isconstant(x) && return constantvar(typeof(x), atan(c, value(x)))
+    w = value(x)
+    check_atan_cut(c, w)
+    r2 = c^2 + w^2
+    return unarynode(x, atan(c, w), -c / r2, 2c * w / r2^2)
 end
 function tanh(x::CoverVar)
     isconstant(x) && return constantvar(typeof(x), tanh(value(x)))

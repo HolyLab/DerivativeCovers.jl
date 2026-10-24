@@ -42,13 +42,15 @@ hold exactly rather than up to rounding.
 Some operations are not defined over a box:
 
 - control flow that the box does not decide, such as a comparison of a
-  variable whose interval contains the comparison value, raises
-  IntervalArithmetic's `InconclusiveBooleanOperation`;
+  variable's [`value`](@ref) when its interval contains the comparison value,
+  raises IntervalArithmetic's `InconclusiveBooleanOperation`;
 - an operation evaluated outside its domain on part of the box, such as `log`
   of an interval containing zero, raises a `DomainError` that identifies the
   operation;
 - `abs` of an interval containing zero is accepted only as the base of a
   constant power `p ≥ 2`, since `abs` is not twice differentiable at zero;
+- `atan(y, x)` refuses a box that touches its branch cut, `y = 0` with
+  `x ≤ 0`, across which it is discontinuous;
 - functions that evaluate the program at a point, such as
   [`scaled_spectral_radius`](@ref) with a tape, reject a tape recorded over a
   box.

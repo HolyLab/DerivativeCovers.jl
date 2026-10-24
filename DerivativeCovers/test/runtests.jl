@@ -309,6 +309,24 @@ include("maxpath.jl")
             ("cos", x -> cos(x[1]), [0.6]),
             ("tan", x -> tan(x[1]), [0.6]),
             ("atan", x -> atan(x[1]), [0.7]),
+            ("sinpi", x -> sinpi(x[1]), [0.3]),
+            ("sinpi at an integer", x -> sinpi(x[1]), [1.0]),
+            ("cospi", x -> cospi(x[1]), [0.3]),
+            ("cospi at a half-integer", x -> cospi(x[1]), [0.5]),
+            # Base's `sincos` floats its argument, then evaluates `sin` and `cos`.
+            ("sincos, sine", x -> first(sincos(x[1])), [0.6]),
+            ("sincos, cosine", x -> last(sincos(x[1])), [0.6]),
+            ("sincospi, sine", x -> first(sincospi(x[1])), [0.3]),
+            ("sincospi, cosine", x -> last(sincospi(x[1])), [0.3]),
+            ("atan(y, x), first quadrant", x -> atan(x[1], x[2]), [1.0, 2.0]),
+            ("atan(y, x), second quadrant", x -> atan(x[1], x[2]), [1.0, -2.0]),
+            ("atan(y, x), third quadrant", x -> atan(x[1], x[2]), [-1.0, -2.0]),
+            ("atan(y, x), fourth quadrant", x -> atan(x[1], x[2]), [-1.0, 2.0]),
+            ("atan(y, x), positive x-axis", x -> atan(x[1], x[2]), [0.0, 2.0]),
+            ("atan(y, x), positive y-axis", x -> atan(x[1], x[2]), [1.5, 0.0]),
+            ("atan(y, x), negative y-axis", x -> atan(x[1], x[2]), [-1.5, 0.0]),
+            ("atan(y, constant)", x -> atan(x[1], -3.0), [0.7]),
+            ("atan(constant, x)", x -> atan(-2.0, x[1]), [-0.7]),
             ("tanh", x -> tanh(x[1]), [0.4]),
             ("sqrt", x -> sqrt(x[1]), [2.3]),
             ("inv", x -> inv(x[1]), [2.0]),
@@ -324,6 +342,51 @@ include("maxpath.jl")
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test res.grad ≈ ForwardDiff.gradient(f, x0)
         @test res.B ≈ abs.(ForwardDiff.hessian(f, x0))
+    end
+
+    @testset "two-argument atan" begin
+        # Off the branch cut, the forward propagation agrees with the tape.
+        for (f, x0) in (
+                (x -> atan(x[1], x[2]) * x[3], [-0.4, -1.3, 0.8]),
+                (x -> atan(x[1] * x[3], 2.0) + atan(1.5, x[2]), [0.6, -0.9, 1.1]),
+            )
+            @test cover_hessian(f, x0).grad ≈ ForwardDiff.gradient(f, x0)
+            @test forward_cover(f, x0).grad ≈ ForwardDiff.gradient(f, x0)
+        end
+        # Constants fold, whichever operand they are.
+        x0 = [0.4]
+        for f in (
+                x -> atan(one(eltype(x)), -one(eltype(x))) * x[1],
+                x -> atan(zero(eltype(x)) + 2, x[1]), x -> atan(x[1], zero(eltype(x)) + 2),
+            )
+            t, _ = tape_function(f, x0)
+            @test nnodes(t) == 2
+            @test cover_hessian(f, x0).grad ≈ ForwardDiff.gradient(f, x0)
+        end
+        # On the cut, at the origin, and with a constant on the cut, through each recorder.
+        for (f, x0) in (
+                (x -> atan(x[1], x[2]), [0.0, -1.0]), (x -> atan(x[1], x[2]), [-0.0, -1.0]),
+                (x -> atan(x[1], x[2]), [0.0, 0.0]), (x -> atan(x[1], -1.0), [0.0]),
+                (x -> atan(0.0, x[1]), [-1.0]), (x -> atan(x[1], 0.0), [0.0]),
+            )
+            @test_throws "branch cut" cover_hessian(f, x0)
+            @test_throws "branch cut" forward_cover(f, x0)
+        end
+    end
+
+    @testset "sinpi and cospi" begin
+        # Exact at integers and half-integers, as `sinpi` and `cospi` are on numbers.
+        t, _ = tape_function(x -> sinpi(x[1]) + cospi(x[2]), [1.0, 0.5])
+        @test t.vals[3] === 0.0 && t.vals[4] === 0.0
+        # Constants fold.
+        f = x -> (sinpi(one(eltype(x)) / 6) + cospi(one(eltype(x)) / 4)) * x[1]
+        t, _ = tape_function(f, [0.4])
+        @test nnodes(t) == 2
+        @test cover_hessian(f, [0.4]).grad ≈ [0.5 + sqrt(2) / 2]
+        g = x -> sinpi(x[1] * x[2]) * cospi(x[1])
+        x0 = [0.3, 1.7]
+        @test forward_cover(g, x0).grad ≈ ForwardDiff.gradient(g, x0)
+        @test cover_hessian(g, x0).grad ≈ ForwardDiff.gradient(g, x0)
     end
 
     @testset "identity elementals leave the tape unchanged" begin

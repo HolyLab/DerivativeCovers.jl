@@ -44,6 +44,17 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
                 abs(x[2] - 2) * x[1],
             [-0.3, 0.8], [0.2, 1.2],
         ),
+        (
+            # y changes sign on the box, but x > 0 keeps atan(y, x) off its branch cut.
+            "atan(y, x) and multiples of π",
+            x -> atan(x[1], x[2]) * sinpi(x[1]) + cospi(x[1] * x[2]) + prod(sincos(x[2])),
+            [-0.3, 0.5], [0.4, 0.9],
+        ),
+        (
+            # x < 0 throughout, and y > 0 keeps the box off the cut.
+            "atan(y, x) in the left half-plane", x -> atan(x[1], x[2]) * x[2] + atan(x[1], -2.0),
+            [0.2, -1.0], [0.5, -0.5],
+        ),
     )
 
     # Roundoff slack on the covering inequality, as in the Float64 tests.
@@ -363,6 +374,12 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         @test_throws "sign of its argument is not decided" cover_hessian(x -> abs(x[1]) + x[2], X)
         @test_throws "sign of its argument is not decided" forward_cover(x -> abs(x[1]) * x[2], X)
         @test_throws "unless p >= 2" cover_hessian(x -> abs(x[1])^1.5 * x[2], X)
+        # A box that straddles the branch cut of atan(y, x), or touches it at its endpoint.
+        Y = interval.([-0.1, -2.0], [0.1, -1.0])
+        @test_throws "branch cut" cover_hessian(x -> atan(x[1], x[2]), Y)
+        @test_throws "branch cut" forward_cover(x -> atan(x[1], x[2]), Y)
+        @test_throws "branch cut" cover_hessian(x -> atan(x[1], -1.0) * x[2], Y)
+        @test_throws "branch cut" cover_hessian(x -> atan(x[1], x[2]), interval.([-0.1, 0.0], [0.1, 1.0]))
         @test_throws "leaves the domain of an elemental" cover_hessian(x -> log(x[1]) + x[2], X)
         @test_throws "leaves the domain of an elemental" tape_function(x -> 1 / x[1] + x[2], X)
         # Defined on the whole box, but not differentiable at its lower edge.
