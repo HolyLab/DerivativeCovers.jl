@@ -11,6 +11,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     local_covers, merge_atoms, balanced_split, squared_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge, SignAveragedMerge, squared_surrogate,
+    quadrature_surrogate,
     Curvature, NoCurvature, UnaryCurvature, BinaryCurvature, DenseCurvature
 # This package adds `Tape` methods to some of these MatrixCovers functions but re-exports none.
 using MatrixCovers: support_components, gramcover, gramcover!, symcover, SupportComponents, ncomponents,
@@ -181,6 +182,7 @@ include("maxpath.jl")
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :squared_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :SignAveragedMerge, :squared_surrogate,
+            :quadrature_surrogate,
             :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
         )
         for sym in private

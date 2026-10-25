@@ -27,6 +27,18 @@ using DerivativeCovers: Upward, boundtype
         p = Upward(floatmin()) * Upward(0.3)
         @test exact(p) >= exact(floatmin()) * exact(0.3)
         @test exact(Upward(1.0e-300) * Upward(1.0e-300)) > 0
+        # `hypot` bounds the exact 2-norm within a few steps, through operands whose squares
+        # overflow or underflow, and steps above the larger operand however small the other.
+        for (a, b) in (
+                (3.0, 4.0), (1.0e-200, 1.0e-200), (1.0e300, 1.0e300), (1.0, 1.0e-200), (0.7, 2.0e-162),
+            )
+            h = hypot(Upward(a), Upward(b))
+            @test h isa Upward{Float64}
+            @test exact(h)^2 >= exact(a)^2 + exact(b)^2
+            @test h.x <= hypot(a, b) * (1 + 8 * eps())
+            @test h.x > max(a, b)
+        end
+        @test hypot(Upward(1.0e-200), Upward(1.0e-200)).x ≈ sqrt(2) * 1.0e-200
     end
 
     @testset "exact operations do not step" begin
@@ -38,6 +50,9 @@ using DerivativeCovers: Upward, boundtype
         @test Upward(0.0) / x === Upward(0.0)
         @test sqrt(Upward(0.0)) === Upward(0.0)
         @test sqrt(Upward(1.0)) === Upward(1.0)
+        @test sqrt(Upward(nextfloat(1.0))).x > 1
+        @test hypot(x, Upward(0.0)) === x
+        @test hypot(Upward(0.0), x) === x
         @test x^2 === x * x
     end
 

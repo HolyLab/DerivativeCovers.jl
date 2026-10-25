@@ -149,7 +149,9 @@ function abs_reverse(t::Tape, Theta::AbstractMatrix)
 end
 
 # Vector-mode reverse sweep with a pluggable per-slot weight, one channel per row of `Theta`.
-function _reverse_sweep(w::F, t::Tape, Theta::AbstractMatrix) where {F}
+# `acc` combines contributions as in the vector sweep.
+_reverse_sweep(w::F, t::Tape, Theta::AbstractMatrix) where {F} = _reverse_sweep(+, w, t, Theta)
+function _reverse_sweep(acc::A, w::F, t::Tape, Theta::AbstractMatrix) where {A, F}
     Abar = collect(float.(Theta))
     G = size(Abar, 1)
     for k in nnodes(t):-1:1
@@ -157,7 +159,7 @@ function _reverse_sweep(w::F, t::Tape, Theta::AbstractMatrix) where {F}
             a = w(t.ds[k][i], k, i, p)
             a == 0 && continue
             for g in 1:G
-                Abar[g, p] += a * Abar[g, k]
+                Abar[g, p] = acc(Abar[g, p], a * Abar[g, k])
             end
         end
     end
