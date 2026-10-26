@@ -724,7 +724,8 @@
     @testset "sign-averaged pair: the dense iteration on the squared channel — $name" for
         (name, r, x0) in PROGRAMS
         t, outidxs = tape_function(r, x0)
-        U2 = squared_surrogate(t, outidxs)
+        R, U2 = quadrature_surrogate(t, outidxs), squared_surrogate(t, outidxs)
+        @test U2 == R .^ 2
         @test U2 ≈ squared_path_sums(t, outidxs) rtol = 1.0e-14
         rt, ct = flowtargets(t, outidxs)
         li = liveinfo(t, outidxs)
@@ -735,7 +736,7 @@
             ad, bd = dense_signaveraged_pair(U2, a0, rt, ct, rounds)
             @test product_gap(U2, bal.a, bal.b, ad, bd) < 1.0e-12
             @test bal.iters == rounds
-            balm = balance_cover(U2; merge = vm, a0, targets = (rt, ct), rounds)
+            balm = balance_cover(R; merge = vm, a0, targets = (rt, ct), rounds)
             @test product_gap(U2, balm.a, balm.b, ad, bd) < 1.0e-12
             # The final b-step is the sign-averaged Gram cover for the weights `1/a²`.
             w = [ak > 0 ? 1 / ak^2 : 0.0 for ak in bal.a]
@@ -744,7 +745,13 @@
             S = [U2[k, j] > 0 ? U2[k, j] / (bal.a[k] * bal.b[j])^2 : 0.0 for k in axes(U2, 1), j in axes(U2, 2)]
             @test all(sum(S; dims = 1)[j] ≈ 1 for j in axes(U2, 2) if li.livecol[j])
             @test max_coverage_ratio(bal.a .^ 2, bal.b .^ 2, U2) <= GATE
+            @test max_coverage_ratio(bal.a, bal.b, R) <= GATE
         end
+        # A repeated output node contributes a row per occurrence, in quadrature as in the sum.
+        o2 = vcat(outidxs, outidxs[1])
+        bal2 = balance_cover(t, o2; merge = vm, rounds = 2, check = true)
+        w2 = [ak > 0 ? 1 / ak^2 : 0.0 for ak in bal2.a]
+        @test bal2.b ≈ DerivativeCovers.gramvariance(t, o2, w2) rtol = 1.0e-12
 
         # Run to convergence, the normalized iterate `(a, b ./ sqrt.(γ))` meets both targets.
         bal = balance_cover(t, outidxs; merge = vm, rounds = nothing, check = true)
@@ -757,7 +764,7 @@
         # The fixed point has unique products, whatever the start or call form.
         for other in (
                 balance_cover(t, outidxs; merge = vm, rounds = nothing, start = :equal),
-                balance_cover(U2; merge = vm, targets = (rt, ct), rounds = nothing),
+                balance_cover(R; merge = vm, targets = (rt, ct), rounds = nothing),
             )
             @test product_gap(U2, bal.a, bal.b, other.a, other.b) < 1.0e-8
         end
@@ -770,18 +777,15 @@
         U2 ≈ U .^ 2 || continue                      # some entry has several paths
         rt, ct = flowtargets(t, outidxs)
         # The sign-averaged pair's squares are the default pair of `Ũ.^2` started from the squared
-        # start.
-        # Both regauge their squared factors identically, so the agreement is entrywise.
+        # start. The two gauge their factors differently, so the agreement is on products.
         p0 = potential_start(t, outidxs)
         for rounds in (0, 1, 4, nothing)
             v = balance_cover(t, outidxs; merge = SignAveragedMerge(), rounds)
             d = balance_cover(U .^ 2; targets = (rt, ct), a0 = p0 .^ 2, rounds)
-            @test v.a .^ 2 ≈ d.a rtol = 1.0e-10
-            @test v.b .^ 2 ≈ d.b rtol = 1.0e-10
+            @test product_gap(U2, v.a .^ 2, v.b .^ 2, d.a, d.b) < 1.0e-10
             ve = balance_cover(t, outidxs; merge = SignAveragedMerge(), start = :equal, rounds)
             de = balance_cover(U .^ 2; targets = (rt, ct), start = :equal, rounds)
-            @test ve.a .^ 2 ≈ de.a rtol = 1.0e-10
-            @test ve.b .^ 2 ≈ de.b rtol = 1.0e-10
+            @test product_gap(U2, ve.a .^ 2, ve.b .^ 2, de.a, de.b) < 1.0e-10
         end
     end
 
@@ -794,47 +798,62 @@
             v2 = balance_cover(t2, outidxs; merge = SignAveragedMerge(), rounds, cgiters)
             @test product_drift(t, outidxs, s, v.a, v.b, v2.a, v2.b) < 1.0e-10
         end
-        # The matrix form's covariant start transforms with `Ũ⁽²⁾ -> C² Ũ⁽²⁾ D⁻²`.
-        U2 = squared_surrogate(t, outidxs)
+        # The matrix form's covariant start transforms with `R -> C R D⁻¹`.
+        R = quadrature_surrogate(t, outidxs)
         c = 2.0 .^ rand(MersenneTwister(17), -10:10, length(outidxs))
         d = 2.0 .^ rand(MersenneTwister(19), -10:10, t.ninputs)
         for rounds in (0, 1, 4, nothing)
-            v = balance_cover(U2; merge = SignAveragedMerge(), rounds)
-            v2 = balance_cover(c .^ 2 .* U2 ./ (d .^ 2)'; merge = SignAveragedMerge(), rounds)
-            @test product_gap(U2, v.a .* c, v.b ./ d, v2.a, v2.b) < 1.0e-10
+            v = balance_cover(R; merge = SignAveragedMerge(), rounds)
+            v2 = balance_cover(c .* R ./ d'; merge = SignAveragedMerge(), rounds)
+            @test product_gap(R, v.a .* c, v.b ./ d, v2.a, v2.b) < 1.0e-10
         end
     end
 
-    @testset "sign-averaged pair: errors name the squared quantities" begin
-        # A path product of 1e-200 is representable; its square is not.
+    @testset "sign-averaged pair: range and errors" begin
+        # A path product of 1e-200 is representable; its square is not. The pair is computed on
+        # `R` and never squares anything, so it exists wherever the plain pair does.
         tu, ou = tape_function(xs -> [1.0e-100 * (1.0e-100 * xs[1]) + 0 * xs[2], xs[2]], [1.0, 1.0])
-        @test balance_cover(tu, ou).a[1] > 0
-        for kw in ((;), (; rounds = nothing))
-            @test_throws "squared input weight b[1]^2 is zero on an input that reaches an output" balance_cover(
-                tu, ou; merge = SignAveragedMerge(), kw...
+        @test quadrature_surrogate(tu, ou) == jacobian_surrogate(tu, ou)
+        @test all(iszero, squared_surrogate(tu, ou)[1, :])
+        for kw in ((;), (; rounds = nothing), (; arule = :geomean), (; start = :equal))
+            v = balance_cover(tu, ou; merge = SignAveragedMerge(), check = true, kw...)
+            @test all(>(0), v.a) && all(>(0), v.b)
+        end
+        # Underflow at the scale of the path products themselves is reported as for the plain
+        # pair, naming `R`.
+        tz, oz = tape_function(xs -> [(1.0e-200 * xs[1]) * 1.0e-200, xs[1] * xs[2]], [1.0, 1.0])
+        for kw in ((;), (; arule = :geomean))
+            @test_throws "surrogate entry underflowed to zero" balance_cover(tz, oz; kw...)
+            @test_throws "entry of the quadrature surrogate R underflowed to zero" balance_cover(
+                tz, oz; merge = SignAveragedMerge(), kw...
             )
         end
-        @test_throws "entry of the squared channel Ũ⁽²⁾ underflowed to zero" balance_cover(
-            tu, ou; merge = SignAveragedMerge(), arule = :geomean
+        @test_throws "output weight a[1] is 0.0 on an output that inputs reach; no input cover can cover its row" balance_cover(
+            tz, oz; start = :equal
         )
-        # The final factor check names the squared factors too.
+        @test_throws "output weight a[1] is 0.0 on an output that inputs reach; no input factor can bound R on its row" balance_cover(
+            tz, oz; merge = SignAveragedMerge(), start = :equal
+        )
+        # The factor check names the pair and what it bounds.
         tq, oq = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
         li = liveinfo(tq, oq)
         check! = DerivativeCovers._check_cover_factors
-        @test_throws "squared output weight a[1]^2 is 0.0" check!([0.0, 1.0], [1.0, 1.0], li; signaveraged = true)
-        @test_throws "squared input weight b[1]^2 is 0.0" check!([1.0, 1.0], [0.0, 1.0], li; signaveraged = true)
-        @test_throws "output weight a[1] is 0.0" check!([0.0, 1.0], [1.0, 1.0], li)
+        @test_throws "output weight a[1] is 0.0" check!([0.0, 1.0], [1.0, 1.0], li; signaveraged = true)
+        @test_throws "no input factor can bound R on its row" check!([0.0, 1.0], [1.0, 1.0], li; signaveraged = true)
+        @test_throws "input weight b[1] is 0.0" check!([1.0, 1.0], [0.0, 1.0], li; signaveraged = true)
+        @test_throws "no output factor can bound R on its column" check!([1.0, 1.0], [0.0, 1.0], li; signaveraged = true)
+        @test_throws "no input factor can cover its row" check!([0.0, 1.0], [1.0, 1.0], li)
     end
 
     @testset "sign-averaged pair: does not cover J" begin
         # Two paths reach J = 2x from x, each with partial x: Ũ = 2|x| but Ũ⁽²⁾ = 2x².
         t, outidxs = tape_function(xs -> [xs[1] * xs[1]], [3.0])
-        U, U2 = jacobian_surrogate(t, outidxs), squared_surrogate(t, outidxs)
-        @test U2[1, 1] ≈ 18 && U[1, 1] ≈ 6
+        U, R = jacobian_surrogate(t, outidxs), quadrature_surrogate(t, outidxs)
+        @test R[1, 1] ≈ sqrt(18) && U[1, 1] ≈ 6
         v = balance_cover(t, outidxs; merge = SignAveragedMerge(), rounds = nothing, check = true)
         @test v.a[1] * v.b[1] ≈ sqrt(18)
         @test max_coverage_ratio(v.a, v.b, U) ≈ 6 / sqrt(18)          # > 1: not a cover of Ũ
-        @test max_coverage_ratio(v.a .^ 2, v.b .^ 2, U2) <= GATE
+        @test max_coverage_ratio(v.a, v.b, R) <= GATE
 
         # Dead rows and columns keep zero weights.
         rd = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
@@ -845,17 +864,46 @@
             @test all(>(0), vd.a[[1, 3]]) && all(>(0), vd.b[1:2])
         end
 
-        # The geometric-mean fit reads the same `Ũ⁽²⁾` on a tape as in the matrix form.
+        # The geometric-mean fit reads the same `R` on a tape as in the matrix form.
         tt, ot = tape_function(triangular, [0.6, -0.4, 0.9])
         vg = balance_cover(tt, ot; merge = SignAveragedMerge(), arule = :geomean, rounds = nothing)
-        vgm = balance_cover(squared_surrogate(tt, ot); merge = SignAveragedMerge(), arule = :geomean, rounds = nothing)
+        vgm = balance_cover(quadrature_surrogate(tt, ot); merge = SignAveragedMerge(), arule = :geomean, rounds = nothing)
         @test vg.a ≈ vgm.a rtol = 1.0e-10
         @test vg.b ≈ vgm.b rtol = 1.0e-10
 
-        # A start whose square leaves the floating-point range is refused by name.
+        # A start whose square would leave the floating-point range is no obstacle: nothing is
+        # squared.
         tw, ow = tape_function(xs -> [1.0e300 * xs[1], 1.0e-300 * xs[2], 1.0e-300 * xs[1] * xs[2]], [1.0, 1.0])
         @test all(>(0), balance_cover(tw, ow).a)
-        @test_throws "squared start is not representable" balance_cover(tw, ow; merge = SignAveragedMerge())
+        vw = balance_cover(tw, ow; merge = SignAveragedMerge(), check = true)
+        @test all(>(0), vw.a) && all(>(0), vw.b)
+    end
+
+    @testset "sign-averaged pair: entries whose squares leave the floating-point range" begin
+        # Brown's almost-linear residuals at `x = ½𝟙`: the last row of `J` is `0.5^(n-1)`,
+        # representable at every `n` here, while its square is subnormal from `n = 513` and zero
+        # from `n = 539`. The pair is computed on `R`, so it is accurate to rounding throughout.
+        brownal = xs -> begin
+            n, s = length(xs), sum(xs)
+            [k < n ? xs[k] + s - (n + 1) : prod(xs) - 1 for k in 1:n]
+        end
+        for n in (530, 600, 1000)
+            x0 = fill(0.5, n)
+            t, outidxs = tape_function(brownal, x0)
+            U, R = jacobian_surrogate(t, outidxs), quadrature_surrogate(t, outidxs)
+            @test all(≈(0.5^(n - 1)), R[n, :]) && R[n, :] == U[n, :]
+            @test n < 539 || all(iszero, squared_surrogate(t, outidxs)[n, :])
+            v = balance_cover(t, outidxs; merge = SignAveragedMerge(), check = true)
+            @test all(x -> isfinite(x) && x > 0, v.a) && all(x -> isfinite(x) && x > 0, v.b)
+            # Scaling the last residual by `2^(n-1)` puts its row of `J` at `1` exactly. The pair of
+            # the scaled program is that of the original with that row's products scaled, to
+            # roundoff.
+            scaled = xs -> (r = brownal(xs); r[n] *= 2.0^(n - 1); r)
+            ts, os = tape_function(scaled, x0)
+            vs = balance_cover(ts, os; merge = SignAveragedMerge(), check = true)
+            c = [k < n ? 1.0 : 2.0^(n - 1) for k in 1:n]
+            @test product_gap(U, v.a .* c, v.b, vs.a, vs.b) < 1.0e-12
+        end
     end
 
     # The targeted alternation run to convergence on a tape, relaxed or plain.
@@ -866,14 +914,12 @@
         li = liveinfo(t, outidxs)
         rt, ct = flowtargets(t, outidxs)
         a = DC._balance_start(a0, length(outidxs), Float64, li.liverow)
-        signaveraged && (a = DC._squared_start(a))
-        slot = signaveraged ? DC._sqslot : DC._absslot
-        bnum = a -> DC._sum_merge_b(t, outidxs, a, li, slot)
-        anum = b -> DC._marginal_weights(t, outidxs, b, li, slot)
+        signaveraged && ((rt, ct) = DC._root_targets((rt, ct)))
+        bnum = a -> DC._sum_merge_b(t, outidxs, a, li, signaveraged)
+        anum = b -> DC._marginal_weights(t, outidxs, b, li, signaveraged)
         rtol = eps()^(2 // 3)
         a, iters, delta = DC._balance_targets(anum, bnum, a, rt, ct, maxiter, rtol, nothing; relax)
         b = bnum(a)
-        signaveraged && (a = sqrt.(a); b = sqrt.(b))
         return (; a, b, iters, delta)
     end
     # Rows `w1[i] x[i] + w2[i] x[i+1]`, cyclically: one long cycle through the support, on which
@@ -893,8 +939,8 @@
         @test bits(bal.a) == [0x3ff5c5ca9ce627c4, 0x3ff144945e0db3d3, 0x3ffffa796368de49]
         @test bits(bal.b) == [0x3ff938539fd17928, 0x3ff7279b5b8a300f, 0x3ff82cf03b1c691e]
         bal = balance_cover(t, outidxs; merge = SignAveragedMerge())
-        @test bits(bal.a) == [0x3fedb3afda9817ac, 0x3fe709649b7d5f97, 0x3ff8a09c9c2afcce]
-        @test bits(bal.b) == [0x3ff607bf2e50884b, 0x3ff34bb64da045d9, 0x3ff67a9eec38e833]
+        @test bits(bal.a) == [0x3ff5009e5be4a936, 0x3ff04a162a19ed54, 0x40016a08a2518677]
+        @test bits(bal.b) == [0x3fef27ce711e5cb0, 0x3feb49ced108fc97, 0x3fefca4344ea4b7e]
         bal = balance_cover(t, outidxs; rounds = 7, targets = :support)
         @test bits(bal.a) == [0x3fe555a348fae680, 0x3fe1583015fb5304, 0x3ff07fb66d5d58b7]
         @test bits(bal.b) == [0x4008d6fdff7ef330, 0x400709a8e554d395, 0x40084701d0030474]
@@ -1041,6 +1087,7 @@
             @test vw.a == vwref.a && vw.b == vwref.b
             @test axes(vw.a) == (Base.OneTo(3),)
             @test squared_surrogate(t, idx) == squared_surrogate(t, outidxs)
+            @test quadrature_surrogate(t, idx) == quadrature_surrogate(t, outidxs)
         end
 
         @test_throws "offset arrays are not supported" balance_cover(

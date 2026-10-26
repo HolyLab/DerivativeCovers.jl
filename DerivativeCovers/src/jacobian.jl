@@ -27,24 +27,39 @@ function jacobian_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) wher
 end
 
 """
-    squared_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> U2
+    quadrature_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> R
 
-The `m × n` squared-channel counterpart of [`jacobian_surrogate`](@ref): `U2[k, j]` sums, over the
-paths from input `j` to output `k`, the squared product of the local partial magnitudes along the
-path. A sum of squares is at most the square of the sum, so `U2 <= Utilde.^2` entrywise, with
-equality where an entry has a single path. If each parent slot's local partial carries an
-independent, equiprobable sign, `U2[k, j] = E[J_kj^2]`. This is the matrix
+The `m × n` quadrature counterpart of [`jacobian_surrogate`](@ref): `R[k, j]` is the 2-norm, over
+the paths from input `j` to output `k`, of the product of the local partial magnitudes along each
+path, `R_kj = sqrt(∑_paths ∏ abs(d)^2)`. A 2-norm is at most the 1-norm, so `R <= Utilde`
+entrywise, with equality where an entry has a single path. If each parent slot's local partial
+carries an independent, equiprobable sign, `R[k, j]^2 = E[J_kj^2]`. This is the matrix
 [`balance_cover`](@ref) takes with `merge = SignAveragedMerge()`. Formed by one `m`-channel reverse
-sweep through squared partials, `O(m*L)`.
+sweep, `O(m*L)`, that accumulates with `hypot`. No path product is squared, so an entry is accurate
+to rounding wherever the path products themselves are representable, as for `Utilde`.
 """
-function squared_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
+function quadrature_surrogate(t::Tape{T}, outidxs::AbstractVector{<:Integer}) where {T}
     m, N = length(outidxs), nnodes(t)
     Theta = zeros(magtype(T), m, N)
     for (k, o) in enumerate(outidxs)
         Theta[k, o] += 1
     end
-    return _reverse_sweep(_sqslot, t, Theta)[:, 1:t.ninputs]
+    return _reverse_sweep(hypot, _absslot, t, Theta)[:, 1:t.ninputs]
 end
+
+"""
+    squared_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) -> U2
+
+The squared channel `U2 = R.^2` of [`quadrature_surrogate`](@ref): `U2[k, j]` sums, over the paths
+from input `j` to output `k`, the squared product of the local partial magnitudes along the path,
+so `U2 <= Utilde.^2` entrywise and, under independent equiprobable signs, `U2[k, j] = E[J_kj^2]`.
+Its range is that of a squared Jacobian entry: `U2[k, j]` loses precision once `R[k, j]` falls
+below `sqrt(floatmin(T))`, and underflows to zero below about the square root of the smallest
+subnormal, while `R` itself stays accurate to rounding. The sign-averaged pair is computed on `R`;
+this matrix is for inspection.
+"""
+squared_surrogate(t::Tape, outidxs::AbstractVector{<:Integer}) =
+    quadrature_surrogate(t, outidxs) .^ 2
 
 """
     JacobianCover{T}
@@ -327,39 +342,29 @@ end
 # A returned pair must cover every structurally live entry, so neither factor may vanish there.
 # Only underflow can put a zero on a live row or column, and a cover with one is not a cover, so
 # this runs on every path rather than only under `check`. `O(m + n)`. With `signaveraged = true`,
-# `a` and `b` are the sign-averaged pair's squared factors, which bound `Ũ⁽²⁾` rather than cover
-# `Ũ`.
+# `a` and `b` are the sign-averaged pair, which bounds `R` rather than covers `Ũ`.
 function _check_cover_factors(a, b, li::LiveInfo; signaveraged::Bool = false)
-    aname, bname = _factor_names(signaveraged)
     rowtail, coltail = signaveraged ?
-        (
-            "no squared input factor can bound Ũ⁽²⁾ on its row",
-            "no squared output factor can bound Ũ⁽²⁾ on its column",
-        ) :
+        ("no input factor can bound R on its row", "no output factor can bound R on its column") :
         ("no input factor can cover its row", "no output factor can cover its column")
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !li.liverow[k])) || throw(
             ArgumentError(
-                "$(aname(k)) is $(a[k]) on an output that inputs reach: the products along " *
-                    "those paths underflowed, so $rowtail"
+                "output weight a[$k] is $(a[k]) on an output that inputs reach: the products " *
+                    "along those paths underflowed, so $rowtail"
             )
         )
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !li.livecol[j])) || throw(
             ArgumentError(
-                "$(bname(j)) is $(b[j]) on an input that reaches an output: the products along " *
-                    "those paths underflowed, so $coltail"
+                "input weight b[$j] is $(b[j]) on an input that reaches an output: the products " *
+                    "along those paths underflowed, so $coltail"
             )
         )
     end
     return nothing
 end
-
-# How error messages name the factors: the sign-averaged pair reports its squared factors.
-_factor_names(signaveraged::Bool) = signaveraged ?
-    (k -> "squared output weight a[$k]^2", j -> "squared input weight b[$j]^2") :
-    (k -> "output weight a[$k]", j -> "input weight b[$j]")
 
 # Output weights are finite and strictly positive wherever an input reaches the output. A zero
 # weight is admitted only on a dead output, where it covers that row exactly; anything else —
@@ -384,7 +389,7 @@ end
 # structurally dead entry to be covered vacuously. Entrywise, from `cld(n, 64)` integer passes and
 # `m * cld(n, 64)` words — small beside the `m * n` surrogate already in hand.
 function _check_surrogate_support(t::Tape, outidxs, Utilde, li::LiveInfo; signaveraged::Bool = false)
-    entry = signaveraged ? "entry of the squared channel Ũ⁽²⁾" : "surrogate entry"
+    entry = signaveraged ? "entry of the quadrature surrogate R" : "surrogate entry"
     P = _structural_pattern(t, outidxs, li)
     n = t.ninputs
     for j in 1:n, k in 1:length(outidxs)
@@ -417,17 +422,19 @@ function abs_forward(t::Tape, theta::AbstractVector)
     return _forward_sweep(_absslot, t, theta)
 end
 
-# Forward sweep with a pluggable per-slot weight, the transpose of [`_reverse_sweep`](@ref).
-function _forward_sweep(w::F, t::Tape, theta::AbstractVector) where {F}
+# Forward sweep with a pluggable per-slot weight and accumulation `acc`, the transpose of
+# [`_reverse_sweep`](@ref).
+_forward_sweep(w::F, t::Tape, theta::AbstractVector) where {F} = _forward_sweep(+, w, t, theta)
+function _forward_sweep(acc::A, w::F, t::Tape, theta::AbstractVector) where {A, F}
     s = collect(float.(theta))
     for k in (t.ninputs + 1):nnodes(t)
-        acc = s[k]
+        sk = s[k]
         for (i, p) in enumerate(t.parents[k])
             a = w(t.ds[k][i], k, i, p)
             a == 0 && continue
-            acc += a * s[p]
+            sk = acc(sk, a * s[p])
         end
-        s[k] = acc
+        s[k] = sk
     end
     return s
 end
@@ -455,11 +462,12 @@ marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector)
     _marginal_weights(t, outidxs, b, _live_info(t, outidxs))
 
 # The balancing loop already holds the structural liveness, so it passes it in rather than paying
-# for a reachability sweep in every round that has a zero `b`. `slot = _sqslot` gives the
-# squared-channel marginal `∑_j Ũ⁽²⁾_kj / b_j` instead.
+# for a reachability sweep in every round that has a zero `b`. `signaveraged = true` gives the
+# quadrature marginal `sqrt(∑_j R_kj² / b_j²)` instead, from the same seeds accumulated with
+# `hypot`.
 function _marginal_weights(
-        t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo, slot::F = _absslot
-    ) where {T, F}
+        t::Tape{T}, outidxs, b::AbstractVector, li::LiveInfo, signaveraged::Bool = false
+    ) where {T}
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
@@ -471,15 +479,15 @@ function _marginal_weights(
             # A zero input weight is valid only for an input that reaches no output.
             li.livecol[j] && throw(
                 ArgumentError(
-                    slot === _sqslot ?
-                        "squared input weight b[$j]^2 is zero on an input that reaches an output; " *
-                        "no squared output weighting can bound Ũ⁽²⁾ on its column" :
+                    signaveraged ?
+                        "input weight b[$j] is zero on an input that reaches an output; " *
+                        "no output weighting can bound R on its column" :
                         "b is zero on input $j, which reaches an output; no output weighting can cover it"
                 )
             )
         end
     end
-    s = _forward_sweep(slot, t, theta)
+    s = _forward_sweep(signaveraged ? hypot : +, _absslot, t, theta)
     # The balancing iteration indexes weights by output position.
     a = Vector{eltype(s)}(undef, length(outidxs))
     for (k, o) in enumerate(outidxs)
@@ -488,7 +496,11 @@ function _marginal_weights(
     return a
 end
 
-function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
+marginal_weights(Utilde::AbstractMatrix, b::AbstractVector) = _marginal_weights(Utilde, b, +)
+
+# `acc = hypot` gives the quadrature marginal `sqrt(∑_j R_kj² / b_j²)`, the a-step of the
+# sign-averaged pair on a materialized `R`.
+function _marginal_weights(Utilde::AbstractMatrix, b::AbstractVector, acc::A) where {A}
     Base.require_one_based_indexing(Utilde, b)
     m, n = size(Utilde)
     length(b) == n ||
@@ -500,7 +512,7 @@ function marginal_weights(Utilde::AbstractMatrix, b::AbstractVector)
         Ukj == 0 && continue
         b[j] > 0 ||
             throw(ArgumentError("b is zero on live input $j (Utilde[$k, $j] = $Ukj); no output weighting can cover it"))
-        a[k] += Ukj / b[j]
+        a[k] = acc(a[k], Ukj / b[j])
     end
     return a
 end
@@ -517,9 +529,9 @@ one family, so a parameterized member (a `p`-norm merge) is reachable through th
 without an API break. They are types rather than names so that the b-step's doubly-nested loop
 specializes on the choice, and so that the non-convergence hint can dispatch per rule.
 
-[`SignAveragedMerge`](@ref) is the exception: it selects the squared channel for the whole
-alternation, not only the final b-step, and the pair it returns is a sign-averaged cover, which
-does not cover `J`.
+[`SignAveragedMerge`](@ref) is the exception: it runs the whole alternation, not only the final
+b-step, in quadrature on `R`, and the pair it returns is a sign-averaged cover, which does not
+cover `J`.
 
 `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
 see that function's docstring.
@@ -553,28 +565,29 @@ struct MaxMerge <: MergeRule end
 """
     SignAveragedMerge <: MergeRule
 
-The sign-averaged pair: [`balance_cover`](@ref)'s marginal alternation run on the squared channel
-`Ũ⁽²⁾` ([`squared_surrogate`](@ref)) with squared factors,
+The sign-averaged pair: [`balance_cover`](@ref)'s marginal alternation run in quadrature on
+`R` ([`quadrature_surrogate`](@ref)),
 
-    a_k² ← (1/ρ_k) ∑_j Ũ⁽²⁾_kj / b_j²,    b_j² ← (1/γ_j) ∑_k Ũ⁽²⁾_kj / a_k²,
+    a_k ← sqrt((1/ρ_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/γ_j) ∑_k R_kj² / a_k²),
 
-followed by the final b-step `b_j² = ∑_k Ũ⁽²⁾_kj / a_k²`. This is the [`SumMerge`](@ref)
-alternation applied to `Ũ⁽²⁾` with factors `(a², b²)`, with the same targets, round budget and
-convergence test; the start is the default pair's start, squared, and `balance_cover` returns the
-square roots. On a tape each half-step is one sweep through squared local partials, so a round
-costs `O(L)` and `Ũ⁽²⁾` is never formed; the final b-step is
-[`gramvariance`](@ref)`(t, outidxs, w)` with `w_k = 1/a_k²` on the live outputs and zero on the
-others.
+followed by the final b-step `b_j = sqrt(∑_k R_kj² / a_k²)`. Squared, this is the
+[`SumMerge`](@ref) alternation applied to the squared channel `Ũ⁽²⁾ = R.^2` with factors
+`(a², b²)`, the same targets and round budget, and the squared start. The iteration works with
+`a`, `b` and `R` themselves and accumulates every sum of squares with `hypot`, so it never forms
+the square of a Jacobian-scale quantity, and the pair is representable wherever the plain pair
+is. On a tape each half-step is
+one sweep combining local partials in quadrature, so a round costs `O(L)` and `R` is never
+formed; the final b-step equals [`gramvariance`](@ref)`(t, outidxs, w)` with `w_k = 1/a_k²` on
+the live outputs and zero on the others, where those squares are representable.
 
 The pair is a sign-averaged cover, **not a cover of `J`**. The final b-step gives every live column
-`∑_k Ũ⁽²⁾_kj / (a_k² b_j²) = 1`, so `a_k² b_j² >= Ũ⁽²⁾_kj`, which is what `check = true` verifies.
-But `Ũ⁽²⁾ <= Ũ.^2`, with equality only where an entry has a single path, so `a_k b_j` can fall
-below `Ũ_kj`, and below `abs(J_kj)` where several paths add with the same sign. If each parent
-slot's local partial carries an independent, equiprobable sign, `Ũ⁽²⁾_kj = E[J_kj²]`, and at
-convergence the pair standardizes the signed Jacobian in expectation: the normalized iterate
-`(a, b ./ sqrt.(γ))` has expected row sums of squares
-`∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and the returned `b` has
-expected column sums of squares `1`.
+`∑_k R_kj² / (a_k b_j)² = 1`, so `a_k b_j >= R_kj`, which is what `check = true` verifies. But
+`R <= Ũ`, with equality only where an entry has a single path, so `a_k b_j` can fall below `Ũ_kj`,
+and below `abs(J_kj)` where several paths add with the same sign. If each parent slot's local
+partial carries an independent, equiprobable sign, `R_kj² = E[J_kj²]`, and at convergence the pair
+standardizes the signed Jacobian in expectation: the normalized iterate `(a, b ./ sqrt.(γ))` has
+expected row sums of squares `∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and
+the returned `b` has expected column sums of squares `1`.
 """
 struct SignAveragedMerge <: MergeRule end
 
@@ -621,10 +634,10 @@ without it.
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
   - `merge`: the final b-step, [`SumMerge`](@ref) (default), [`QuadMerge`](@ref) or
-    [`MaxMerge`](@ref). [`SignAveragedMerge`](@ref) instead runs the whole alternation on the
-    squared channel `Ũ⁽²⁾` and returns a sign-averaged pair, which does not cover `J`; the matrix
-    form then takes `Ũ⁽²⁾` ([`squared_surrogate`](@ref)) in place of `Ũ`, and `check` verifies
-    `a_k² b_j² >= Ũ⁽²⁾_kj`.
+    [`MaxMerge`](@ref). [`SignAveragedMerge`](@ref) instead runs the whole alternation in
+    quadrature on `R` and returns a sign-averaged pair, which does not cover `J`; the matrix form
+    then takes `R` ([`quadrature_surrogate`](@ref)) in place of `Ũ`, and `check` verifies
+    `a_k b_j >= R_kj`.
   - `arule`: `:marginal` (default) alternates [`marginal_weights`](@ref) with the b-step;
     `:geomean` fits `log Ũ_kj ≈ log a_k + log b_j` instead and prescribes no `targets`.
   - `root`, `cgiters`: passed to [`tape_potentials`](@ref) for the tape-potential start. Naming
@@ -638,13 +651,14 @@ test applies to (the gauge-invariant product change `max_kj |log((a_k b_j)_new/(
 or the relative row-marginal residual `max_k |∑_j Ũ_kj/(a_k b_j r_k) - 1|` for non-uniform
 targets), and `roots`, `nties` from [`tape_potentials`](@ref) when the tape-potential start was
 used, `nothing` otherwise. A zero row of `Ũ` gets `a[k] = 0` and a zero column `b[j] = 0`. With
-`SignAveragedMerge()`, `delta` is measured on the squared channel: on `a_k² b_j²` and `Ũ⁽²⁾`.
+`SignAveragedMerge()`, `delta` is measured on the pair itself and `R`: the product change is that
+of `a_k b_j`, and the residual is `max_k |sqrt(∑_j R_kj²/b_j²) / (a_k sqrt(r_k)) - 1|`.
 
 # Cost
 
 The tape form with `merge = SumMerge()` or `SignAveragedMerge()` and `arule = :marginal` runs as
 `O(L)` sweeps per round and never forms `Ũ`. Every other combination, and `check = true`, forms it
-(or `Ũ⁽²⁾`) at `O(m*L)`.
+(or `R`) at `O(m*L)`.
 
 # Examples
 
@@ -691,8 +705,8 @@ function _balance_tape(
     signaveraged = merge isa SignAveragedMerge
     matrixpath = !(merge isa SumMerge || signaveraged) || arule !== :marginal
     _check_start(start, a0, root, cgiters, !matrixpath)
-    # The surrogate the pair is balanced against: `Ũ`, or `Ũ⁽²⁾` for the sign-averaged pair.
-    surrogate = signaveraged ? squared_surrogate : jacobian_surrogate
+    # The surrogate the pair is balanced against: `Ũ`, or `R` for the sign-averaged pair.
+    surrogate = signaveraged ? quadrature_surrogate : jacobian_surrogate
     if matrixpath
         # Other strategies need separate output channels; materialize the surrogate once. Its zeros
         # must match the structural pattern entrywise before anything reads them.
@@ -709,13 +723,12 @@ function _balance_tape(
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
     a = _balance_start(a0, m, M, li.liverow)
-    # The sign-averaged pair runs the sum-merge alternation on squared factors through squared
-    # partials.
-    signaveraged && (a = _squared_start(a))
-    slot = signaveraged ? _sqslot : _absslot
+    # The sign-averaged pair alternates in quadrature: each half-step takes the 2-norm of the terms
+    # the sum merge would add, and the targets are replaced by their square roots.
+    signaveraged && (tgt = _root_targets(tgt))
 
-    rawbstep = a -> _sum_merge_b(t, outidxs, a, li, slot)
-    anumstep = b -> _marginal_weights(t, outidxs, b, li, slot)
+    rawbstep = a -> _sum_merge_b(t, outidxs, a, li, signaveraged)
+    anumstep = b -> _marginal_weights(t, outidxs, b, li, signaveraged)
     if tgt === nothing
         a, b, iters, delta =
             _balance(rawbstep, anumstep, a, maxiter, rtol, _marginal_hint(SumMerge(), :flow); rounds)
@@ -731,28 +744,11 @@ function _balance_tape(
         rworst = max_coverage_ratio(a, b, Utilde)
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
             signaveraged ?
-                "the sign-averaged pair's squared factors do not bound Ũ⁽²⁾: worst ratio $rworst" :
+                "the sign-averaged pair does not bound R: worst ratio $rworst" :
                 "balanced pair does not cover the surrogate: worst ratio $rworst"
         )
     end
-    signaveraged && (a = sqrt.(a); b = sqrt.(b))
     return (; a, b, iters, delta, roots, nties)
-end
-
-# Squared starting weights for the sign-averaged pair, which must be representable in their own
-# right.
-function _squared_start(a)
-    a2 = a .^ 2
-    for k in eachindex(a, a2)
-        a[k] > 0 || continue
-        (isfinite(a2[k]) && a2[k] > 0) || throw(
-            ArgumentError(
-                "the sign-averaged pair's squared start is not representable: a[$k]^2 = $(a2[k]) " *
-                    "from a[$k] = $(a[k]). Use start=:equal, or supply a0."
-            )
-        )
-    end
-    return a2
 end
 
 function balance_cover(r, x0::AbstractVector; kwargs...)
@@ -794,29 +790,33 @@ function _balance_matrix(
     m = size(Utilde, 1)
     # No round reads the targets, so a zero budget goes straight from the start to the merge.
     rounds === 0 && (tgt = nothing)
-    # The sign-averaged pair is the sum-merge balancing of `Ũ⁽²⁾` with squared factors. The
-    # covariant start computed from `Ũ⁽²⁾` is already squared; one supplied by the caller is not.
+    # The sign-averaged pair alternates in quadrature on `R`: both half-steps are 2-norms, and the
+    # targets are replaced by their square roots. Every other merge alternates with the sum merge
+    # and takes its own b-step last.
     signaveraged = merge isa SignAveragedMerge
-    signaveraged && (merge = SumMerge())
+    if signaveraged
+        merge = altmerge = QuadMerge()
+        tgt = _root_targets(tgt)
+        acc = hypot
+    else
+        altmerge = SumMerge()
+        acc = +
+    end
     if a0 === nothing && something(start, :covariant) === :covariant
         a0 = _surrogate_start(Utilde, T)
-        a = _balance_start(a0, m, T, liverow)
-    else
-        a = _balance_start(a0, m, T, liverow)
-        signaveraged && (a = _squared_start(a))
     end
+    a = _balance_start(a0, m, T, liverow)
     bstep = a -> _merge_bstep(Utilde, a, merge)
+    astep = b -> _marginal_weights(Utilde, b, acc)
 
     if arule === :marginal && tgt !== nothing
         rtgt, ctgt = tgt
-        anumstep = b -> marginal_weights(Utilde, b)
-        bnumstep = a -> _merge_bstep(Utilde, a, SumMerge())
+        bnumstep = a -> _merge_bstep(Utilde, a, altmerge)
         a, iters, delta =
-            _balance_targets(anumstep, bnumstep, a, rtgt, ctgt, maxiter, rtol, rounds)
+            _balance_targets(astep, bnumstep, a, rtgt, ctgt, maxiter, rtol, rounds)
         # The normalized iterate is not a cover; the `merge` b-step for this `a` is.
         b = bstep(a)
     elseif arule === :marginal
-        astep = b -> marginal_weights(Utilde, b)
         a, b, iters, delta =
             _balance(bstep, astep, a, maxiter, rtol, _marginal_hint(merge, suggest); rounds)
     elseif arule === :geomean
@@ -826,70 +826,67 @@ function _balance_matrix(
         throw(ArgumentError("arule must be :marginal or :geomean; got $(repr(arule))"))
     end
 
-    aname, bname = _factor_names(signaveraged)
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !liverow[k])) ||
-            throw(ArgumentError("$(aname(k)) is $(a[k]) on a row with nonzero entries"))
+            throw(ArgumentError("output weight a[$k] is $(a[k]) on a row with nonzero entries"))
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !livecol[j])) ||
-            throw(ArgumentError("$(bname(j)) is $(b[j]) on a column with nonzero entries"))
+            throw(ArgumentError("input weight b[$j] is $(b[j]) on a column with nonzero entries"))
     end
     if check
         rworst = max_coverage_ratio(a, b, Utilde)
         rworst <= 1 + eps(float(real(eltype(Utilde))))^(2 // 3) || error(
             signaveraged ?
-                "the sign-averaged pair's squared factors do not bound the matrix: worst ratio $rworst" :
+                "the sign-averaged pair does not bound the matrix: worst ratio $rworst" :
                 "balanced pair does not cover the matrix: worst ratio $rworst"
         )
     end
-    signaveraged && (a = sqrt.(a); b = sqrt.(b))
     # The tape-potential start is the only one with a root, so the other paths report none.
     return (; a, b, iters, delta, roots = nothing, nties = nothing)
 end
 
 # `b_j = ∑_k Ũ_kj/a_k` from one reverse sweep seeded `1/a_k` at the output nodes, never forming
 # the surrogate. A zero weight on a live output cannot be covered by any `b`, so it is an error
-# rather than a silently dropped row. `slot = _sqslot` gives `∑_k Ũ⁽²⁾_kj/a_k` instead.
-function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, slot::F = _absslot) where {T, F}
+# rather than a silently dropped row. `signaveraged = true` gives `sqrt(∑_k R_kj²/a_k²)` instead,
+# from the same seeds accumulated in quadrature.
+function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, signaveraged::Bool = false) where {T}
     for k in eachindex(a)
         a[k] > 0 || !li.liverow[k] || throw(
             ArgumentError(
-                slot === _sqslot ?
-                    "squared output weight a[$k]^2 is $(a[k]) on an output that inputs reach; no " *
-                    "squared input factor can bound Ũ⁽²⁾ on its row" :
-                    "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
-                    "cover can cover its row"
+                "output weight a[$k] is $(a[k]) on an output that inputs reach; no input " *
+                    (signaveraged ? "factor can bound R on its row" : "cover can cover its row")
             )
         )
     end
     seeds = (a[k] > 0 ? inv(tobound(T, a[k])) : zero(boundtype(T)) for k in eachindex(a))
-    return _output_sweep(t, outidxs, seeds, slot)
+    return _output_sweep(t, outidxs, seeds, signaveraged ? hypot : +)
 end
 
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
 # output nodes and never forming the surrogate. `seeds` pairs with `outidxs` in iteration order,
-# and the seeds of a repeated output node add, as its repeated rows of `Ũ` do. The sweep runs in
-# `boundtype(T)` and the result is returned in `magtype(T)`.
-_output_sweep(t::Tape{T}, outidxs, seeds, slot::F = _absslot) where {T, F} =
-    tomag(T, _reverse_sweep(slot, t, _output_seeds(t, outidxs, seeds))[1:t.ninputs])
+# and the seeds of a repeated output node combine as its repeated rows of `Ũ` do. The sweep runs
+# in `boundtype(T)` and the result is returned in `magtype(T)`. `acc = hypot` combines the paths
+# in quadrature instead, giving `sqrt(∑_k seeds[k]² R_kj²)`.
+_output_sweep(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A} =
+    tomag(T, _reverse_sweep(acc, _absslot, t, _output_seeds(t, outidxs, seeds, acc))[1:t.ninputs])
 
-# Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; repeated nodes add.
-function _output_seeds(t::Tape{T}, outidxs, seeds) where {T}
+# Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; the seeds of a repeated
+# node combine with `acc`, as the sweep they feed does.
+function _output_seeds(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A}
     theta = zeros(boundtype(T), nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
-        theta[o] += sk
+        theta[o] = acc(theta[o], sk)
     end
     return theta
 end
 
-# Merge-specific accumulation methods keep branches out of the inner loop.
+# Merge-specific accumulation methods keep branches out of the inner loop. The quadrature merge
+# accumulates with `hypot`, so it never squares a term and is representable wherever the sum
+# merge is.
 _merge_accum(::SumMerge, bj, tkj) = bj + tkj
-_merge_accum(::QuadMerge, bj, tkj) = bj + tkj^2
+_merge_accum(::QuadMerge, bj, tkj) = hypot(bj, tkj)
 _merge_accum(::MaxMerge, bj, tkj) = max(bj, tkj)
-
-_merge_finalize!(::MergeRule, b) = b
-_merge_finalize!(::QuadMerge, b) = (b .= sqrt.(b); b)
 
 function _merge_bstep(U, a, merge::MergeRule)
     m, n = size(U)
@@ -901,7 +898,7 @@ function _merge_bstep(U, a, merge::MergeRule)
             throw(ArgumentError("a is zero on live output $k (Utilde[$k, $j] = $Ukj); no input cover can cover it"))
         b[j] = _merge_accum(merge, b[j], Ukj / a[k])
     end
-    return _merge_finalize!(merge, b)
+    return b
 end
 
 # The linearly convergent geometric-mean fit needs a larger default budget.
@@ -1013,6 +1010,10 @@ end
 const _TARGET_HINT =
     "; these targets are realizable on this pattern, so this is slow convergence rather than " *
     "drift — raise maxiter, take a fixed `rounds` budget, or use arule=:geomean"
+
+# The targets of the quadrature alternation: the sign-averaged pair's marginals are 2-norms, so
+# meeting `(r, c)` in the squared channel means meeting their square roots.
+_root_targets(tgt) = tgt === nothing ? nothing : (sqrt.(tgt[1]), sqrt.(tgt[2]))
 
 # Divide a marginal by its target, leaving a dead row or column at zero.
 function _divide_targets(v, tgt)

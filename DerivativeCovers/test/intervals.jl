@@ -205,19 +205,20 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         @test ok
     end
 
-    # The squared channel over the box bounds the pointwise one, so the sign-averaged pair's
-    # squares, which cover the box's `Ũ⁽²⁾`, cover every pointwise `Ũ⁽²⁾` too.
+    # The quadrature surrogate over the box bounds the pointwise one, so the sign-averaged pair,
+    # which bounds the box's `R`, bounds every pointwise `R` too.
     @testset "the sign-averaged pair over the box — $name" for (name, r, lo, hi) in vector_programs
         t, outidxs = tape_function(r, interval.(lo, hi))
-        U2 = DerivativeCovers.squared_surrogate(t, outidxs)
-        @test U2 isa Matrix{Float64}
+        R = DerivativeCovers.quadrature_surrogate(t, outidxs)
+        @test R isa Matrix{Float64}
+        @test DerivativeCovers.squared_surrogate(t, outidxs) == R .^ 2
         for kw in ((;), (; rounds = nothing), (; start = :equal))
             v = balance_cover(t, outidxs; merge = SignAveragedMerge(), check = true, kw...)
             @test v.a isa Vector{Float64} && v.b isa Vector{Float64}
             ok = true
             for x in samples(Xoshiro(47), lo, hi)
-                U2x = DerivativeCovers.squared_surrogate(tape_function(r, x)...)
-                ok &= all(U2x .<= U2 .* slack) && all(U2x .<= (v.a .* v.b') .^ 2 .* slack)
+                Rx = DerivativeCovers.quadrature_surrogate(tape_function(r, x)...)
+                ok &= all(Rx .<= R .* slack) && all(Rx .<= v.a .* v.b' .* slack)
             end
             @test ok
         end

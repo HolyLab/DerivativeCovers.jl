@@ -4,10 +4,11 @@
     Upward{F}(x)
 
 A nonnegative magnitude of floating-point type `F` whose arithmetic rounds upward: `+`, `*`, `/`,
-`sqrt` and integer powers return a value no smaller than the exact result. Each rounds to nearest
-and then steps to `nextfloat`, except where the result is exact (an operand that is zero, or a
-factor or divisor that is one); `x <= nextfloat(fl(x))` holds for any rounding to nearest, so this
-needs no control over the hardware rounding mode.
+`sqrt`, `hypot` and integer powers return a value no smaller than the exact result. Each elementary
+operation rounds to nearest and then steps to `nextfloat`, except where the result is exact (an
+operand that is zero, or a factor or divisor that is one); `x <= nextfloat(fl(x))` holds for any
+rounding to nearest, so this needs no control over the hardware rounding mode. `hypot` and the
+powers compose these operations, so they may step more than once.
 
 A cover is a bound built from magnitudes by sums, products and square roots, each increasing in
 its operands, so rounding every step upward makes the computed cover at least the exact one.
@@ -62,10 +63,24 @@ Base.:*(a::Upward{F}, b::Upward{F}) where {F} =
     Upward{F}(_exactfactor(a.x) || _exactfactor(b.x) ? a.x * b.x : nextfloat(a.x * b.x))
 Base.:/(a::Upward{F}, b::Upward{F}) where {F} =
     Upward{F}(iszero(a.x) || isone(b.x) ? a.x / b.x : nextfloat(a.x / b.x))
+# Whether the result is exact is decided from the operand, not the result:
+# `sqrt(nextfloat(one(F)))` rounds to one, so a result of one does not imply an exact result.
 function Base.sqrt(a::Upward{F}) where {F}
     r = sqrt(a.x)
-    return Upward{F}(iszero(r) || isone(r) ? r : nextfloat(r))
+    return Upward{F}(_exactfactor(a.x) ? r : nextfloat(r))
 end
+# The 2-norm of two bounds, through the scaled form `m * sqrt(1 + (s/m)^2)` with `s <= m`, so that
+# it neither overflows nor underflows where the result is representable. Each operation is
+# increasing in its operands and rounds upward, so the result is an upper bound. Upward rounding
+# keeps the square of a nonzero ratio above zero, so the result steps above `m` even when that
+# square underflows.
+function Base.hypot(a::Upward{F}, b::Upward{F}) where {F}
+    s, m = minmax(a.x, b.x)
+    iszero(s) && return Upward{F}(m)
+    r = Upward{F}(s) / Upward{F}(m)
+    return Upward{F}(m) * sqrt(one(Upward{F}) + r * r)
+end
+
 # Repeated multiplication, each product rounded upward. A negative power is decreasing in `a`.
 function Base.:^(a::Upward, n::Integer)
     n >= 0 || throw(DomainError(n, "a negative power does not preserve an upper bound"))
