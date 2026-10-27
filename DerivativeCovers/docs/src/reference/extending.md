@@ -95,5 +95,6 @@ magtype
 boundtype
 Upward
 decided_sign
+decided_one
 separation
 ```

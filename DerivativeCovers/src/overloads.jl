@@ -72,10 +72,10 @@ function -(x::CoverVar, c::Real)
 end
 -(c::Real, x::CoverVar) = isconstant(x) ? constantvar(typeof(x), c - value(x)) : unarynode(x, c - value(x), -1, 0)
 *(x::CoverVar, c::Real) = isconstant(x) ? constantvar(typeof(x), value(x) * c) :
-    isone(c) ? x : unarynode(x, value(x) * c, c, 0)
+    decided_one(c) ? x : unarynode(x, value(x) * c, c, 0)
 *(c::Real, x::CoverVar) = x * c
 /(x::CoverVar, c::Real) = isconstant(x) ? constantvar(typeof(x), value(x) / c) :
-    isone(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
+    decided_one(c) ? x : unarynode(x, value(x) / c, 1 / c, 0)
 # CoverVar is not a Number, so define scalar-array multiplication explicitly.
 *(x::CoverVar, c::AbstractArray{<:Real}) = x .* c
 *(c::AbstractArray{<:Real}, x::CoverVar) = c .* x
@@ -110,8 +110,8 @@ Base.float(::Type{V}) where {V <: CoverVar} = V
 function ^(x::CoverVar, p::Real)
     isconstant(x) && return constantvar(typeof(x), value(x)^p)
     v = value(x)
-    d = iszero(p) ? zero(v) : p * v^(p - 1)
-    C = iszero(p) || isone(p) ? zero(v) : p * (p - 1) * v^(p - 2)
+    d = decided_zero(p) ? zero(v) : p * v^(p - 1)
+    C = decided_zero(p) || decided_one(p) ? zero(v) : p * (p - 1) * v^(p - 2)
     return unarynode(x, v^p, d, C)
 end
 # Disambiguate from Base's `x^n` integer-literal path.
@@ -492,9 +492,9 @@ end
 function storeproduct!(y::AbstractArray{<:CoverVar}, z::AbstractArray, alpha::Number, beta::Number)
     axes(y) == axes(z) ||
         throw(DimensionMismatch("mul! destination has axes $(axes(y)), product has axes $(axes(z))"))
-    iszero(beta) || return y .= alpha .* z .+ beta .* y
+    decided_zero(beta) || return y .= alpha .* z .+ beta .* y
     # A unit `alpha` is the 3-argument call; multiplying through would record a node per output.
-    return isone(alpha) ? (y .= z) : (y .= alpha .* z)
+    return decided_one(alpha) ? (y .= z) : (y .= alpha .* z)
 end
 
 recordmatvec!(y, tA, W, x, alpha, beta) =

@@ -64,4 +64,5 @@ each computed over the appropriate region; see
 The interval support is implemented by a small number of methods, which
 another set-valued number type can also implement: [`magnitude`](@ref) (the
 largest absolute value over the set), [`boundtype`](@ref),
-[`decided_sign`](@ref), [`separation`](@ref), and [`check_values`](@ref).
+[`decided_sign`](@ref), [`decided_one` and `decided_zero`](@ref decided_one),
+[`separation`](@ref), and [`check_values`](@ref).

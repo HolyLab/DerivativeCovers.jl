@@ -1,7 +1,8 @@
 # Recording over a box of intervals: covers hold at every point of the box, and the gradient
 # encloses the gradient there.
 
-using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, isequal_interval, mid
+using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interval, isequal_interval, mid,
+    sup
 
 @testset "interval element type" begin
 
@@ -54,6 +55,13 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
             # x < 0 throughout, and y > 0 keeps the box off the cut.
             "atan(y, x) in the left half-plane", x -> atan(x[1], x[2]) * x[2] + atan(x[1], -2.0),
             [0.2, -1.0], [0.5, -0.5],
+        ),
+        (
+            # `cos(2π)` folds to a constant interval that encloses one but is wider than it, so
+            # whether a factor or divisor built from it is one is not decided.
+            "constants enclosing one",
+            x -> (c = cos(one(eltype(x)) * 2 * pi); x[1] * c + x[2] / c + x[1]^(2c) * x[2]),
+            [0.4, 0.9], [0.6, 1.1],
         ),
     )
 
@@ -367,6 +375,40 @@ using IntervalArithmetic: IntervalArithmetic, Interval, interval, in_interval, i
         @test c.h_sum ≈ c64.h_sum rtol = 1.0e-12
         @test mid.(c.grad) ≈ c64.grad rtol = 1.0e-12
         @test all(in_interval.(c64.grad, c.grad))
+    end
+
+    @testset "a constant decided to be one or zero records no node" begin
+        X = interval.([0.4, 0.9], [0.6, 1.1])
+        tape(f) = first(tape_function(f, X))
+        n(f) = nnodes(tape(f))
+        one_ = interval(1.0)
+        wide_one = interval(prevfloat(1.0), 1.0)
+        base = n(x -> x[1] + x[2])
+        @test n(x -> x[1] * one_ + x[2]) == base
+        @test n(x -> x[1] / one_ + x[2]) == base
+        @test n(x -> x[1] * wide_one + x[2]) == base + 1
+        @test n(x -> x[1] / wide_one + x[2]) == base + 1
+        # A power always records a node; a unit or zero exponent records it without curvature.
+        @test tape(x -> x[1]^one_).Cs[end] isa NoCurvature
+        @test tape(x -> x[1]^interval(0.0)).Cs[end] isa NoCurvature
+        @test tape(x -> x[1]^wide_one).Cs[end] isa UnaryCurvature
+        @test tape(x -> x[1]^interval(-eps(), 0.0)).Cs[end] isa UnaryCurvature
+
+        M = [1.0 2.0; -0.5 3.0]
+        fmul(alpha, beta) = x -> (y = collect(x); mul!(y, M, x, alpha, beta); sum(abs2, y))
+        fref = x -> sum(abs2, M * x)
+        @test n(fmul(one_, interval(0.0))) == n(fref)
+        f = fmul(wide_one, interval(-eps(), 0.0))
+        @test n(f) > n(fref)
+        c = cover_hessian(f, X)
+        rng = Xoshiro(5)
+        ok_cover = ok_grad = true
+        for x in samples(rng, inf.(X), sup.(X))
+            ok_grad &= all(in_interval.(ForwardDiff.gradient(fref, x), c.grad))
+            ok_cover &= covers(ForwardDiff.hessian(fref, x), c.h_sum)
+        end
+        @test ok_grad
+        @test ok_cover
     end
 
     @testset "control flow the box cannot decide" begin
