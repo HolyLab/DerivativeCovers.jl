@@ -67,9 +67,15 @@ jobs:
       # Test against this repository's DerivativeCoverProblems rather than the registered one. The
       # source cannot be committed: an installed copy of DerivativeCovers lacks the sibling directory.
       # Julia 1.10 ignores `[sources]`, so the 'min' job uses the registered DerivativeCoverProblems.
-      - name: Use the local DerivativeCoverProblems
+      # The MatrixCovers release DerivativeCovers requires is not registered, so every job tracks its
+      # main branch; on 1.10 that takes an explicit `Pkg.add`.
+      - name: Use the local DerivativeCoverProblems and MatrixCovers' main branch
         if: matrix.package == 'DerivativeCovers'
-        run: printf '\n[sources]\nDerivativeCoverProblems = {path = "../DerivativeCoverProblems"}\n' >> DerivativeCovers/Project.toml
+        run: |
+          printf '\n[sources]\nDerivativeCoverProblems = {path = "../DerivativeCoverProblems"}\nMatrixCovers = {url = "https://github.com/HolyLab/MatrixCovers.jl", rev = "main"}\n' >> DerivativeCovers/Project.toml
+          if [ '${{ matrix.version }}' = 'min' ]; then
+            julia --project=DerivativeCovers -e 'using Pkg; Pkg.add(url="https://github.com/HolyLab/MatrixCovers.jl", rev="main")'
+          fi
       - uses: julia-actions/julia-buildpkg@v1
         with:
           project: ${{ matrix.package }}
@@ -98,7 +104,13 @@ jobs:
           version: '1'
       - uses: julia-actions/cache@v3
       # The site documents both packages in this repository, which the docs environment's
-      # `[sources]` resolves.
+      # `[sources]` resolves. The MatrixCovers release they require is not registered, so both
+      # environments track its main branch.
+      - name: Use MatrixCovers' main branch
+        working-directory: DerivativeCovers
+        run: |
+          printf '\n[sources]\nMatrixCovers = {url = "https://github.com/HolyLab/MatrixCovers.jl", rev = "main"}\n' >> Project.toml
+          sed -i '/^\[sources\]$/a MatrixCovers = {url = "https://github.com/HolyLab/MatrixCovers.jl", rev = "main"}' docs/Project.toml
       - name: Instantiate the docs environment
         working-directory: DerivativeCovers
         run: julia --project=docs -e 'using Pkg; Pkg.instantiate()'

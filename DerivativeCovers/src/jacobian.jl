@@ -995,7 +995,7 @@ end
 # `feasible = :none` keeps it a start rather than inflating it into a cover, which the b-step would
 # discard anyway. Unsupported rows come back zero, which is the convention used here as well.
 function _surrogate_start(Utilde, ::Type{T}) where {T}
-    a0, b0 = initialize_cover(Utilde; strategy = :covariant, feasible = :none)
+    a0, b0 = initialize_cover(Utilde; strategy = :unconstrained, feasible = :none)
     # That routine balances the two sides against each other, so both must be representable for
     # the pair it returns to mean anything.
     (all(isfinite, a0) && all(isfinite, b0)) || throw(
