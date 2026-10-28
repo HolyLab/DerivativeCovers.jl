@@ -30,7 +30,7 @@ module DerivativeCoversIntervalArithmeticExt
 
 using DerivativeCovers: DerivativeCovers, CoverSite, Tape, TapeSite, UnaryCurvature,
     BinaryCurvature, check_values, nnodes, site_label, site_values
-using IntervalArithmetic: Interval, decoration, inf, mag, sup, trv
+using IntervalArithmetic: Interval, decoration, inf, isthinone, isthinzero, mag, sup, trv
 
 DerivativeCovers.magnitude(x::Interval) = mag(x)
 
@@ -38,6 +38,8 @@ DerivativeCovers.magnitude(x::Interval) = mag(x)
 DerivativeCovers.boundtype(::Type{Interval{F}}) where {F <: AbstractFloat} = DerivativeCovers.Upward{F}
 
 DerivativeCovers.decided_sign(x::Interval) = inf(x) > 0 ? 1 : sup(x) < 0 ? -1 : 0
+DerivativeCovers.decided_one(x::Interval) = isthinone(x)
+DerivativeCovers.decided_zero(x::Interval) = isthinzero(x)
 
 # The gap between two intervals, zero when they overlap.
 DerivativeCovers.separation(x::Interval, y::Interval) =

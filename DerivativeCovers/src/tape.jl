@@ -44,6 +44,21 @@ members of both signs, gives `0`.
 decided_sign(x) = x > 0 ? 1 : x < 0 ? -1 : 0
 
 """
+    decided_one(c)
+    decided_zero(c)
+
+Whether the constant `c` is one (resp. zero): `isone(c)` and `iszero(c)` for a number. A type whose
+values stand for sets extends these to return `true` only for the set containing just that number,
+and `false`, never an error, when the comparison cannot be decided.
+
+Operations with a constant use these to skip work an identity makes unnecessary, such as recording
+a node for `x * c` with a unit `c`, or the second partial of `x^c` with `c` zero or one. A `false`
+answer keeps the general form, which is always valid.
+"""
+decided_one(c) = isone(c)
+decided_zero(c) = iszero(c)
+
+"""
     check_values(t::Tape)
     check_values(site::CoverSite, val, ds, cs)
 
