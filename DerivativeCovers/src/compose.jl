@@ -18,7 +18,7 @@ middle-space units), and its square root is split onto both sides so the rule co
 rescaling of either factor.
 
 Equality holds entrywise for sign-definite rank-1 factors covered exactly; in general the rule
-pays the same signed-cancellation looseness as any magnitude-level bound on a product.
+pays the same signed-cancellation excess as any magnitude-level bound on a product.
 
 The arithmetic is that of the inputs' element type. Pass them as [`Upward`](@ref) vectors for a
 composite that holds exactly rather than up to rounding, as covers over a box should.
@@ -58,7 +58,7 @@ for a composite that holds exactly rather than up to rounding, as covers over a 
 The chain rule `∇²f = J_F'*∇²g*J_F + Σ_k (∂g/∂y_k)*∇²F_k` bounds entrywise as
 `abs.(∇²f) <= (a⋅hg)² * b*b' + Σ_k gamma[k] * S[k,:]*S[k,:]'` — a sum of rank-1 magnitude atoms
 `u_0 = (a⋅hg)*b` and `u_k = sqrt(gamma[k])*S[k,:]`. Both merges are returned: the sum merge
-`h_sum = Σ_α u_α` (cross terms are nonnegative slack) and the quadrature merge
+`h_sum = Σ_α u_α` (its cross terms are nonnegative) and the quadrature merge
 `h_quad[i] = sqrt(Σ_α u_α[i]²)` (Cauchy–Schwarz), with `h_quad <= h_sum` coordinatewise.
 
 For `g = 0.5*norm(r)^2` this generic rule gives `norm(a, 1)*b` for the Gauss–Newton term: the

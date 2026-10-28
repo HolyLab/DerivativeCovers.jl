@@ -10,7 +10,7 @@
 #     fwd-G   absolute gradients, absolute adjoints  the loosest corner
 #     fwd     signed gradients, absolute adjoints    what a tapeless forward pass reaches
 #
-# Looseness is `1/max_coverage_ratio(h, H)` against the exact Hessian from ForwardDiff, the scale the
+# Excess is `1/max_coverage_ratio(h, H)` against the exact Hessian from ForwardDiff, the scale the
 # other scripts use: 1 is exact, larger is looser. The two mixed corners are incomparable, so
 # `fwd/quad` above 1 says the default cover is tighter on the worst entry; below 1 says the tapeless
 # one does.
@@ -91,7 +91,7 @@ end
 """
     corners(f, x0) -> (; ...)
 
-Looseness of the four lattice corners, the per-coordinate gain each sign channel delivers, the
+Excess of the four lattice corners, the per-coordinate gain each sign channel delivers, the
 `sqrt(B)`-scale split of the elementwise bound, and the tape's adjoint index. One tape, one
 Hessian, so every number below describes the same program at the same point.
 """
@@ -99,19 +99,19 @@ function corners(f, x0)
     t, outidx = tape_function(f, x0)
     lat = cover_lattice(t, outidx)
     H = ForwardDiff.hessian(f, x0)
-    loose(h) = 1 / max_coverage_ratio(h, H)
+    excess(h) = 1 / max_coverage_ratio(h, H)
 
     # Both channels are scored the same way: how much the cover shrinks when the signs are kept.
     gradient = ratio_stats(lat.h_quad, lat.h_quad_signed)
     adjoint = ratio_stats(lat.h_quad_absadj, lat.h_quad)
-    # The looseness of the elementwise bound factors on the sqrt scale a rank-1 cover lives on:
+    # The excess of the elementwise bound factors on the sqrt scale a rank-1 cover lives on:
     # path cancellation inside each intermediate gradient, then cancellation across elementals.
     within = ratio_stats(sqrt.(diag(lat.B)), sqrt.(diag(lat.B_signed)))
     cross = ratio_stats(sqrt.(diag(lat.B_signed)), sqrt.(abs.(diag(H))))
     return (;
         n = t.ninputs, nodes = nnodes(t), natoms = natoms(t),
-        quad = loose(lat.h_quad), signed = loose(lat.h_quad_signed),
-        fwdg = loose(lat.h_quad_absadj), fwd = loose(lat.h_quad_forward),
+        quad = excess(lat.h_quad), signed = excess(lat.h_quad_signed),
+        fwdg = excess(lat.h_quad_absadj), fwd = excess(lat.h_quad_forward),
         gradient, adjoint, within, cross, index = adjoint_index(t, outidx),
     )
 end
@@ -161,7 +161,7 @@ often an operand is an existing node rather than a fresh one: at `sharing = 0` t
 tree, every input reaches every node along one path, and no sign anywhere can cancel.
 
 Every sharing level replays the same `ndraws` seeds, so the draws are paired across the sweep and
-the medians differ only in this parameter. A single program says little here — the looseness of one
+the medians differ only in this parameter. A single program says little here — the excess of one
 random DAG is dominated by which elementals it happened to draw.
 """
 function sharing_sweep(n, sharings; ndraws = 12)
@@ -290,12 +290,12 @@ function main()
     n = 12
     fixtures = vcat(family_fixtures(n), array_fixtures(MersenneTwister(20240607), n))
 
-    println("Looseness is 1/max_coverage_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
+    println("Excess is 1/max_coverage_ratio against ForwardDiff's Hessian: 1 is exact, larger is looser.")
     println("`gradient` and `adjoint` are the factor by which keeping that channel's signs shrinks")
     println("the cover, per coordinate; `within-path` and `cross-elem` split the elementwise bound.")
     println()
 
-    println("--- looseness of the four corners ---")
+    println("--- excess of the four corners ---")
     corner_table(fixtures)
 
     println("--- what each channel is worth, and what it discards ---")

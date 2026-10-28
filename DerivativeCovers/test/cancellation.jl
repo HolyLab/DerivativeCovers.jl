@@ -70,8 +70,8 @@
         @test res.h_quad ./ hstar ≈ sqrt.(kappa) rtol = 1.0e-8
     end
 
-    @testset "looseness grows with m" begin
-        function gm_looseness(mval)
+    @testset "excess grows with m" begin
+        function gm_excess(mval)
             p = Problems.cancellation(16; m = mval, delta = 1.0e-2, aligned = false, rng = MersenneTwister(3))
             Hc = exact_hessian(p)
             hstar = sqrt.(diag(Hc))
@@ -79,7 +79,7 @@
             ratios = res.h_quad ./ hstar
             return exp(sum(log, ratios) / length(ratios))
         end
-        @test gm_looseness(16) > 1.5 * gm_looseness(4)
+        @test gm_excess(16) > 1.5 * gm_excess(4)
     end
 
     @testset "support variant" begin

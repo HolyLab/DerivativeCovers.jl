@@ -10,7 +10,7 @@
 Assign node `k` of `t` to group `1 + (k-1) % ngroups`, a node-granular partition for
 [`cover_hybrid`](@ref).
 
-Looseness comes from summing contributions whose covers overlap, and overlapping contributions are
+Excess comes from summing contributions whose covers overlap, and overlapping contributions are
 typically *siblings* — the many product terms of a quadratic form, the fan-out of a reduction —
 which a tape lists consecutively. Dealing them round-robin therefore spreads them across groups,
 where quadrature combines them. Binning by depth instead (see [`level_partition`](@ref)) puts every

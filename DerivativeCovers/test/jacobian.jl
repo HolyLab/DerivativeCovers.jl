@@ -174,7 +174,7 @@
             balm = balance_cover(U; conv...)
             @test bal.a .* bal.b' ≈ balm.a .* balm.b' rtol = 1.0e-8
 
-            # The default construction — log-scale start, path-count targets, four rounds, sum
+            # The default construction — log-scale start, flow targets, four rounds, sum
             # merge — needs no convergence and covers.
             bdef = balance_cover(t, outidxs)
             @test bdef.iters == 4

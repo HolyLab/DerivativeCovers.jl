@@ -116,7 +116,7 @@
         @test DerivativeCovers.gramvariance!(view(zeros(t.ninputs + 1), 1:t.ninputs), t, oidx) ==
             DerivativeCovers.gramvariance(t, outidxs)
 
-        # The marginal alternation pairs `outidxs` against a 1-based iterate, so its weights must
+        # The marginal iteration pairs `outidxs` against a 1-based iterate, so its weights must
         # come back on output positions. It needs a pattern with total support to converge.
         rfull(x) = [x[1] * x[2] + x[3], x[2] * x[3] + x[1], x[1] * x[3] + x[2]]
         tf, oif = tape_function(rfull, x0)

@@ -565,7 +565,7 @@ struct MaxMerge <: MergeRule end
 """
     SignAveragedMerge <: MergeRule
 
-The sign-averaged pair: [`balance_cover`](@ref)'s marginal alternation run in quadrature on
+The sign-averaged pair: [`balance_cover`](@ref)'s marginal iteration run in quadrature on
 `R` ([`quadrature_surrogate`](@ref)),
 
     a_k ← sqrt((1/ρ_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/γ_j) ∑_k R_kj² / a_k²),
@@ -930,12 +930,12 @@ end
 
 const _DEFAULT_ROUNDS = 4
 
-# Non-convergence hint for the marginal alternation, specific to how each merge can fail.
+# Non-convergence hint for the marginal iteration, specific to how each merge can fail.
 # `suggest` is the pattern-feasible `targets` value of the call form that produced the failure.
 _marginal_hint(::MergeRule, suggest::Symbol) =
-    "; the marginal alternation with uniform targets requires the surrogate's sparsity pattern to have total support — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+    "; the marginal iteration with uniform targets requires the surrogate's sparsity pattern to have total support — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
 _marginal_hint(::MaxMerge, suggest::Symbol) =
-    "; the max merge's marginal alternation can enter a limit cycle — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+    "; the max merge's marginal iteration can enter a limit cycle — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
 
 # `potentialstart` says whether this call form reaches the tape-potential start, the only one the
 # root keywords mean anything for.
@@ -1068,11 +1068,11 @@ function _matrix_targets(targets, arule::Symbol, U, m::Int, n::Int, ::Type{T}) w
     return _check_targets(targets[1], targets[2], rcount .> 0, ccount .> 0, T)
 end
 
-# Only the marginal alternation normalizes to prescribed marginals; the geometric-mean fit has no
+# Only the marginal iteration normalizes to prescribed marginals; the geometric-mean fit has no
 # targets, so naming any is a mistake rather than something to ignore.
 function _reject_targets(targets, arule::Symbol)
     targets === nothing ||
-        throw(ArgumentError("targets applies to the marginal alternation; arule=$(repr(arule)) prescribes no marginals"))
+        throw(ArgumentError("targets applies to the marginal iteration; arule=$(repr(arule)) prescribes no marginals"))
     return nothing
 end
 

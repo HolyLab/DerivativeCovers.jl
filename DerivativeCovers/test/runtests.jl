@@ -575,7 +575,7 @@ include("maxpath.jl")
         end
     end
 
-    @testset "exact cover of the factored rank-1 quadratic" begin
+    @testset "minimal cover of the factored rank-1 quadratic" begin
         # f = (w'x)²/2 has H = w*w', whose minimal cover is abs.(w). A single nonlinear node
         # carries the whole Hessian, so both merges attain it.
         res = cover_hessian(WithDiagnostics(), quad_factored(WQ), XQ)

@@ -191,7 +191,7 @@ quadrature merge. The default `1` sums them all, so `h_gn` is the [`gramcover`](
 residuals and both covers cost `O(L)`. `ngroups=nothing` gives every residual a channel of its own
 (`G = m`), the tightest pair of covers available, at `O(m * L)`; its `h_gn[j]` is smaller than the
 default's by a factor of at most `sqrt(n_j)`, where `n_j` is the number of residuals input `j`
-reaches. That factor varies with `j`, so it changes the profile of the cover as well as its
+reaches. That factor varies with `j`, so it changes the dispersion of the cover as well as its
 level. The two sign-averaged covers take one further `O(L)` sweep and do not depend on `G`.
 
 `scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and reach only the

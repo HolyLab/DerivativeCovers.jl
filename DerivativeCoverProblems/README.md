@@ -6,7 +6,7 @@
 [![Coverage](https://codecov.io/gh/HolyLab/DerivativeCovers.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/HolyLab/DerivativeCovers.jl)
 
 Parameterized families of scalar and vector-valued programs with reference Hessians and
-Jacobians. Use them to measure the looseness of a derivative cover and investigate its causes.
+Jacobians. Use them to measure the excess of a derivative cover and investigate its causes.
 
 The programs are written in generic Julia and do not depend on a differentiation package, so any
 operator-overloading tool can run them. They are the test problems used by the

@@ -146,12 +146,12 @@
         c = cover_jacobian(WithDiagnostics(), t, outidxs)
         a, b = c.a, c.b_max
 
-        # An entrywise-minimal cover saturates an entry, so it has no spectral slack.
+        # An entrywise-minimal cover saturates an entry, so its scaled spectral norm is at least 1.
         sigma = scaled_singular_value(J, a, b)
         @test sigma >= 1
 
-        # Uniform inflation is pure spectral slack, and rescaling both factors by `sqrt(sigma)`
-        # removes it: one pass lands on sigma == 1 from either starting inflation.
+        # Uniform inflation only raises the scaled spectral norm, and rescaling both factors by
+        # `sqrt(sigma)` removes it: one pass lands on sigma == 1 from either starting inflation.
         for factor in (2.0, 5.0)
             ai, bi = a .* factor, b .* factor
             si = scaled_singular_value(J, ai, bi)

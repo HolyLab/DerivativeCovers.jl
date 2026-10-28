@@ -170,7 +170,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
   algorithms.
 - [Scale covariance](@ref) states when a cover transforms exactly with the
   units of the inputs.
-- [Tightness](@ref) describes how to measure a cover's looseness and where it
+- [Tightness](@ref) describes how to measure a cover's excess and where it
   comes from.
 - [Covers over a box](@ref) extends the bounds from a point to a box of
   inputs.

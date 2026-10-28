@@ -100,7 +100,7 @@
         off = setdiff(1:8, 3:6)
         @test all(==(1), kappa[off])
         @test all(kappa[3:6] .> 10)
-        # At every off-support input some output is covered with no slack, so c*b fails to cover
+        # At every off-support input some output is covered with equality, so c*b fails to cover
         # for any c < 1, and the on-support excess kappa cannot be traded away by a scalar.
         cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(4))
         bal = balance_cover(cm.Utilde; merge = MaxMerge(), arule = :geomean, start = :equal, rounds = nothing)

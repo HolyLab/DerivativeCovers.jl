@@ -1,4 +1,4 @@
-# Path-count targets, tape potentials, and the covariant output weighting they combine into.
+# Flow targets, tape potentials, and the covariant output weighting they combine into.
 #
 # The defining property is covariance: rescaling the program's inputs, outputs or intermediates
 # must move the products `a_k*b_j` by exactly the rescaling factors, at every round count.
@@ -281,7 +281,7 @@
     end
 
     @testset "a start of ones is not covariant at a finite budget" begin
-        # The path-count targets are invariant and the alternation is equivariant, so only the
+        # The flow targets are invariant and the alternation is equivariant, so only the
         # start can break covariance — and a constant start does, until convergence.
         t, outidxs = tape_function(triangular, [0.6, -0.4, 0.9])
         s = ones(nnodes(t))

@@ -35,7 +35,7 @@ const HEADS = (
 """
     excess(J, a, b) -> e
 
-Worst-case looseness `max_kj (a_k*b_j)/abs(J_kj)` over the nonzero entries of the exact Jacobian:
+Worst-case excess `max_kj (a_k*b_j)/abs(J_kj)` over the nonzero entries of the exact Jacobian:
 the same scale `jacobian_minimax` minimizes, so its optimum is the floor for any rank-1 pair.
 """
 excess(J, a, b) =
@@ -66,7 +66,7 @@ end
 """
     hessian_routes(F, g, x0) -> (; sum, quad)
 
-Looseness `1/max_coverage_ratio` of the Hessian of `g ∘ F` by each of the three routes, under both merges.
+Excess `1/max_coverage_ratio` of the Hessian of `g ∘ F` by each of the three routes, under both merges.
 The factored route takes the head's own cover and gradient from a tape of `g` at `F(x0)`, the
 Jacobian cover from a tape of `F` at `x0`, and the curvature bound from `declare_submap` — the same
 `S` the declared route embeds, so the two routes differ only in how the `J'∇²g J` term is bounded.
@@ -80,15 +80,15 @@ function hessian_routes(F, g, x0)
     S = declare_submap(F, x0).S
     fsum = compose_hessian_cover(hd.h_sum, abs.(hd.grad), rF.a, rF.b_sum, S)
     fquad = compose_hessian_cover(hd.h_quad, abs.(hd.grad), rF.a, rF.b_sum, S)
-    loose(h) = 1 / max_coverage_ratio(h, H)
+    excess(h) = 1 / max_coverage_ratio(h, H)
     return (
         sum = (
-            decomposed = loose(dec.h_sum), declared = loose(dcl.h_sum),
-            factored = loose(fsum.h_sum),
+            decomposed = excess(dec.h_sum), declared = excess(dcl.h_sum),
+            factored = excess(fsum.h_sum),
         ),
         quad = (
-            decomposed = loose(dec.h_quad), declared = loose(dcl.h_quad),
-            factored = loose(fquad.h_quad),
+            decomposed = excess(dec.h_quad), declared = excess(dcl.h_quad),
+            factored = excess(fquad.h_quad),
         ),
     )
 end
@@ -113,7 +113,7 @@ function jacobian_table()
 end
 
 function hessian_table()
-    println("=== Hessian of head(F(z)): looseness 1/max_coverage_ratio ===")
+    println("=== Hessian of head(F(z)): excess 1/max_coverage_ratio ===")
     @printf(
         "%16s %10s %5s %10s %10s %10s %7s %10s %10s %10s %7s\n",
         "op", "head", "n", "sum_dec", "sum_decl", "sum_fact", "pen",
@@ -159,7 +159,7 @@ function control()
 end
 
 function main()
-    println("Both scales report looseness: 1 is exact, larger is looser.")
+    println("Both scales report excess: 1 is exact, larger is looser.")
     println()
     jacobian_table()
     hessian_table()

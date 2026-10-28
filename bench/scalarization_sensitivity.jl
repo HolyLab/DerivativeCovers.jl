@@ -107,9 +107,9 @@ function structure(f, z)
 end
 
 """
-    merge_curve(f, z, Gs) -> (; sum_loose, quad_loose, byatom, bynode, recovered, recovered_node)
+    merge_curve(f, z, Gs) -> (; sum_excess, quad_excess, byatom, bynode, recovered, recovered_node)
 
-Looseness `1/max_coverage_ratio` of the sum merge, the atomwise quadrature merge, and `cover_hybrid` at
+Excess `1/max_coverage_ratio` of the sum merge, the atomwise quadrature merge, and `cover_hybrid` at
 each group count in `Gs`, under both granularities of partition. `recovered` is the fraction of the
 sum-to-quadrature gap that the finest partition reaches, measured in log space, and is `NaN` when
 there is no gap to recover.
@@ -118,14 +118,14 @@ function merge_curve(f, z, Gs)
     H = ForwardDiff.hessian(f, z)
     t, outidx = tape_function(f, z)
     d = cover_hessian(WithDiagnostics(), t, outidx)
-    sum_loose = 1 / max_coverage_ratio(d.h_sum, H)
-    quad_loose = 1 / max_coverage_ratio(d.h_quad, H)
+    sum_excess = 1 / max_coverage_ratio(d.h_sum, H)
+    quad_excess = 1 / max_coverage_ratio(d.h_quad, H)
     byatom = [1 / max_coverage_ratio(cover_hybrid(t, outidx, G), H) for G in Gs]
     bynode = [1 / max_coverage_ratio(cover_hybrid(t, outidx, cyclic_partition(t, G)), H) for G in Gs]
-    span = log(sum_loose) - log(quad_loose)
-    frac = h -> span > 1.0e-12 ? (log(sum_loose) - log(minimum(h))) / span : NaN
+    span = log(sum_excess) - log(quad_excess)
+    frac = h -> span > 1.0e-12 ? (log(sum_excess) - log(minimum(h))) / span : NaN
     return (;
-        sum_loose, quad_loose, byatom, bynode,
+        sum_excess, quad_excess, byatom, bynode,
         recovered = frac(byatom), recovered_node = frac(bynode),
     )
 end
@@ -143,7 +143,7 @@ function report(name, fprim, fscalar, z, Gs)
         m = ms[label]
         @printf(
             "%8s %7d %10d %7d %9.4g %9.4g %11.3f %11.3f\n",
-            label, s.nodes, s.curvnodes, s.atoms, m.sum_loose, m.quad_loose,
+            label, s.nodes, s.curvnodes, s.atoms, m.sum_excess, m.quad_excess,
             m.recovered, m.recovered_node
         )
     end
@@ -171,7 +171,7 @@ function main()
     A = (A + A') ./ 2
     Gs = (1, 2, 4, 8, 16, 32, 64, 128)
 
-    println("Looseness is 1/max_coverage_ratio: 1 is exact, larger is looser.")
+    println("Excess is 1/max_coverage_ratio: 1 is exact, larger is looser.")
     println("`rec/atom` and `rec/node` are the fractions of the sum-to-quadrature gap the finest")
     println("partition of each granularity reaches.")
     println()

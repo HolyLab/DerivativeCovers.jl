@@ -138,7 +138,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
     end
 
-    @testset "exact cover of the factored quadratic with constant weights" begin
+    @testset "minimal cover of the factored quadratic with constant weights" begin
         f = dot_const_prim(W0_CONST)
         x0 = [0.3, -1.2, 2.0, -0.5]
         res = cover_hessian(WithDiagnostics(), f, x0)
@@ -146,7 +146,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test res.h_quad ≈ abs.(W0_CONST) rtol = 1.0e-12
 
         # The entrywise expansion of the same function loses the factored structure and is
-        # strictly looser, as METHODS.md's tightness study predicts.
+        # strictly looser.
         n = 4
         f_entrywise = z -> begin
             acc = 0.0 * z[1]
@@ -163,7 +163,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test maximum(res_e.h_sum ./ abs.(W0_CONST)) > 2
     end
 
-    @testset "exact cover of least squares in the weights" begin
+    @testset "minimal cover of least squares in the weights" begin
         rng = MersenneTwister(31)
         p, q = 3, 2
         x0v = randn(rng, q)

@@ -22,7 +22,7 @@ const STATUSES = (:converged, :diverging, :stalled, :overbudget, :zeroweight)
 """
     excess(U, a, b) -> e
 
-Worst-case looseness `max_kj (a_k*b_j)/U_kj` over the nonzero entries of `U`: the reciprocal view
+Worst-case excess `max_kj (a_k*b_j)/U_kj` over the nonzero entries of `U`: the reciprocal view
 of `max_coverage_ratio`, and the quantity `jacobian_minimax` minimizes.
 """
 excess(U, a, b) = maximum(a[k] * b[j] / U[k, j] for k in axes(U, 1), j in axes(U, 2) if U[k, j] > 0)
@@ -201,7 +201,7 @@ end
 """
     failure_modes()
 
-Minimal patterns for two of the ways the marginal alternation fails to reach a fixed point, and
+Minimal patterns for two of the ways the marginal iteration fails to reach a fixed point, and
 what `:geomean` returns on each. Neither failure is a failure of the cover: every marginal iterate
 is valid, so the pair that would have been returned is sound and only the stopping test refuses it.
 """

@@ -10,7 +10,7 @@ elementals they use.
 Each generator returns a [`CoverProblem`](@ref): a program `f` written from those elementals, the
 point `x0` to evaluate it at, an optional idiomatic-Julia `twin` that computes the same function by
 an independent route, and an optional analytic `hessian`. The families differ in the property that
-drives cover looseness — how much the paths from an input to the output reconverge — and each has
+drives cover excess — how much the paths from an input to the output reconverge — and each has
 knobs for size, reconvergence, and dynamic range:
 
 - [`quadratic`](@ref): `x'Ax/2` with `A = W*W'` of prescribed rank, written entrywise, as a
@@ -697,7 +697,7 @@ Closed forms (the Hessian is constant in `x`):
 The minimal cover of `H_cancel` is `hstar = sqrt(delta) .* abs.(q) = sqrt.(diag(H_cancel))` (a
 rank-1 `|H|`, since `H_cancel` is itself rank 1). The quadrature merge of the cancel variant
 attains `sqrt.(diag(H_aligned))` exactly — the sign flip that cancels the Hessian does not touch
-the elementwise bound `B`, which sees only magnitudes — so its looseness against `hstar` is
+the elementwise bound `B`, which sees only magnitudes — so its excess against `hstar` is
 `sqrt.(kappa)` with `kappa_i = diag(H_aligned)_i / diag(H_cancel)_i`, the per-coordinate
 cancellation index.
 
@@ -1121,13 +1121,13 @@ end
 
 The standard sweep: named generators `n -> CoverProblem`, one per family, differing in how
 severely the paths through the program reconverge. Pass the same `n` to each to compare families
-at fixed problem size, or sweep `n` within one to measure how a cover's looseness grows.
+at fixed problem size, or sweep `n` within one to measure how a cover's excess grows.
 
 The three quadratic forms are seeded alike, so at a given `n` they carry the *same* Hessian and
 differ only as programs.
 
 Every family but the last cancels in the intermediate gradients; `adjcancel` cancels in the
-adjoints, and is the only one whose looseness is set by a knob rather than by `n`.
+adjoints, and is the only one whose excess is set by a knob rather than by `n`.
 """
 function families(; sigma::Real = 0.0, seed::Integer = 1)
     return [

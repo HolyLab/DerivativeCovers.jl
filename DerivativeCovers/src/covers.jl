@@ -256,7 +256,7 @@ The elementwise bound
 `B = sum_k magnitude(vbar[k]) * sum_{i,j} magnitude(C^k[i,j]) * utilde_i * utilde_j'`, which
 satisfies `B >= abs.(H)` entrywise, in [`boundtype`](@ref) of the tape's element type.
 Diagnostic only: `B` is `n × n`, and the two inequalities it discards — cancellation along paths
-(inside each `utilde`) and cancellation across elementals — are exactly the looseness this bound
+(inside each `utilde`) and cancellation across elementals — are exactly the excess this bound
 trades for its cost.
 
 Each node's term is accumulated by [`bound_contribution!`](@ref), which every [`Curvature`](@ref)
@@ -986,7 +986,7 @@ local covering conditions.
 Two merges are available:
 
 - **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
-  nonnegative slack;
+  nonnegative;
 - **quadrature merge**, `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`: valid by Cauchy–Schwarz, and
   the minimal cover of the no-cancellation surrogate `M = sum_atoms s_atom s_atom'`. An atom (see
   [`atom_slots`](@ref)) is a whole node for unary and binary elementals and one parent pair for
