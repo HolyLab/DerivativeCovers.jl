@@ -110,14 +110,14 @@ struct JacobianDiagnostics{T}
 end
 
 """
-    cover_jacobian([mode,] t::Tape, outidxs; start=:covariant, rounds=4, a=nothing, check=true)
+    cover_jacobian([mode,] t::Tape, outidxs; start=:logscale, rounds=4, a=nothing, check=true)
     cover_jacobian([mode,] r, x0::AbstractVector; ...)
 
 Asymmetric rank-1 cover of a vector-valued function's Jacobian: weights with
 `a[k] * b[j] >= abs(J[k,j])`. Pass either a tape and its output nodes, or a function and an
 evaluation point.
 
-`a` is chosen by the balancing construction: `start` is `:covariant`, whose products on the
+`a` is chosen by the balancing construction: `start` is `:logscale`, whose products on the
 support transform exactly under a rescaling of the program's inputs, outputs and intermediates, or
 `:equal`, which is permutation equivariant instead; `rounds` alternation rounds then refine it,
 and `rounds = nothing` runs [`balance_cover`](@ref)'s alternation to convergence instead.
@@ -254,7 +254,7 @@ The cost is `O(G * L)` for `G = maximum(groups)`, without forming the full surro
 
 The output weights are [`cover_jacobian`](@ref)'s, chosen by the same keywords:
 
-  - `start`: `:covariant` (the default) or `:equal`.
+  - `start`: `:logscale` (the default) or `:equal`.
   - `rounds`: alternation rounds refining them, `4` by default.
   - `a`: fixed weights of your own instead, strictly positive on every output some input reaches
     and optionally zero on the others. It rules out `start` and `rounds`.
@@ -599,7 +599,7 @@ struct SignAveragedMerge <: MergeRule end
 Output and input weights covering the absolute-sensitivity surrogate: `a[k] * b[j] >= Ũ_kj`, and
 so `>= abs(J_kj)`, for every `merge` except [`SignAveragedMerge`](@ref).
 
-By default the weights come from a scale-covariant start, `rounds` rounds of a marginal
+By default the weights come from the log-scale start, `rounds` rounds of a marginal
 alternation toward row and column targets the sparsity pattern makes realizable, and a final
 [`MergeRule`](@ref) b-step for the `a` those rounds reached. The b-step is what makes the pair a
 cover, so the result covers whatever the rounds did or did not settle. The accompanying manuscript
@@ -608,8 +608,11 @@ without it.
 
 # Keywords
 
-  - `start = :covariant`: products on the support then transform exactly under a rescaling of the
-    inputs and outputs — and, on the tape path, the intermediates — at every round count.
+  - `start = :logscale`: a least-squares fit of log-scales — on a tape, of the node potentials of
+    [`tape_potentials`](@ref); on a matrix, MatrixCovers' unconstrained start
+    (`initialize_cover(U; strategy = :unconstrained)`). Products on the support then transform
+    exactly under a rescaling of the inputs and outputs — and, on the tape path, the
+    intermediates — at every round count.
     `start = :equal` starts at `a = 1` instead, which is permutation equivariant at every round
     count but covariant only in the limit. Both reach the same fixed point.
   - `a0`: starting weights of your own, positive on every live output and zero on the others.
@@ -719,7 +722,7 @@ function _balance_tape(
     end
 
     roots, nties = nothing, nothing
-    if a0 === nothing && something(start, :covariant) === :covariant
+    if a0 === nothing && something(start, :logscale) === :logscale
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
     a = _balance_start(a0, m, M, li.liverow)
@@ -802,7 +805,7 @@ function _balance_matrix(
         altmerge = SumMerge()
         acc = +
     end
-    if a0 === nothing && something(start, :covariant) === :covariant
+    if a0 === nothing && something(start, :logscale) === :logscale
         a0 = _surrogate_start(Utilde, T)
     end
     a = _balance_start(a0, m, T, liverow)
@@ -937,17 +940,17 @@ _marginal_hint(::MaxMerge, suggest::Symbol) =
 # `potentialstart` says whether this call form reaches the tape-potential start, the only one the
 # root keywords mean anything for.
 function _check_start(start, a0, root, cgiters::Integer, potentialstart::Bool)
-    start === nothing || start === :covariant || start === :equal ||
-        throw(ArgumentError("start must be :covariant or :equal; got $(repr(start))"))
+    start === nothing || start === :logscale || start === :equal ||
+        throw(ArgumentError("start must be :logscale or :equal; got $(repr(start))"))
     a0 === nothing || start === nothing ||
         throw(ArgumentError("a0 replaces the start, so it cannot be combined with start=$(repr(start))"))
-    if !(potentialstart && a0 === nothing && something(start, :covariant) === :covariant)
+    if !(potentialstart && a0 === nothing && something(start, :logscale) === :logscale)
         root === nothing && cgiters == 0 ||
             throw(
             ArgumentError(
                 "root and cgiters belong to the tape-potential start, which this call does not " *
                     "reach: it needs the tape form with merge=SumMerge() or SignAveragedMerge(), " *
-                    "arule=:marginal, start=:covariant and no a0"
+                    "arule=:marginal, start=:logscale and no a0"
             )
         )
     end
@@ -990,7 +993,7 @@ function _potential_start(t::Tape{T}, outidxs, root, cgiters::Integer, li::LiveI
     return a0, pot.roots, pot.nties
 end
 
-# Output weights from MatrixCovers' scale-covariant asymmetric start on the surrogate. That
+# Output weights from MatrixCovers' unconstrained asymmetric start on the surrogate. That
 # function returns a full pair; only the a-side is a start here, and the b-step supplies the rest.
 # `feasible = :none` keeps it a start rather than inflating it into a cover, which the b-step would
 # discard anyway. Unsupported rows come back zero, which is the convention used here as well.
@@ -1000,7 +1003,7 @@ function _surrogate_start(Utilde, ::Type{T}) where {T}
     # the pair it returns to mean anything.
     (all(isfinite, a0) && all(isfinite, b0)) || throw(
         ArgumentError(
-            "the covariant start has no representable form on this matrix: its log-scales span " *
+            "the log-scale start has no representable form on this matrix: its log-scales span " *
                 "more than $(T) can hold. Use start=:equal, or supply a0."
         )
     )

@@ -469,7 +469,7 @@ end
 
 Log-scale potentials on the live tape graph: one number per node, least-squares-fitting the slot
 equations `θ_child - θ_parent = log|d|`. `exp(θ)` at the output nodes is the start
-[`balance_cover`](@ref) uses for `start = :covariant` on a tape, because rescaling a node's value
+[`balance_cover`](@ref) uses for `start = :logscale` on a tape, because rescaling a node's value
 by `s` shifts its potential by `log s` and leaves every difference within a component covariant.
 
 A node is *live* when it lies on some input-to-output path whose local derivatives are all nonzero;
@@ -517,7 +517,7 @@ function tape_potentials(r, x0::AbstractVector; kwargs...)
     return tape_potentials(t, outidxs; kwargs...)
 end
 
-# `balance_cover`'s covariant start needs the components for its per-component gauge shift, but
+# `balance_cover`'s log-scale start needs the components for its per-component gauge shift, but
 # they are not part of the result, so they are handed back separately.
 function _tape_potentials(
         t::Tape{T}, outidxs::AbstractVector{<:Integer}, li::LiveInfo = _live_info(t, outidxs);

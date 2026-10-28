@@ -128,7 +128,7 @@ at `x = 0` it drops to the finite cover given by the declared scales.
 
 ## Jacobian covers
 
-The default `start=:covariant` of [`cover_jacobian`](@ref) produces products
+The default `start=:logscale` of [`cover_jacobian`](@ref) produces products
 `a[k] * b[j]` that transform exactly under rescaling of the inputs, the
 outputs, and the intermediate values of the program. The `:equal` start
 instead treats all outputs alike: permuting the outputs permutes the cover,

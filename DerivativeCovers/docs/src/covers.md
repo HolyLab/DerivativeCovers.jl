@@ -167,7 +167,7 @@ true
 
 A Jacobian cover is determined only up to a scalar factor (`a → γ*a`,
 `b → b/γ`), and beyond that the choice of `a` is free. The `start` keyword
-selects how `a` is chosen: `:covariant` (the default) makes the products
+selects how `a` is chosen: `:logscale` (the default) makes the products
 `a[k] * b[j]` transform exactly under rescaling of the inputs and outputs, and
 `:equal` treats all outputs alike. The `rounds` keyword sets the number of
 refinement rounds. Alternatively, pass a fixed `a`.

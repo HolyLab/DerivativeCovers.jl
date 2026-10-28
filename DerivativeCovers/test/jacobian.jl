@@ -169,12 +169,12 @@
             @test bal.delta <= 1.0e-10
 
             # The tape path is the matrix path applied to the surrogate. The two forms start from
-            # different covariant starts, which fix different gauges, so the comparison is on the
+            # different log-scale starts, which fix different gauges, so the comparison is on the
             # products — the gauge-independent content of the pair.
             balm = balance_cover(U; conv...)
             @test bal.a .* bal.b' ≈ balm.a .* balm.b' rtol = 1.0e-8
 
-            # The default construction — covariant start, path-count targets, four rounds, sum
+            # The default construction — log-scale start, path-count targets, four rounds, sum
             # merge — needs no convergence and covers.
             bdef = balance_cover(t, outidxs)
             @test bdef.iters == 4
@@ -329,7 +329,7 @@
 
         # `cover_jacobian` accepts the zero weight the dead output gets, from either start, and so
         # does the grouped merge.
-        for start in (:covariant, :equal)
+        for start in (:logscale, :equal)
             bs = balance_cover(t, outidxs; start)
             jc = cover_jacobian(WithDiagnostics(), t, outidxs; a = bs.a, check = true)
             @test jc.a[2] == 0
@@ -421,7 +421,7 @@
 
         # Output rescaling r → c .* r with the equal start transformed alongside (a0 = c): every
         # product a_k*b_j picks up exactly c_k. The equal start itself is not c-equivariant, so a
-        # finite run from it matches only to the convergence tolerance, while the covariant start
+        # finite run from it matches only to the convergence tolerance, while the log-scale start
         # is equivariant at any round count.
         c = [2.0, 0.5, 8.0, 0.25]
         t1, o1 = tape_function(xs -> ones(4) .* rbase(xs), x0)
