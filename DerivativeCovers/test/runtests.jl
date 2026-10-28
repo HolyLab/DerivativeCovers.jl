@@ -1266,7 +1266,7 @@ include("maxpath.jl")
         @test cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var == vcube.h_var
     end
 
-    @testset "variance channel covariance" begin
+    @testset "sign-averaged cover covariance" begin
         cases = [
             ("rosenbrock n=2", rosenbrock, [-1.2, 1.0], [1.0e-6, 1.0e3]),
             ("quad matvec", quad_matvec(AQ), XQ, [1.0e-6, 1.0e3, 1.0, 1.0e-2, 1.0e4]),
@@ -1451,13 +1451,13 @@ include("maxpath.jl")
 
     @testset "random_dag sharing controls reconvergence" begin
         # sharing = 0 consumes each node exactly once, so the graph is a tree: every input reaches
-        # every node along a single path. The variance channel drops covariances between
+        # every node along a single path. The sign-averaged cover `h_var` drops covariances between
         # reconverging paths, so it attains the quadrature merge exactly iff there are none.
         tree = random_dag(8; nops = 40, sharing = 0.0, rng = MersenneTwister(11))
         @test cover_hessian(tree.f, tree.x0).h_var ≈
             cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol = 1.0e-10
 
-        # With reuse, paths reconverge; the variance channel drops exactly those covariances and
+        # With reuse, paths reconverge; the sign-averaged cover drops exactly those covariances and
         # so falls strictly below the quadrature merge on the coordinates that reconverge.
         shared = random_dag(8; nops = 40, sharing = 0.6, rng = MersenneTwister(11))
         hv = cover_hessian(shared.f, shared.x0).h_var
