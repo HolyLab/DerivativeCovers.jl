@@ -398,17 +398,21 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         fmul(alpha, beta) = x -> (y = collect(x); mul!(y, M, x, alpha, beta); sum(abs2, y))
         fref = x -> sum(abs2, M * x)
         @test n(fmul(one_, interval(0.0))) == n(fref)
-        f = fmul(wide_one, interval(-eps(), 0.0))
-        @test n(f) > n(fref)
-        c = cover_hessian(f, X)
-        rng = Xoshiro(5)
-        ok_cover = ok_grad = true
-        for x in samples(rng, inf.(X), sup.(X))
-            ok_grad &= all(in_interval.(ForwardDiff.gradient(fref, x), c.grad))
-            ok_cover &= covers(ForwardDiff.hessian(fref, x), c.h_sum)
+        # Julia 1.10's `mul!` compares `alpha` and `beta` with one and zero before reaching the
+        # recording rule, so an undecided interval throws there.
+        @static if VERSION >= v"1.11"
+            f = fmul(wide_one, interval(-eps(), 0.0))
+            @test n(f) > n(fref)
+            c = cover_hessian(f, X)
+            rng = Xoshiro(5)
+            ok_cover = ok_grad = true
+            for x in samples(rng, inf.(X), sup.(X))
+                ok_grad &= all(in_interval.(ForwardDiff.gradient(fref, x), c.grad))
+                ok_cover &= covers(ForwardDiff.hessian(fref, x), c.h_sum)
+            end
+            @test ok_grad
+            @test ok_cover
         end
-        @test ok_grad
-        @test ok_cover
     end
 
     @testset "control flow the box cannot decide" begin
