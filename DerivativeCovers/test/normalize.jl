@@ -1,7 +1,7 @@
-# Compare matrix-free Jacobian products with ForwardDiff. Equilibration tests verify entrywise
+# Compare matrix-free Jacobian products with ForwardDiff. Cover-normalization tests verify entrywise
 # bounds, convergence of the singular-value estimate from below, and validity after rescaling by it.
 
-@testset "equilibration" begin
+@testset "cover normalization" begin
 
     W = [0.5 -1.0 2.0; 1.5 0.0 -0.5; -1.0 1.0 1.0; 0.25 0.5 -2.0]
     programs = [
@@ -64,32 +64,32 @@
         @test_throws DimensionMismatch vjp!(zeros(3), t, outidxs, [1.0, 2.0])
     end
 
-    @testset "equilibrate normalizes a valid cover" begin
+    @testset "cover_normalize normalizes a valid cover" begin
         f, x0 = programs[1][2], programs[1][3]
         t, outidxs = tape_function(f, x0)
         J = ForwardDiff.jacobian(f, x0)
         c = cover_jacobian(WithDiagnostics(), t, outidxs)
 
         for b in (c.b_sum, c.b_quad, c.b_max)
-            Jhat = equilibrate(J, c.a, b)
+            Jhat = cover_normalize(J, c.a, b)
             @test size(Jhat) == size(J)
             @test maximum(abs, Jhat) <= GATE            # validity, restated on the scaled matrix
             @test Jhat .* (c.a * b') ≈ J                # the scaling is exactly undone
         end
         # b_max is the minimal b for this a, so some entry of each column saturates the bound.
-        Jmax = equilibrate(J, c.a, c.b_max)
+        Jmax = cover_normalize(J, c.a, c.b_max)
         @test all(j -> maximum(abs, Jmax[:, j]) ≈ 1, axes(Jmax, 2))
     end
 
-    @testset "equilibrate zero-weight handling" begin
+    @testset "cover_normalize zero-weight handling" begin
         # A weight may vanish only where the row or column it scales does.
         J = [1.0 0.0; 0.0 0.0]
-        @test equilibrate(J, [1.0, 0.0], [1.0, 0.0]) == [1.0 0.0; 0.0 0.0]
+        @test cover_normalize(J, [1.0, 0.0], [1.0, 0.0]) == [1.0 0.0; 0.0 0.0]
         @test scaled_singular_value(J, [1.0, 0.0], [1.0, 0.0]) ≈ 1
-        @test_throws "a[1] is zero but row 1" equilibrate(J, [0.0, 1.0], [1.0, 1.0])
-        @test_throws "b[1] is zero but column 1" equilibrate(J, [1.0, 1.0], [0.0, 1.0])
+        @test_throws "a[1] is zero but row 1" cover_normalize(J, [0.0, 1.0], [1.0, 1.0])
+        @test_throws "b[1] is zero but column 1" cover_normalize(J, [1.0, 1.0], [0.0, 1.0])
         @test scaled_singular_value(zeros(2, 2), zeros(2), zeros(2)) == 0.0
-        @test_throws DimensionMismatch equilibrate(J, [1.0, 1.0, 1.0], [1.0, 1.0])
+        @test_throws DimensionMismatch cover_normalize(J, [1.0, 1.0, 1.0], [1.0, 1.0])
 
         # The empty-support branch carries the element type of the computation, as the
         # normal path does.
@@ -118,7 +118,7 @@
         @test est <= exact * GATE
         @test est ≈ exact rtol = 1.0e-6
         # The spectral norm dominates every entry, which is what makes rescaling by it valid.
-        @test exact >= maximum(abs, equilibrate(J, c.a, b)) / GATE
+        @test exact >= maximum(abs, cover_normalize(J, c.a, b)) / GATE
     end
 
     @testset "matrix-free singular value argument checks" begin

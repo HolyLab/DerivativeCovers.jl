@@ -73,7 +73,7 @@ atom, which is what a declaration does to curvature. The two scripts therefore m
 steps toward a representation suitable for traced backends; most of the resulting loss appears in
 the quadrature merge.
 
-## `equilibration_rounds.jl`
+## `balancing_rounds.jl`
 
 The cost and tightness improvement of the alternation in
 [`balance_cover`](../DerivativeCovers/src/jacobian.jl). The iteration is unbounded and
@@ -124,7 +124,7 @@ The tape form runs `O(L)` sweeps without forming `Ũ` only for `SumMerge`/`:marg
 needs row sums of `log Ũ`, which no absolute-value sweep produces, so it must materialize the
 surrogate at `O(mL)` and then spend `O(mn)` per round. The gap widens with the output count —
 2.4x the allocations of the sweep path at `m = 10`, 93x at `m = 640` — which makes `:marginal` the
-only equilibration rule compatible with the target `O(L)` cost, despite its convergence failures.
+only `arule` compatible with the target `O(L)` cost, despite its convergence failures.
 
 ## `scalarization_sensitivity.jl`
 

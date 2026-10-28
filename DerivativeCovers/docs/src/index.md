@@ -179,5 +179,5 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 - The reference pages list the public API:
   [Computing and using covers](@ref), the [Extension interface](@ref), and the
   companion package [DerivativeCoverProblems](@ref). Names that are public but
-  not exported, such as `equilibrate`, are called with the `DerivativeCovers.`
+  not exported, such as `cover_normalize`, are called with the `DerivativeCovers.`
   prefix.

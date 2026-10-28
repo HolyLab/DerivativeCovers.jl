@@ -76,7 +76,7 @@
 
     @testset "the b-side is covariant under input rescaling" begin
         # x → D*x sends J → J*inv(D), so |J| and the surrogate lose a factor d[j] on input j and
-        # b → b ./ d, with the output weights a untouched. This is the property equilibration rests on.
+        # b → b ./ d, with the output weights a untouched. This is the property cover normalization rests on.
         r = xs -> [xs[1] * xs[2], sin(xs[3]) + xs[1], exp(xs[2])]
         x0 = [0.6, -0.4, 0.9]
         d = [1.0e-3, 1.0e2, 5.0]

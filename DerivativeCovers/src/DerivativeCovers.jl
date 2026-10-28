@@ -15,7 +15,7 @@ and stays covariant when those are rescaled alongside, `scales -> D*scales`;
 [`guards_any_block`](@ref) says whether a given program is in that case.
 
 `using DerivativeCovers` imports the main entry points and result types. Public utilities such as
-`equilibrate` are not exported; call them with the `DerivativeCovers.` prefix.
+`cover_normalize` are not exported; call them with the `DerivativeCovers.` prefix.
 """
 module DerivativeCovers
 
@@ -60,7 +60,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
         )
     )
     # Norms and rescalings of a matrix normalized by its cover.
-    eval(Expr(:public, :scaled_spectral_radius, :scaled_singular_value, :equilibrate))
+    eval(Expr(:public, :scaled_spectral_radius, :scaled_singular_value, :cover_normalize))
     # Covers that merge in groups, interpolating between the sum and quadrature merges.
     eval(Expr(:public, :cover_hybrid, :cover_jacobian_hybrid))
     # Adapters between the result types and the functions that take bare vectors.
@@ -90,7 +90,7 @@ include("support.jl")
 include("covariant.jl")
 include("jacobian.jl")
 include("gram.jl")
-include("equilibrate.jl")
+include("normalize.jl")
 include("compose.jl")
 include("show.jl")
 

@@ -3,7 +3,7 @@ using DerivativeCoverProblems
 const Problems = DerivativeCoverProblems
 # Import internal helpers explicitly to keep test call sites readable without expanding exports.
 using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
-    scaled_spectral_radius, scaled_singular_value, equilibrate,
+    scaled_spectral_radius, scaled_singular_value, cover_normalize,
     cover_hybrid, cover_jacobian_hybrid,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
@@ -94,7 +94,7 @@ include("covariant.jl")
 include("gauge.jl")
 include("gram.jl")
 include("jacobianconverse.jl")
-include("equilibrate.jl")
+include("normalize.jl")
 include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
@@ -161,7 +161,7 @@ include("maxpath.jl")
             :Curvature, :NoCurvature, :DenseCurvature, :PairedCurvature, :DeclaredCurvature,
             :cover_slots, :cover_slots!, :bound_contribution!, :curvature_apply!, :has_exact_partials,
             :CoverSite, :TapeSite, :site_label, :site_values,
-            :scaled_spectral_radius, :scaled_singular_value, :equilibrate,
+            :scaled_spectral_radius, :scaled_singular_value, :cover_normalize,
             :cover_hybrid, :cover_jacobian_hybrid,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
             :declare_submap, :submap, :gramvariance, :gramvariance!,

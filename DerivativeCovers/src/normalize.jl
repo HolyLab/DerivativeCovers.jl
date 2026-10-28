@@ -1,4 +1,4 @@
-# Matrix-free Jacobian products and two-sided equilibration.
+# Matrix-free Jacobian products and normalization by a Jacobian cover.
 #
 # For a valid cover `(a, b)`, every entry of Ĵ = diag(a)⁻¹J diag(b)⁻¹ is at most one in
 # magnitude. Scaling both cover factors by √opnorm(Ĵ) preserves validity and tightens the cover
@@ -131,18 +131,18 @@ function vjp(r, x0::AbstractVector, u::AbstractVector)
 end
 
 """
-    equilibrate(J::AbstractMatrix, a::AbstractVector, b::AbstractVector) -> Jhat
+    cover_normalize(J::AbstractMatrix, a::AbstractVector, b::AbstractVector) -> Jhat
 
-The two-sided equilibrated Jacobian `Jhat = diag(a)^-1 J diag(b)^-1`, in which the cover pair
+The cover-normalized Jacobian `Jhat = diag(a)^-1 J diag(b)^-1`, in which the cover pair
 `(a, b)` becomes the all-ones covering matrix: `(a, b)` covers `J` if and only if every entry of
-`Jhat` is at most 1 in magnitude. The equilibrated matrix is the scale-invariant object a
+`Jhat` is at most 1 in magnitude. The cover-normalized matrix is the scale-invariant object a
 downstream linear method should see, since it is unchanged by any rescaling of the outputs or
 inputs that the cover tracks.
 
 A zero weight is admissible only if the row or column it scales vanishes, in which case that row or
 column of `Jhat` is zero; otherwise `(a, b)` does not cover `J` and an error is thrown.
 """
-function equilibrate(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
+function cover_normalize(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
     axes(J, 1) == axes(a, 1) && axes(J, 2) == axes(b, 1) ||
         throw(DimensionMismatch("J, a, b must share indices: $(axes(J)) vs $(axes(a)), $(axes(b))"))
     for k in eachindex(a)
@@ -167,8 +167,8 @@ end
     scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::AbstractVector) -> sigma
     scaled_singular_value(t::Tape, outidxs, a::AbstractVector, b::AbstractVector; maxiter=200, rtol=cbrt(eps(promote_type(eltype(a), eltype(b)))), rng=Xoshiro(0)) -> sigma
 
-Largest singular value of the equilibrated Jacobian `Jhat = diag(a)^-1 J diag(b)^-1` (see
-[`equilibrate`](@ref)), which measures how loose the cover `(a, b)` is in the spectral sense:
+Largest singular value of the cover-normalized Jacobian `Jhat = diag(a)^-1 J diag(b)^-1` (see
+[`cover_normalize`](@ref)), which measures how loose the cover `(a, b)` is in the spectral sense:
 `(a, b)` is valid iff every entry of `Jhat` is at most 1 in magnitude, and
 `sigma >= max_kj abs(Jhat[k,j])`.
 
@@ -178,7 +178,7 @@ Because every entry of `Jhat` is bounded by its spectral norm,
 is meant to hold: for a cover computed over a set of points, such as a box of intervals, that is
 the supremum over the set.
 
-The dense method is exact, and drops zero weights on the same terms as [`equilibrate`](@ref).
+The dense method is exact, and drops zero weights on the same terms as [`cover_normalize`](@ref).
 
 The tape method is matrix-free: power iteration on `Jhat'Jhat` driven by [`jvp`](@ref) and
 [`vjp`](@ref) — about two gradients per iteration, `O(L)` memory — stopped when the estimate
@@ -191,7 +191,7 @@ enough to make `safety * sigma` an upper bound. Failure to converge within `maxi
 returned partial result.
 """
 function scaled_singular_value(J::AbstractMatrix, a::AbstractVector, b::AbstractVector)
-    Jhat = equilibrate(J, a, b)
+    Jhat = cover_normalize(J, a, b)
     rows = [k for k in eachindex(a) if a[k] > 0]
     cols = [j for j in eachindex(b) if b[j] > 0]
     (isempty(rows) || isempty(cols)) && return zero(real(eltype(Jhat)))
