@@ -74,7 +74,7 @@ end
     _flow_targets(t::Tape, outidxs, li::LiveInfo) -> (r, c)
 
 Row and column targets from the two flow weightings of the live slot graph, mixed so that neither
-side dominates: `r = ρ_fwd/nrow + ρ_rev/ncol` and `c = γ_fwd/nrow + γ_rev/ncol`, with `nrow` the
+side dominates: `r = r_fwd/nrow + r_rev/ncol` and `c = c_fwd/nrow + c_rev/ncol`, with `nrow` the
 live output positions and `ncol` the live inputs. Marginals are linear in the weight matrix, so the
 mixture is itself the marginal pair of a nonnegative matrix with `Ũ`'s pattern, which is what makes
 the targets realizable.
@@ -88,7 +88,7 @@ function _flow_targets(t::Tape, outidxs, li::LiveInfo)
     N, nin, m = nnodes(t), t.ninputs, length(outidxs)
     (li.nrow > 0 && li.ncol > 0) || return zeros(Float64, m), zeros(Float64, nin)
 
-    # Forward flow: ρ is 1 at every live output position, and γ comes from the transposed sweep
+    # Forward flow: r is 1 at every live output position, and c comes from the transposed sweep
     # seeded there.
     rseed = zeros(Float64, N)
     for (k, o) in enumerate(outidxs)
@@ -96,7 +96,7 @@ function _flow_targets(t::Tape, outidxs, li::LiveInfo)
     end
     gf = _reverse_sweep(ForwardFlow(li), t, rseed)
 
-    # Reverse flow: γ is 1 at every live input, and ρ comes from the forward sweep seeded there,
+    # Reverse flow: c is 1 at every live input, and r comes from the forward sweep seeded there,
     # read through the sink slot's own 1/outdeg factor.
     fseed = zeros(Float64, N)
     for j in 1:nin

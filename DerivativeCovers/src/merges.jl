@@ -70,8 +70,8 @@ function level_partition(t::Tape, ngroups::Integer)
 end
 
 """
-    group_seeds(t::Tape, rhos, groups::AbstractVector{<:Integer}) -> Theta
-    group_seeds(t::Tape, rhos, ngroups::Integer) -> Theta
+    group_seeds(t::Tape, etas, groups::AbstractVector{<:Integer}) -> Theta
+    group_seeds(t::Tape, etas, ngroups::Integer) -> Theta
 
 Seed weights for the vector-mode reverse sweep, `Theta[g, j] = sum over the contributions in group
 g of the weight each places on node j`. Channels index the rows so that the weights of one
@@ -89,11 +89,11 @@ many atoms one elemental carries, so an array primitive that absorbs several ato
 still has them spread across channels. Which atoms share a channel remains a matter of the order
 they appear in.
 
-With `rhos` from [`local_covers`](@ref), column `j` collects exactly the seeds that
+With `etas` from [`local_covers`](@ref), column `j` collects exactly the seeds that
 [`abs_reverse`](@ref) propagates into the group partial sums. `Theta` is in [`boundtype`](@ref) of
 the tape's element type.
 """
-function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:Integer}) where {T}
+function group_seeds(t::Tape{T}, etas::AbstractVector, groups::AbstractVector{<:Integer}) where {T}
     N = nnodes(t)
     length(groups) == N ||
         throw(DimensionMismatch("groups has length $(length(groups)), expected $N (one per node)"))
@@ -101,17 +101,17 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, groups::AbstractVector{<:
     G = maximum(groups)
     Theta = zeros(boundtype(T), G, N)
     for k in (t.ninputs + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
+        eta = etas[k]
+        isempty(eta) && continue
         g = groups[k]
         for (i, p) in enumerate(t.parents[k])
-            Theta[g, p] += rho[i]
+            Theta[g, p] += eta[i]
         end
     end
     return Theta
 end
 
-function group_seeds(t::Tape{T}, rhos::AbstractVector, ngroups::Integer) where {T}
+function group_seeds(t::Tape{T}, etas::AbstractVector, ngroups::Integer) where {T}
     ngroups >= 1 || throw(ArgumentError("ngroups must be positive, got $ngroups"))
     N = nnodes(t)
     # Channels beyond the atom count would stay empty, so the sweep need not carry them.
@@ -119,14 +119,14 @@ function group_seeds(t::Tape{T}, rhos::AbstractVector, ngroups::Integer) where {
     Theta = zeros(boundtype(T), G, N)
     a = 0
     for k in (t.ninputs + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
+        eta = etas[k]
+        isempty(eta) && continue
         ps = t.parents[k]
         for atom in atom_slots(t.Cs[k], length(ps))
             g = 1 + a % G
             a += 1
             for i in atom
-                Theta[g, ps[i]] += rho[i]
+                Theta[g, ps[i]] += eta[i]
             end
         end
     end
@@ -211,8 +211,8 @@ function cover_hybrid(
         t::Tape{T}, outidx::Integer, spec; check::Bool = true,
         scales = nothing, ratio = nothing
     ) where {T}
-    rhos, _ = local_covers(t, adjoints(t, outidx); check, scales, ratio)
-    Abar = abs_reverse(t, group_seeds(t, rhos, spec))
+    etas, _ = local_covers(t, adjoints(t, outidx); check, scales, ratio)
+    Abar = abs_reverse(t, group_seeds(t, etas, spec))
     return tomag(T, [sqrt(sum(abs2, view(Abar, :, a))) for a in 1:t.ninputs])
 end
 

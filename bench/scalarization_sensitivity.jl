@@ -102,8 +102,8 @@ those nodes expose. `atoms > curvnodes` exactly where a node carries more than o
 """
 function structure(f, z)
     t, outidx = tape_function(f, z)
-    rhos, _ = local_covers(t, adjoints(t, outidx); check = false)
-    return (nodes = nnodes(t), curvnodes = count(!isempty, rhos), atoms = natoms(t))
+    etas, _ = local_covers(t, adjoints(t, outidx); check = false)
+    return (nodes = nnodes(t), curvnodes = count(!isempty, etas), atoms = natoms(t))
 end
 
 """

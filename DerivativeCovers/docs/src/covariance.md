@@ -45,17 +45,17 @@ rest of this page explains what this means and what happens otherwise.
 ## Choosing among equally valid local covers
 
 The product `x * y` has second partial derivatives `[0 1; 1 0]`. Any pair
-`(ρ₁, ρ₂)` with `ρ₁ * ρ₂ ≥ 1` covers this matrix, so the operation has a
+`(η₁, η₂)` with `η₁ * η₂ ≥ 1` covers this matrix, so the operation has a
 one-parameter family of equally valid local covers, and the choice determines
 how its contribution is distributed between `x` and `y`. A choice based on a
-fixed number, such as `ρ₁ = ρ₂ = 1`, would not be covariant: if `x` is
+fixed number, such as `η₁ = η₂ = 1`, would not be covariant: if `x` is
 measured in millimeters instead of meters, its share of the cover should change
 by a factor of 1000.
 
 The package resolves the choice using the magnitudes of the arguments. For a
-product, it chooses `ρ₁ = sqrt(|y| / |x|)` and `ρ₂ = sqrt(|x| / |y|)`, which
+product, it chooses `η₁ = sqrt(|y| / |x|)` and `η₂ = sqrt(|x| / |y|)`, which
 transform correctly under any rescaling of `x` and `y`. In the example above,
-`x0 = [2.0, 0.5]` gives `ρ₁ = 0.5` and `ρ₂ = 2`; the second entry of the cover
+`x0 = [2.0, 0.5]` gives `η₁ = 0.5` and `η₂ = 2`; the second entry of the cover
 adds `sqrt(exp(0.5)) ≈ 1.284` for the `exp` term:
 
 ```jldoctest cov
@@ -71,7 +71,7 @@ by [`split_block`](@ref).
 
 ## When argument values carry no scale
 
-The rule above fails when an argument is zero: `ρ₂ = sqrt(|x| / |y|)` is
+The rule above fails when an argument is zero: `η₂ = sqrt(|x| / |y|)` is
 infinite at `y = 0`, and no choice based on the argument values is both finite
 and covariant. At such operations the package uses *declared* scales for the
 inputs instead. The `scales` keyword, accepted by every cover function,

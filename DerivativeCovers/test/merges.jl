@@ -4,24 +4,24 @@
 
 @testset "merges.jl" begin
 
-    # Atom `α` of node `k` contributes `s_α = sum_{i in α} rho_k[i] * utilde[p_i]` to the cover,
-    # where `rho_k` is the node's local cover and `utilde` the absolute input sensitivities. The
+    # Atom `α` of node `k` contributes `s_α = sum_{i in α} eta_k[i] * utilde[p_i]` to the cover,
+    # where `eta_k` is the node's local cover and `utilde` the absolute input sensitivities. The
     # sum merge adds these contributions, the quadrature merge adds their squares, and the hybrid
     # merge adds within groups and squares across them. Returns the contributions and the node
     # each belongs to.
     function atom_contributions(t, outidx)
         n = t.ninputs
-        rhos, _ = local_covers(t, adjoints(t, outidx))
+        etas, _ = local_covers(t, adjoints(t, outidx))
         u = sensitivities(t)
         seeds = Vector{Float64}[]
         nodes = Int[]
         for k in (n + 1):nnodes(t)
-            isempty(rhos[k]) && continue
+            isempty(etas[k]) && continue
             ps = t.parents[k]
             for atom in DerivativeCovers.atom_slots(t.Cs[k], length(ps))
                 s = zeros(n)
                 for i in atom
-                    s .+= rhos[k][i] .* u[ps[i]]
+                    s .+= etas[k][i] .* u[ps[i]]
                 end
                 push!(seeds, s)
                 push!(nodes, k)

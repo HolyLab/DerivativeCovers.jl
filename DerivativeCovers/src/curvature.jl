@@ -225,10 +225,10 @@ atom_slots(C::PairedCurvature, nslots) = ((j, C.q + j) for j in 1:C.q)
 
 """
     cover_slots(C::Curvature, ratio, site, av, sl; check=true) -> Union{Nothing,Vector{M}}
-    cover_slots!(rho::Vector, C::Curvature, ratio, site, av, sl; check=true) -> Bool
+    cover_slots!(eta::Vector, C::Curvature, ratio, site, av, sl; check=true) -> Bool
 
-The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `rho` with
-`rho[i]*rho[j] >= av*magnitude(C[i,j])`, where `av` is the weight the elemental's second-order
+The rank-1 cover of one elemental, slot-aligned with its operands: nonnegative `eta` with
+`eta[i]*eta[j] >= av*magnitude(C[i,j])`, where `av` is the weight the elemental's second-order
 term carries (the absolute adjoint `magnitude(vbar[k])` in a reverse sweep, `1` in a forward one).
 Returns `nothing` when the elemental contributes no second-order term.
 
@@ -236,16 +236,16 @@ Entries involving a slot whose intermediate gradient vanishes are exempt: they a
 zero in the Hessian, so covering them would only import the other slot's scale into a term that is
 not there. [`dead_slot`](@ref) is the test, and it reads the slot's entry of `sl`.
 
-`rho`, `av` and the entries of `sl` are magnitudes, in `M = magtype(eltype(site))`. `rho` must be a
+`eta`, `av` and the entries of `sl` are magnitudes, in `M = magtype(eltype(site))`. `eta` must be a
 `Vector{M}`: [`local_cover_slots`](@ref) asserts that type so that the sweeps, which call it once
 per node, need not box the result. The entries `av*magnitude(C[i,j])` and the products that cover
 them are formed in [`boundtype`](@ref)`(eltype(site))`, so where that rounds upward the invariant
 holds exactly rather than up to rounding.
 
-The mutating form resizes `rho` to the elemental's slot count and fills it, returning whether
-there is a second-order term at all and leaving `rho` untouched when there is not. Every
+The mutating form resizes `eta` to the elemental's slot count and fills it, returning whether
+there is a second-order term at all and leaving `eta` untouched when there is not. Every
 construction lives there, so that a sweep can hand it one buffer and let no node allocate for its
-slot weights; `cover_slots` allocates a fresh `rho` and forwards.
+slot weights; `cover_slots` allocates a fresh `eta` and forwards.
 
 [`split_block`](@ref) breaks the tie at off-diagonal-active blocks; `ratio` is its degeneracy
 threshold and `sl` its scale references, one per slot and in slot order — not indexed by node, so
@@ -260,9 +260,9 @@ forward propagation; see [`local_cover_slots`](@ref).
 cover_slots(::NoCurvature, ratio, site, av, sl; check::Bool = true) = nothing
 
 function cover_slots(C::Curvature, ratio, site, av, sl; check::Bool = true)
-    rho = Vector{magtype(eltype(site))}(undef, cover_nslots(C, sl))
-    cover_slots!(rho, C, ratio, site, av, sl; check) || return nothing
-    return rho
+    eta = Vector{magtype(eltype(site))}(undef, cover_nslots(C, sl))
+    cover_slots!(eta, C, ratio, site, av, sl; check) || return nothing
+    return eta
 end
 
 # How large `cover_slots` allocates. A form that does not say is measured by its scale references,
@@ -275,24 +275,24 @@ cover_nslots(C::PairedCurvature, sl) = 2 * C.q
 cover_nslots(C::DeclaredCurvature, sl) = length(C.s)
 
 @doc (@doc cover_slots)
-cover_slots!(rho::Vector, ::NoCurvature, ratio, site, av, sl; check::Bool = true) = false
+cover_slots!(eta::Vector, ::NoCurvature, ratio, site, av, sl; check::Bool = true) = false
 
-function cover_slots!(rho::Vector, C::DeclaredCurvature, ratio, site, av, sl; check::Bool = true)
+function cover_slots!(eta::Vector, C::DeclaredCurvature, ratio, site, av, sl; check::Bool = true)
     av == 0 && return false
-    resize!(rho, length(C.s))
+    resize!(eta, length(C.s))
     r = sqrt(tobound(eltype(site), av))
     for (i, s) in enumerate(C.s)
-        rho[i] = r * s
+        eta[i] = r * s
     end
     return true
 end
 
-function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; check::Bool = true)
+function cover_slots!(eta::Vector, C::PairedCurvature, ratio, site, av, sl; check::Bool = true)
     c = tobound(eltype(site), av)
     c == 0 && return false
     q = C.q
-    resize!(rho, 2q)
-    fill!(rho, 0)
+    resize!(eta, 2q)
+    fill!(eta, 0)
     for j in 1:q
         s1 = sl[j]
         s2 = sl[q + j]
@@ -309,25 +309,25 @@ function cover_slots!(rho::Vector, C::PairedCurvature, ratio, site, av, sl; chec
             # Allow for roundoff accumulated across the program, not just this comparison.
             rtol = sqrt(eps(magtype(eltype(site))))
             dead || a * b >= c * (1 - rtol) || error(
-                "local cover invariant violated at $(site_label(site)), pair $j: rho=($a,$b), c=$c"
+                "local cover invariant violated at $(site_label(site)), pair $j: eta=($a,$b), c=$c"
             )
         end
-        rho[j] = a
-        rho[q + j] = b
+        eta[j] = a
+        eta[q + j] = b
     end
     return true
 end
 
-function cover_slots!(rho::Vector, C::UnaryCurvature, ratio, site, av, sl; check::Bool = true)
+function cover_slots!(eta::Vector, C::UnaryCurvature, ratio, site, av, sl; check::Bool = true)
     c11 = tobound(eltype(site), av) * magnitude(C.c)
     c11 == 0 && return false
     check && check_finite_partials(site, av, (c11,))
-    resize!(rho, 1)
-    rho[1] = sqrt(c11)
+    resize!(eta, 1)
+    eta[1] = sqrt(c11)
     return true
 end
 
-function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; check::Bool = true)
+function cover_slots!(eta::Vector, C::BinaryCurvature, ratio, site, av, sl; check::Bool = true)
     M = magtype(eltype(site))
     av = tobound(eltype(site), av)
     c11 = av * magnitude(C.c11)
@@ -335,48 +335,48 @@ function cover_slots!(rho::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     c22 = av * magnitude(C.c22)
     (c11 == 0 && c12 == 0 && c22 == 0) && return false
     s1, s2 = sl[1], sl[2]
-    resize!(rho, 2)
+    resize!(eta, 2)
     # A dead slot empties every entry it appears in, leaving only the live slot's own curvature —
     # which the diagonal cover already supplies. The test comes second so that a block the
     # diagonal cover serves anyway never asks for it.
     offdiag = offdiag_active(c11, c12, c22)
     dead = offdiag && (dead_slot(s1) || dead_slot(s2))
     if offdiag && !dead
-        rho1, rho2 = split_block(ratio, c11, c12, c22, s1, s2)
+        eta1, eta2 = split_block(ratio, c11, c12, c22, s1, s2)
     else
-        rho1, rho2 = sqrt(c11), sqrt(c22)
+        eta1, eta2 = sqrt(c11), sqrt(c22)
     end
-    roundsup(eltype(site)) && ((rho1, rho2) = certify_block(c11, c12, c22, rho1, rho2, dead))
+    roundsup(eltype(site)) && ((eta1, eta2) = certify_block(c11, c12, c22, eta1, eta2, dead))
     if check
         check_finite_partials(site, av, (c11, c12, c22))
         rtol = sqrt(eps(M))
         (
-            rho1 >= sqrt(c11) * (1 - rtol) && rho2 >= sqrt(c22) * (1 - rtol) &&
-                (dead || rho1 * rho2 >= c12 * (1 - rtol))
+            eta1 >= sqrt(c11) * (1 - rtol) && eta2 >= sqrt(c22) * (1 - rtol) &&
+                (dead || eta1 * eta2 >= c12 * (1 - rtol))
         ) ||
             error(
             "local cover invariant violated at $(site_label(site)): " *
-                "rho=($rho1,$rho2), c=($c11,$c12,$c22)"
+                "eta=($eta1,$eta2), c=($c11,$c12,$c22)"
         )
     end
-    rho[1] = rho1
-    rho[2] = rho2
+    eta[1] = eta1
+    eta[2] = eta2
     return true
 end
 
-# Raise the pair `(rho1, rho2)` chosen for the block `[c11 c12; c12 c22]` until it covers the block
-# in upward-rounded arithmetic: `rho1 >= sqrt(c11)`, `rho2 >= sqrt(c22)`, and, unless a dead slot
-# empties the cross term, `rho2 >= c12/rho1` with `rho1` fixed, so `rho1*rho2 >= c12` exactly.
-function certify_block(c11, c12, c22, rho1, rho2, dead::Bool)
-    r1 = max(oftype(c11, rho1), sqrt(c11))
-    r2 = max(oftype(c22, rho2), sqrt(c22))
+# Raise the pair `(eta1, eta2)` chosen for the block `[c11 c12; c12 c22]` until it covers the block
+# in upward-rounded arithmetic: `eta1 >= sqrt(c11)`, `eta2 >= sqrt(c22)`, and, unless a dead slot
+# empties the cross term, `eta2 >= c12/eta1` with `eta1` fixed, so `eta1*eta2 >= c12` exactly.
+function certify_block(c11, c12, c22, eta1, eta2, dead::Bool)
+    r1 = max(oftype(c11, eta1), sqrt(c11))
+    r2 = max(oftype(c22, eta2), sqrt(c22))
     (dead || iszero(c12)) || (r2 = max(r2, c12 / r1))
     return r1, r2
 end
 
 # The general form carries no fixed arity, and the rank-1 cover of a block larger than 2x2 is not
 # a single split.
-cover_slots!(rho::Vector, C::DenseCurvature, ratio, site, av, sl; check::Bool = true) =
+cover_slots!(eta::Vector, C::DenseCurvature, ratio, site, av, sl; check::Bool = true) =
     error(
     "$(site_label(site)) carries a $(join(size(C), "x")) dense curvature; the rank-1 cover is " *
         "defined for the unary and binary forms, not for a general dense block"

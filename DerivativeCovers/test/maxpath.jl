@@ -12,15 +12,15 @@ function maxpath_reference(t, outidx, d)
     for k in (n + 1):N, (j, p) in enumerate(t.parents[k])
         U[k] .= max.(U[k], abs(t.ds[k][j]) .* U[p])
     end
-    rhos, _ = local_covers(t, adjoints(t, outidx))
+    etas, _ = local_covers(t, adjoints(t, outidx))
     m = zeros(n)
     for k in (n + 1):N
-        isempty(rhos[k]) && continue
+        isempty(etas[k]) && continue
         ps = t.parents[k]
         for atom in DerivativeCovers.atom_slots(t.Cs[k], length(ps))
             s = zeros(n)
             for i in atom
-                s .= max.(s, rhos[k][i] .* U[ps[i]])
+                s .= max.(s, etas[k][i] .* U[ps[i]])
             end
             for i in 1:n, l in 1:n
                 (l == i || d[i] == 0 || d[l] == 0) && continue

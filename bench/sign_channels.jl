@@ -43,15 +43,15 @@ function cover_lattice(t, outidx)
     acheck = abs_reverse(t, seed)
     utilde = sensitivities(t)
     w = [magnitude.(g) for g in intermediate_gradients(t)]
-    rhos_signed, _ = local_covers(t, vbar)
-    rhos_abs, _ = local_covers(t, acheck)
+    etas_signed, _ = local_covers(t, vbar)
+    etas_abs, _ = local_covers(t, acheck)
     return (;
         B = hessian_bound(t, vbar, utilde),
         B_signed = hessian_bound(t, vbar, w),
-        h_quad = merge_atoms(t, rhos_signed, utilde)[2],
-        h_quad_absadj = merge_atoms(t, rhos_abs, utilde)[2],
-        h_quad_signed = merge_atoms(t, rhos_signed, w)[2],
-        h_quad_forward = merge_atoms(t, rhos_abs, w)[2],
+        h_quad = merge_atoms(t, etas_signed, utilde)[2],
+        h_quad_absadj = merge_atoms(t, etas_abs, utilde)[2],
+        h_quad_signed = merge_atoms(t, etas_signed, w)[2],
+        h_quad_forward = merge_atoms(t, etas_abs, w)[2],
     )
 end
 

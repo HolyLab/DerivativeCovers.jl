@@ -698,11 +698,11 @@ The minimal cover of `H_cancel` is `hstar = sqrt(delta) .* abs.(q) = sqrt.(diag(
 rank-1 `|H|`, since `H_cancel` is itself rank 1). The quadrature merge of the cancel variant
 attains `sqrt.(diag(H_aligned))` exactly — the sign flip that cancels the Hessian does not touch
 the elementwise bound `B`, which sees only magnitudes — so its excess against `hstar` is
-`sqrt.(kappa)` with `kappa_i = diag(H_aligned)_i / diag(H_cancel)_i`, the per-coordinate
+`sqrt.(xi)` with `xi_i = diag(H_aligned)_i / diag(H_cancel)_i`, the per-coordinate
 cancellation index.
 
-`m` sets the number of quartets and hence the size of `kappa` on the support (more quartets, more
-cancellation, larger `kappa`); `delta` sets the scale of the surviving rank-1 term relative to the
+`m` sets the number of quartets and hence the size of `xi` on the support (more quartets, more
+cancellation, larger `xi`); `delta` sets the scale of the surviving rank-1 term relative to the
 quartets; `support` restricts the quartets to a coordinate subset, leaving `off-support`
 coordinates untouched by any cancellation; `sigma` widens the log-magnitude spread of the quartet
 coefficients and of `q`. Two calls that agree in `n`, `m`, `delta`, `support`, `sigma`, and `rng`
@@ -979,9 +979,9 @@ Closed forms (the Jacobian is constant in `x`; `ghat = sum_i (a_i .+ b_i)` scatt
 
 The sign alignment makes `Utilde == abs.(J_aligned)` exactly, and both `Utilde` and the two
 Jacobians are rank 1, so the minimal cover of each is exact and analytic. The per-entry
-cancellation index is constant across outputs: `kappa_j = 1 + g_j / (delta * abs(p_j))` on the
-support, `1` off it — more quartets or smaller `delta`, larger `kappa`; `support` restricts the
-cancellation to a column subset, making the `kappa` profile anisotropic.
+cancellation index is constant across outputs: `xi_j = 1 + g_j / (delta * abs(p_j))` on the
+support, `1` off it — more quartets or smaller `delta`, larger `xi`; `support` restricts the
+cancellation to a column subset, so `xi` differs between columns.
 
 `sigma` widens the log-magnitude spread of the quartet coefficients *and* of the output scales
 `q`, whose spread sets the sum/max merge gap `sum(abs, q)/maximum(abs, q)` — the effective
@@ -1045,8 +1045,8 @@ function jacobian_cancellation(
         mvec = ab .* x0S
         u = rand(rng, ns) .* 0.5 .- 0.25
         u .-= (sum(u .* mvec) / sum(abs2, mvec)) .* mvec
-        rho = maximum(abs, u)
-        rho > 0.45 && (u .*= 0.45 / rho)
+        umax = maximum(abs, u)
+        umax > 0.45 && (u .*= 0.45 / umax)
         t = 0.5 .+ u
         push!(as_, a)
         push!(bs_, b)

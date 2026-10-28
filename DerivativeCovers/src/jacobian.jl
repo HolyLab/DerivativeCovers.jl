@@ -568,7 +568,7 @@ struct MaxMerge <: MergeRule end
 The sign-averaged pair: [`balance_cover`](@ref)'s marginal iteration run in quadrature on
 `R` ([`quadrature_surrogate`](@ref)),
 
-    a_k ← sqrt((1/ρ_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/γ_j) ∑_k R_kj² / a_k²),
+    a_k ← sqrt((1/r_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/c_j) ∑_k R_kj² / a_k²),
 
 followed by the final b-step `b_j = sqrt(∑_k R_kj² / a_k²)`. Squared, this is the
 [`SumMerge`](@ref) alternation applied to the squared channel `Ũ⁽²⁾ = R.^2` with factors
@@ -585,8 +585,8 @@ The pair is a sign-averaged cover, **not a cover of `J`**. The final b-step give
 `R <= Ũ`, with equality only where an entry has a single path, so `a_k b_j` can fall below `Ũ_kj`,
 and below `abs(J_kj)` where several paths add with the same sign. If each parent slot's local
 partial carries an independent, equiprobable sign, `R_kj² = E[J_kj²]`, and at convergence the pair
-standardizes the signed Jacobian in expectation: the normalized iterate `(a, b ./ sqrt.(γ))` has
-expected row sums of squares `∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and
+standardizes the signed Jacobian in expectation: the normalized iterate `(a, b ./ sqrt.(c))` has
+expected row sums of squares `∑_j E[J_kj²] / (a_k² b_j² / c_j) = r_k` and column sums `c_j`, and
 the returned `b` has expected column sums of squares `1`.
 """
 struct SignAveragedMerge <: MergeRule end
@@ -1277,10 +1277,10 @@ _target_nonconvergence(maxiter, delta, rtol) = error(
 # Overrelaxation of the targeted alternation. In the log-scales `x = log a`, `y = log b`, the
 # alternation is block coordinate descent on the convex function
 # `∑_kj Ũ_kj exp(-x_k - y_j) + ∑_k r_k x_k + ∑_j c_j y_j`, and its restriction to one `x_k` is
-# `r_k ψ(x_k - F_k)` plus a constant, with `F_k` the plain step and `ψ(z) = exp(-z) - 1 + z`
+# `r_k exc(x_k - F_k)` plus a constant, with `F_k` the plain step and `exc(u) = exp(-u) - 1 + u`
 # (likewise for `y_j`). The relaxed step moves to `F_k + (1 - w)(x_k - F_k)`, and is taken only if
-# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `ψ`; otherwise `w - 1` is halved a few
-# times before falling back to the plain step. Every half-step thus removes a fixed fraction of
+# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `exc`; otherwise `w - 1` is halved a
+# few times before falling back to the plain step. Every half-step thus removes a fixed fraction of
 # what the plain one would, which keeps the iteration convergent for any `ω < 2`.
 #
 # `ω` is estimated as in MatrixCovers' power-mean solver: a few plain rounds measure the
@@ -1401,8 +1401,8 @@ _relax_window(ω) = _RELAX_WINDOW + round(Int, _RELAX_WINDOW_SCALE / (2 - ω))
 _relax_omega_max(::Type{T}, rtol) where {T} =
     clamp(2 - 64 * eps(T) / T(rtol), one(T), T(_RELAX_OMEGA_MAX))
 
-# `ψ(z) = exp(-z) - 1 + z`, the excess of one block's objective over its minimum, per unit target.
-_relax_ψ(z) = expm1(-z) + z
+# `exc(u) = exp(-u) - 1 + u`, the excess of one block's objective over its minimum, per unit target.
+_relax_excess(u) = expm1(-u) + u
 
 # Move each live `x[i]` from its current value toward the plain step `F[i]`, overrelaxed by `ω` in
 # log space and safeguarded as described at `_balance_targets_relaxed`. Entries with a zero target
@@ -1415,10 +1415,10 @@ function _relaxed_step!(x, F, tgt, ω)
         imb = max(imb, abs(expm1(-δ)))
         xi = F[i]
         if ω != 1
-            ψδ = _relax_ψ(δ)
+            excδ = _relax_excess(δ)
             w = ω
             for _ in 0:_RELAX_NBACKTRACK
-                if _relax_ψ((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * ψδ
+                if _relax_excess((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * excδ
                     xi = F[i] * exp((1 - w) * δ)
                     break
                 end

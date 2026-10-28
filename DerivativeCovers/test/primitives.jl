@@ -197,7 +197,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     end
 
     # A square written `r*r` records a binary multiplication node, whose two identical parents the
-    # split treats as distinct: its atom is `2*rho*utilde_r` against the true contribution
+    # split treats as distinct: its atom is `2*eta*utilde_r` against the true contribution
     # `utilde_r*utilde_r'`, a factor 2 on the outer product. Where the squares carry the program's
     # whole curvature that is exactly sqrt(2) on every cover coordinate. `B` is untouched, which
     # places the whole cost in the split rather than in the elementwise bound.
@@ -409,11 +409,11 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         # is still there for the next node.
         site = DerivativeCovers.ElementalSite(3.0, (1.0, 2.0))
         r = DerivativeCovers.split_ratio(nothing, Float64)
-        rho = [1.0, 2.0]
+        eta = [1.0, 2.0]
         @test !DerivativeCovers.cover_slots!(
-            rho, DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
+            eta, DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
         )
-        @test rho == [1.0, 2.0]
+        @test eta == [1.0, 2.0]
         # The allocating form answers the same question with `nothing`.
         @test DerivativeCovers.cover_slots(
             DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)

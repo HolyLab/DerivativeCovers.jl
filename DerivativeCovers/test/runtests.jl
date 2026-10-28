@@ -45,20 +45,20 @@ function forward_corner(f, x0; scales = nothing, ratio = nothing)
     T = eltype(t)
     seed = zeros(DerivativeCovers.boundtype(T), nnodes(t))
     seed[outidx] = 1
-    rhos, _ = local_covers(t, abs_reverse(t, seed); scales, ratio)
+    etas, _ = local_covers(t, abs_reverse(t, seed); scales, ratio)
     u = [
         DerivativeCovers.tobound.(T, DerivativeCovers.magnitude.(g))
         for g in intermediate_gradients(t)
     ]
-    return DerivativeCovers.tomag(T, merge_atoms(t, rhos, u)[2])
+    return DerivativeCovers.tomag(T, merge_atoms(t, etas, u)[2])
 end
 
 # The staged route to the channels `cover_hessian` fuses into one sweep: finish the adjoints, form
 # every local cover, then propagate the linear and squared seeds. Returns `(h_sum, h_var)`.
 function staged_channels(t, outidx)
     n = t.ninputs
-    rhos, theta = local_covers(t, adjoints(t, outidx))
-    abar, qbar = dependency_sweep(t, theta, squared_seeds(t, rhos))
+    etas, theta = local_covers(t, adjoints(t, outidx))
+    abar, qbar = dependency_sweep(t, theta, squared_seeds(t, etas))
     return DerivativeCovers.plainvalue.(abar[1:n]), sqrt.(qbar[1:n])
 end
 
@@ -624,7 +624,7 @@ include("maxpath.jl")
             @test resd.h_sum ≈ res.h_sum ./ d rtol = 1.0e-12
             @test resd.h_quad ≈ res.h_quad ./ d rtol = 1.0e-12
 
-            # f -> c*f scales every adjoint by c, hence every rho and every h by sqrt(c).
+            # f -> c*f scales every adjoint by c, hence every eta and every h by sqrt(c).
             c = 7.3
             resc = cover_hessian(WithDiagnostics(), x -> c * f(x), x0)
             @test resc.h_sum ≈ sqrt(c) .* res.h_sum rtol = 1.0e-12
@@ -639,16 +639,16 @@ include("maxpath.jl")
                 (1.0, 3.0, 1.0, 0.0, 0.0),      # no ratio to read: the geometric mean
                 (2.0, 5.0, 1.0, 1.0, 0.0),
             )
-            rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
-            @test rho1 >= sqrt(c11) * (1 - 1.0e-12)
-            @test rho2 >= sqrt(c22) * (1 - 1.0e-12)
-            @test rho1 * rho2 >= c12 * (1 - 1.0e-12)
+            eta1, eta2 = balanced_split(c11, c12, c22, z1, z2)
+            @test eta1 >= sqrt(c11) * (1 - 1.0e-12)
+            @test eta2 >= sqrt(c22) * (1 - 1.0e-12)
+            @test eta1 * eta2 >= c12 * (1 - 1.0e-12)
         end
         # With both parent values positive the split is balanced against them: for a pure
-        # multiplication node (c11 = c22 = 0), rho1/rho2 = z2/z1 and rho1*rho2 = c12.
-        rho1, rho2 = balanced_split(0.0, 1.0, 0.0, 2.0, 8.0)
-        @test rho1 / rho2 ≈ 8.0 / 2.0
-        @test rho1 * rho2 ≈ 1.0
+        # multiplication node (c11 = c22 = 0), eta1/eta2 = z2/z1 and eta1*eta2 = c12.
+        eta1, eta2 = balanced_split(0.0, 1.0, 0.0, 2.0, 8.0)
+        @test eta1 / eta2 ≈ 8.0 / 2.0
+        @test eta1 * eta2 ≈ 1.0
 
         # The split lands on the feasible segment [sqrt(c11), c12/sqrt(c22)], so the cover is
         # exactly tight on the off-diagonal however extreme the entries and values. A vanishing
@@ -669,40 +669,40 @@ include("maxpath.jl")
                 )
                 continue
             end
-            rho1, rho2 = balanced_split(c11, c12, c22, z1, z2)
-            @test isfinite(rho1) && isfinite(rho2)
-            @test rho1 >= sqrt(c11) * (1 - 1.0e-12)
-            @test rho2 >= sqrt(c22) * (1 - 1.0e-12)
-            @test rho1 * rho2 ≈ c12 rtol = 1.0e-12
+            eta1, eta2 = balanced_split(c11, c12, c22, z1, z2)
+            @test isfinite(eta1) && isfinite(eta2)
+            @test eta1 >= sqrt(c11) * (1 - 1.0e-12)
+            @test eta2 >= sqrt(c22) * (1 - 1.0e-12)
+            @test eta1 * eta2 ≈ c12 rtol = 1.0e-12
         end
 
         # Continuity where the off-diagonal constraint takes over from the diagonal ones: at
         # c12^2 == c11*c22 the segment collapses to the diagonal cover (sqrt(c11), sqrt(c22)).
         for eps in (1.0e-2, 1.0e-4, 1.0e-8)
-            rho1, rho2 = balanced_split(1.0, 10.0 * (1 + eps), 100.0, 1.0, 1.0)
-            @test rho1 ≈ 1.0 rtol = 2eps
-            @test rho2 ≈ 10.0 rtol = 2eps
+            eta1, eta2 = balanced_split(1.0, 10.0 * (1 + eps), 100.0, 1.0, 1.0)
+            @test eta1 ≈ 1.0 rtol = 2eps
+            @test eta2 ≈ 10.0 rtol = 2eps
         end
 
         # Continuity as a parent value vanishes: the equalizing target diverges, but the
         # segment endpoint it is clamped to does not.
         for z1 in (1.0e-3, 1.0e-6, 1.0e-12, 0.0)
-            rho1, rho2 = balanced_split(1.0, 1.0, 1.0e-2, z1, 1.0)
-            @test rho1 ≈ 10.0
-            @test rho2 ≈ 0.1
+            eta1, eta2 = balanced_split(1.0, 1.0, 1.0e-2, z1, 1.0)
+            @test eta1 ≈ 10.0
+            @test eta2 ≈ 0.1
         end
 
         # A value ratio extreme enough to overflow or underflow the equalizing target still
         # lands on the endpoint it was heading for, rather than reverting to the interior.
         for (z1, z2) in ((1.0, 1.0e300), (1.0e-300, 1.0e300), (1.0e-300, 1.0), (1.0, Inf))
-            rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
-            @test rho1 ≈ 10.0
-            @test rho2 ≈ 1.0
+            eta1, eta2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
+            @test eta1 ≈ 10.0
+            @test eta2 ≈ 1.0
         end
         for (z1, z2) in ((1.0e300, 1.0), (1.0e300, 1.0e-300), (1.0, 1.0e-300), (Inf, 1.0))
-            rho1, rho2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
-            @test rho1 ≈ 1.0
-            @test rho2 ≈ 10.0
+            eta1, eta2 = balanced_split(1.0, 10.0, 1.0, z1, z2)
+            @test eta1 ≈ 1.0
+            @test eta2 ≈ 10.0
         end
 
         # Where the segment has no endpoint to fall back on, the equalizing point is the answer
@@ -728,7 +728,7 @@ include("maxpath.jl")
             0.0, 1.0e300, 0.0, 1.0e-300, 1.0e300
         )
         # So is a segment with no endpoint and a pair with no ratio, which between them leave
-        # nothing to place `rho1` by.
+        # nothing to place `eta1` by.
         @test_throws "outside the floating-point range" balanced_split(
             0.0, 3.0, 0.0, 0.0, 1.0
         )
@@ -739,10 +739,10 @@ include("maxpath.jl")
         function split_select(c11, c12, c22, z1, z2)
             lo = sqrt(c11)
             hi = c12 / sqrt(c22)
-            rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
+            eta1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
             fallback = clamp(DerivativeCovers.split_fallback(lo, hi, c12, z1, z2), lo, hi)
-            rho1 = ifelse(isfinite(rho1) & (rho1 > 0), rho1, fallback)
-            return rho1, c12 / rho1
+            eta1 = ifelse(isfinite(eta1) & (eta1 > 0), eta1, fallback)
+            return eta1, c12 / eta1
         end
         same(x, y) = x === y || (isnan(x) && isnan(y))
         vals = (0.0, 1.0e-8, 1.0e-3, 0.5, 1.0, 2.0, 7.3, 1.0e3, 1.0e8)
@@ -1211,8 +1211,8 @@ include("maxpath.jl")
         @test all(severity(vc) .>= 1 / GATE)
         @test all(isfinite, severity(vc))
 
-        rhos, _ = local_covers(t, adjoints(t, outidx))
-        theta2 = squared_seeds(t, rhos)
+        etas, _ = local_covers(t, adjoints(t, outidx))
+        theta2 = squared_seeds(t, etas)
         u2 = squared_sensitivities(t)
         ref = [sqrt(sum(theta2[j] * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
         @test vc.h_var ≈ ref rtol = 1.0e-12
@@ -1285,7 +1285,7 @@ include("maxpath.jl")
             @test vcd.h_var ≈ vc.h_var ./ d rtol = 1.0e-12
             @test severity(vcd) ≈ severity(vc) rtol = 1.0e-12
 
-            # f -> c*f scales every rho by sqrt(c), hence every squared seed by c.
+            # f -> c*f scales every eta by sqrt(c), hence every squared seed by c.
             c = 7.3
             vcc = cover_hessian(x -> c * f(x), x0)
             @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol = 1.0e-12

@@ -258,12 +258,12 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     groups = nls_partition(nnodes(t), sqidx; ngroups)
     gres = maximum(groups) - 1
     vbar = adjoints(t, outidx)
-    rhos, _ = local_covers(t, vbar; check, scales, ratio)
-    Abar = abs_reverse(t, group_seeds(t, rhos, groups))
+    etas, _ = local_covers(t, vbar; check, scales, ratio)
+    Abar = abs_reverse(t, group_seeds(t, etas, groups))
     T = eltype(t)
     h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n])
     h_gn = tomag(T, [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n])
-    Qbar = _reverse_sweep(_sqslot, t, _nls_squared_seeds(t, rhos, groups, gres + 1, residx))
+    Qbar = _reverse_sweep(_sqslot, t, _nls_squared_seeds(t, etas, groups, gres + 1, residx))
     h_var_gn = tomag(T, [sqrt(Qbar[1, j]) for j in 1:n])
     h_var = tomag(T, [sqrt(Qbar[1, j] + Qbar[2, j]) for j in 1:n])
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var, h_var_gn)
@@ -272,17 +272,17 @@ end
 # Seeds of the two squared channels. Row 1 places unit weight at each residual, as
 # `gramvariance` does; row 2 holds the `squared_seeds` of the nodes in the residual-curvature
 # group `curv`.
-function _nls_squared_seeds(t::Tape{T}, rhos, groups, curv, residx) where {T}
+function _nls_squared_seeds(t::Tape{T}, etas, groups, curv, residx) where {T}
     Theta2 = zeros(boundtype(T), 2, nnodes(t))
     for k in residx
         Theta2[1, k] += 1
     end
     for k in (t.ninputs + 1):nnodes(t)
         groups[k] == curv || continue
-        rho = rhos[k]
-        isempty(rho) && continue
+        eta = etas[k]
+        isempty(eta) && continue
         for (i, p) in enumerate(t.parents[k])
-            Theta2[2, p] += rho[i]^2
+            Theta2[2, p] += eta[i]^2
         end
     end
     return Theta2
