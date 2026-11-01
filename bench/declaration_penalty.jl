@@ -71,13 +71,13 @@ function firstorder_gap(F, z)
 end
 
 """
-    looseness(fdec, fprim, z) -> (; scale, sum_dec, sum_prim, quad_dec, quad_prim)
+    excess(fdec, fprim, z) -> (; scale, sum_dec, sum_prim, quad_dec, quad_prim)
 
 `1/max_coverage_ratio` of both merges for two recordings of one function. `scale` is the largest entry of
 the reference Hessian; a `scale` near zero means the ratios describe a vanishing matrix and carry
 no information.
 """
-function looseness(fdec, fprim, z)
+function excess(fdec, fprim, z)
     H = ForwardDiff.hessian(fdec, z)
     dd = cover_hessian(WithDiagnostics(), fdec, z)
     dp = cover_hessian(WithDiagnostics(), fprim, z)
@@ -114,13 +114,13 @@ end
 
 "`head(op(z))`: the op sees the inputs directly."
 function penalty_table()
-    println("=== Declaration penalty: looseness of head(op(z)), decomposed vs one submap node ===")
+    println("=== Declaration penalty: excess of head(op(z)), decomposed vs one submap node ===")
     penalty_header("regime")
     for (opname, F, regimes) in OPS, (hname, head) in HEADS, n in SIZES, (rlabel, gen) in regimes
         rng = MersenneTwister(11 + n)
         z = gen(n, rng)
         c0 = randn(rng, n)
-        r = looseness(z -> head(c0, F(z)), z -> head(c0, submap(F, z)), z)
+        r = excess(z -> head(c0, F(z)), z -> head(c0, submap(F, z)), z)
         penalty_row(opname, hname, n, rlabel, r)
     end
     return nothing
@@ -135,7 +135,7 @@ function embedded_table()
         z = randn(rng, n)
         c0 = randn(rng, n)
         A = randn(rng, n, n) ./ sqrt(n)
-        r = looseness(z -> head(c0, F(A * z)), z -> head(c0, submap(F, A * z)), z)
+        r = excess(z -> head(c0, F(A * z)), z -> head(c0, submap(F, A * z)), z)
         penalty_row(opname, hname, n, "", r)
     end
     return nothing
@@ -158,7 +158,7 @@ function controls()
     println("=== Controls ===")
     for n in SIZES, spread in (0.5, 2.0, 5.0)
         z = spread .* randn(MersenneTwister(11 + n), n)
-        r = looseness(logsumexp, z -> only(submap(logsumexp, z)), z)
+        r = excess(logsumexp, z -> only(submap(logsumexp, z)), z)
         @printf(
             "logsumexp n=%2d spread=%.1f  sum forms agree: %-5s  quad: %.4g vs %.4g (pen %.2f)\n",
             n, spread, r.sum_dec ≈ r.sum_prim, r.quad_dec, r.quad_prim, r.quad_prim / r.quad_dec

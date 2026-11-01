@@ -10,21 +10,21 @@
 # estimates how much of that cover comes from overlapping paths.
 
 """
-    squared_seeds(t::Tape, rhos) -> theta2
+    squared_seeds(t::Tape, etas) -> theta2
 
-Squared seed weights: `theta2[j]` sums `rhos[k][i]^2` over every node `k` and parent slot `i`
+Squared seed weights: `theta2[j]` sums `etas[k][i]^2` over every node `k` and parent slot `i`
 with `t.parents[k][i] == j`. This is the squared-channel counterpart of the linear seeds `theta`
 that [`local_covers`](@ref) returns, and it seeds the squared channel of
 [`dependency_sweep`](@ref).
 """
-function squared_seeds(t::Tape{T}, rhos::AbstractVector) where {T}
+function squared_seeds(t::Tape{T}, etas::AbstractVector) where {T}
     N = nnodes(t)
     theta2 = zeros(magtype(T), N)
     for k in (t.ninputs + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
+        eta = etas[k]
+        isempty(eta) && continue
         for (i, p) in enumerate(t.parents[k])
-            theta2[p] += rho[i]^2
+            theta2[p] += eta[i]^2
         end
     end
     return theta2

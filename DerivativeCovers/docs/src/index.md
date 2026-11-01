@@ -170,7 +170,7 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
   algorithms.
 - [Scale covariance](@ref) states when a cover transforms exactly with the
   units of the inputs.
-- [Tightness](@ref) describes how to measure a cover's looseness and where it
+- [Tightness](@ref) describes how to measure a cover's excess and where it
   comes from.
 - [Covers over a box](@ref) extends the bounds from a point to a box of
   inputs.
@@ -179,5 +179,5 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 - The reference pages list the public API:
   [Computing and using covers](@ref), the [Extension interface](@ref), and the
   companion package [DerivativeCoverProblems](@ref). Names that are public but
-  not exported, such as `equilibrate`, are called with the `DerivativeCovers.`
+  not exported, such as `cover_normalize`, are called with the `DerivativeCovers.`
   prefix.

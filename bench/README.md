@@ -73,7 +73,7 @@ atom, which is what a declaration does to curvature. The two scripts therefore m
 steps toward a representation suitable for traced backends; most of the resulting loss appears in
 the quadrature merge.
 
-## `equilibration_rounds.jl`
+## `balancing_rounds.jl`
 
 The cost and tightness improvement of the alternation in
 [`balance_cover`](../DerivativeCovers/src/jacobian.jl). The iteration is unbounded and
@@ -124,7 +124,7 @@ The tape form runs `O(L)` sweeps without forming `Ũ` only for `SumMerge`/`:marg
 needs row sums of `log Ũ`, which no absolute-value sweep produces, so it must materialize the
 surrogate at `O(mL)` and then spend `O(mn)` per round. The gap widens with the output count —
 2.4x the allocations of the sweep path at `m = 10`, 93x at `m = 640` — which makes `:marginal` the
-only equilibration rule compatible with the target `O(L)` cost, despite its convergence failures.
+only `arule` compatible with the target `O(L)` cost, despite its convergence failures.
 
 ## `scalarization_sensitivity.jl`
 
@@ -150,7 +150,7 @@ while `dot(z, A*z)/2` loses everything.
 What each of a cover's two sign channels is worth. The intermediate gradients `∇v_j` carry an
 input's influence forward to each node, the adjoints `vbar_k` carry the output's sensitivity back,
 and either can be propagated with signs or in absolute-value arithmetic. The script's
-`cover_lattice` computes all four combinations from one tape, so the looseness of the default cover
+`cover_lattice` computes all four combinations from one tape, so the excess of the default cover
 splits into a gradient-side part, an adjoint-side part, and a residue neither channel reaches. The
 script scores the four corners on the `DerivativeCoverProblems` families and on array-op heads,
 decomposes the gap per coordinate, sweeps the reconvergence that creates it, and isolates the
@@ -171,7 +171,7 @@ tapeless corner wins where intermediate-gradient cancellation is the larger of t
 
 **Reconvergence is the whole mechanism.** A program whose graph is a tree reaches each node from
 each input along one path, so no sign anywhere can cancel and all four corners coincide: at
-`sharing = 0` the median looseness is 1.001 in every column. Raising `random_dag`'s sharing over
+`sharing = 0` the median excess is 1.001 in every column. Raising `random_dag`'s sharing over
 paired draws carries the adjoint gain from 1.000 to 1.224, rising at every step but one. The
 gradient gain shows no such trend, and the `atoms` column says why the endpoints are not
 size-matched — tree generation stops early, at a median 10 atoms against 45–49 above zero.
@@ -187,7 +187,7 @@ by geometric mean and 12.2x on a single coordinate.
 whose two variants share every node value, every first partial, and every adjoint, and differ only
 in the sign of the constants multiplying two of each quartet's four squares. Both channels
 therefore have identical work to do in both variants, and the Hessian of the cancel variant
-collapses onto its rank-1 `delta` term. All four corners report the same looseness there, 91x at
+collapses onto its rank-1 `delta` term. All four corners report the same excess there, 91x at
 one quartet, 2212x at four, 37390x at sixteen. The triangle inequality across nodes discards those
 signs before any channel is chosen, so no amount of sign-keeping inside either channel touches
 them.
@@ -196,4 +196,4 @@ Seven of eleven test problems show all four corners equal. Most have nothing to 
 carrying their whole Hessian on one quadratic node — but `dag shared` is not among those: its
 adjoint gain is 1.09x by geometric mean and 1.60x on its worst coordinate, and the corners
 nonetheless coincide because the entry that binds its cover is already exact. Channel gains are
-per-coordinate; looseness is the worst entry, and the two need not move together.
+per-coordinate; excess is the worst entry, and the two need not move together.

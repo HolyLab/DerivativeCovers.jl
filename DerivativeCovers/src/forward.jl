@@ -42,7 +42,7 @@ derives both from the point it is given, so a `Vector` input propagates in `Vect
 `StaticVector` input in `StaticVector`s. `zerogradient` and `zerochannel` are zeros of the two
 storages, which fresh channels are copied from; the input variables share `zerochannel` as their
 cover channel. `scratch` is the atom accumulator, written in place when `SM` is mutable and left
-alone when it is not; and `rho` holds the slot weights of the elemental being covered.
+alone when it is not; and `eta` holds the slot weights of the elemental being covered.
 
 It is a reference type so that every variable of the propagation holds a pointer to the one
 context: storing an immutable into a variable's field would copy it, at one allocation per node.
@@ -54,10 +54,10 @@ mutable struct ForwardContext{T, S <: AbstractVector{T}, M, SM <: AbstractVector
     const zerogradient::S
     const zerochannel::SM
     const scratch::SM
-    const rho::Vector{M}
+    const eta::Vector{M}
 
-    ForwardContext{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, rho) where {T, S, M, SM} =
-        new{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, rho)
+    ForwardContext{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta) where {T, S, M, SM} =
+        new{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta)
 end
 
 function ForwardContext{T}(ratio, check, zerogradient::AbstractVector{T}, zerochannel::AbstractVector) where {T}
@@ -308,19 +308,19 @@ forward_scale(x::FVar) = SplitScale(magnitude(value(x)), ForwardScale(x.sigma, x
 
 # The cover recursion of one elemental, in the squared channel:
 #
-#     G_k = sum_i magnitude(d_i) * G_i + sum over atoms of (sum_{i in atom} rho_i * magnitude.(g_i))^2
+#     G_k = sum_i magnitude(d_i) * G_i + sum over atoms of (sum_{i in atom} eta_i * magnitude.(g_i))^2
 #
 # The first term is folded in by the callers, which have the partials; this adds the second. The
 # atoms are assembled exactly as `merge_atoms` assembles them on a tape, with `av = 1` in place of
 # the adjoint, which is the one factor a forward pass cannot know. `G` comes back rather than
 # being filled: immutable storage cannot be filled.
 function add_atoms(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
-    rho = ctx.rho
-    cover_slots!(rho, C, ctx.ratio, site, one(eltype(G)), sl; check = ctx.check) || return G
+    eta = ctx.eta
+    cover_slots!(eta, C, ctx.ratio, site, one(eltype(G)), sl; check = ctx.check) || return G
     for atom in atom_slots(C, length(gs))
         s = zeroscratch(ctx)
         for i in atom
-            r = rho[i]
+            r = eta[i]
             r == 0 && continue
             s = add_scaled_abs!(s, r, gs[i])
         end
@@ -455,9 +455,9 @@ variable the propagation carries the value, the intermediate gradient `∇v`, a 
 
     ∇v_k    = sum_i d_i * ∇v_i
     sigma_k = sum_i magnitude(d_i) * sigma_i
-    G_k     = sum_i magnitude(d_i) * G_i + sum over atoms of (sum_{i in atom} rho_i * magnitude.(∇v_i))^2
+    G_k     = sum_i magnitude(d_i) * G_i + sum over atoms of (sum_{i in atom} eta_i * magnitude.(∇v_i))^2
 
-with `rho` the same local cover a reverse sweep builds, except that the adjoint factor is `1`: a
+with `eta` the same local cover a reverse sweep builds, except that the adjoint factor is `1`: a
 forward pass cannot know how the output depends on the node it is at. The cover is `sqrt.(G)`.
 
 The gradient is in the element type `T = float(eltype(x0))` and the cover in

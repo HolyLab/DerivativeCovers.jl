@@ -65,9 +65,9 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         ),
     )
 
-    # Roundoff slack on the covering inequality, as in the Float64 tests.
-    slack = 1 + sqrt(eps())
-    covers(H, h) = all(abs.(H) .<= h * h' .* slack)
+    # Roundoff tolerance on the covering inequality, as in the Float64 tests.
+    tol = 1 + sqrt(eps())
+    covers(H, h) = all(abs.(H) .<= h * h' .* tol)
 
     @testset "covers hold over the box — $name" for (name, f, lo, hi) in box_programs
         X = interval.(lo, hi)
@@ -90,7 +90,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             ok_grad &= all(in_interval.(g, c.grad)) && all(in_interval.(g, d.grad))
             ok_cover &= covers(H, c.h_sum)
             ok_diag &= covers(H, d.h_sum) && covers(H, d.h_quad) &&
-                all(abs.(H) .<= d.B .* slack)
+                all(abs.(H) .<= d.B .* tol)
         end
         @test ok_grad
         @test ok_cover
@@ -152,14 +152,14 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         hyb = [cover_jacobian_hybrid(r, X, G) for G in 1:3]
         @test all(p -> p.b isa Vector{Float64}, hyb)
 
-        dominates(A, a, b) = all(A .<= a .* b' .* slack)
+        dominates(A, a, b) = all(A .<= a .* b' .* tol)
         ok = true
         for x in samples(Xoshiro(29), lo, hi)
             A = abs.(ForwardDiff.jacobian(r, x))
             ok &= all(c -> dominates(A, c.a, c.b_sum), cs)
             ok &= all(ds) do d
                 dominates(A, d.a, d.b_sum) && dominates(A, d.a, d.b_quad) &&
-                    dominates(A, d.a, d.b_max) && all(A .<= d.Utilde .* slack)
+                    dominates(A, d.a, d.b_max) && all(A .<= d.Utilde .* tol)
             end
             ok &= all(p -> dominates(A, p.a, p.b), hyb)
         end
@@ -184,8 +184,8 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             g = ForwardDiff.gradient(loss, x)
             ok_grad &= all(in_interval.(g, nc.grad)) && all(in_interval.(g, nd.grad))
             ok_cover &= covers(H, nc.h) && covers(H, nd.h) && covers(J' * J, nc.h_gn) &&
-                covers(J' * J, nd.h_gn) && all(abs.(J) .<= nd.Utilde .* slack) &&
-                all(abs.(J) .<= a .* b' .* slack)
+                covers(J' * J, nd.h_gn) && all(abs.(J) .<= nd.Utilde .* tol) &&
+                all(abs.(J) .<= a .* b' .* tol)
         end
         @test ok_grad
         @test ok_cover
@@ -201,14 +201,14 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         hv = DerivativeCovers.gramvariance(t, outidxs, w)
         @test hv isa Vector{Float64}
         @test DerivativeCovers.gramvariance!(zeros(t.ninputs), t, outidxs, w) == hv
-        @test all(hv .<= gramcover(t, outidxs, w) .* slack)
+        @test all(hv .<= gramcover(t, outidxs, w) .* tol)
         nc = cover_nls(r, X)
         @test nc.h_var_gn isa Vector{Float64}
-        @test all(nc.h_var_gn .<= nc.h_gn .* slack)
+        @test all(nc.h_var_gn .<= nc.h_gn .* tol)
         ok = true
         for x in samples(Xoshiro(43), lo, hi)
             tx, ox = tape_function(r, x)
-            ok &= all(DerivativeCovers.gramvariance(tx, ox, w) .<= hv .* slack)
+            ok &= all(DerivativeCovers.gramvariance(tx, ox, w) .<= hv .* tol)
         end
         @test ok
     end
@@ -226,7 +226,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             ok = true
             for x in samples(Xoshiro(47), lo, hi)
                 Rx = DerivativeCovers.quadrature_surrogate(tape_function(r, x)...)
-                ok &= all(Rx .<= R .* slack) && all(Rx .<= v.a .* v.b' .* slack)
+                ok &= all(Rx .<= R .* tol) && all(Rx .<= v.a .* v.b' .* tol)
             end
             @test ok
         end

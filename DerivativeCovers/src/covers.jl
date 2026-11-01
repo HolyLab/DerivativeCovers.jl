@@ -208,10 +208,10 @@ function intermediate_gradients(t::Tape{T}) where {T}
 end
 
 """
-    merge_atoms(t::Tape, rhos, u) -> (h_sum, h_quad)
+    merge_atoms(t::Tape, etas, u) -> (h_sum, h_quad)
 
-Both merges of the cover atoms, from per-node cover slots `rhos` and an intermediate-gradient
-channel `u`. An atom's cover vector is `s_atom = sum_{i in atom} rhos[k][i] * u[P_k[i]]`, and the
+Both merges of the cover atoms, from per-node cover slots `etas` and an intermediate-gradient
+channel `u`. An atom's cover vector is `s_atom = sum_{i in atom} etas[k][i] * u[P_k[i]]`, and the
 merges are `h_sum = sum_atoms s_atom` and `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`.
 
 `u[j]` must be nonnegative and dominate `abs.(∇v_j)` entrywise for the results to cover; both
@@ -222,22 +222,22 @@ lose its contribution, one named twice would be counted twice.
 
 Costs `O(n * L)` time and `O(n)` memory beyond `u`.
 """
-function merge_atoms(t::Tape{T}, rhos::AbstractVector, u::AbstractVector) where {T}
+function merge_atoms(t::Tape{T}, etas::AbstractVector, u::AbstractVector) where {T}
     n, N = t.ninputs, nnodes(t)
     M = boundtype(T)
     ssum = zeros(M, n)          # sum_k s_k
     ssq = zeros(M, n)           # sum over atoms of s_atom.^2
     sk = zeros(M, n)
     for k in (n + 1):N
-        rho = rhos[k]
-        isempty(rho) && continue
+        eta = etas[k]
+        isempty(eta) && continue
         ps = t.parents[k]
         for atom in atom_slots(t.Cs[k], length(ps))
             fill!(sk, 0)
             for i in atom
                 up = u[ps[i]]
                 for q in 1:n
-                    sk[q] += rho[i] * up[q]
+                    sk[q] += eta[i] * up[q]
                 end
             end
             for q in 1:n
@@ -256,7 +256,7 @@ The elementwise bound
 `B = sum_k magnitude(vbar[k]) * sum_{i,j} magnitude(C^k[i,j]) * utilde_i * utilde_j'`, which
 satisfies `B >= abs.(H)` entrywise, in [`boundtype`](@ref) of the tape's element type.
 Diagnostic only: `B` is `n × n`, and the two inequalities it discards — cancellation along paths
-(inside each `utilde`) and cancellation across elementals — are exactly the looseness this bound
+(inside each `utilde`) and cancellation across elementals — are exactly the excess this bound
 trades for its cost.
 
 Each node's term is accumulated by [`bound_contribution!`](@ref), which every [`Curvature`](@ref)
@@ -295,58 +295,58 @@ nor overflows.
 offdiag_active(c11, c12, c22) = c12 > sqrt(c11) * sqrt(c22)
 
 """
-    balanced_split(c11, c12, c22, z1, z2) -> (rho1, rho2)
+    balanced_split(c11, c12, c22, zeta1, zeta2) -> (eta1, eta2)
 
 Rank-1 cover of an off-diagonal-active 2×2 block `[c11 c12; c12 c22]`, which requires
-`c12^2 > c11*c22` (see [`offdiag_active`](@ref)). Returns `rho1 >= sqrt(c11)` and
-`rho2 >= sqrt(c22)` with `rho1*rho2 == c12`: the cover is exactly tight on the off-diagonal, so
+`c12^2 > c11*c22` (see [`offdiag_active`](@ref)). Returns `eta1 >= sqrt(c11)` and
+`eta2 >= sqrt(c22)` with `eta1*eta2 == c12`: the cover is exactly tight on the off-diagonal, so
 no cover of the block is smaller in both entries.
 
-Those constraints leave a one-parameter family. The scale references `z1`, `z2` — one per parent,
-supplied by [`split_block`](@ref): the parent value magnitudes wherever they carry a scale, the
-weighted absolute sensitivities where they do not — pick a member, giving `rho_i` the units of
+Those constraints leave a one-parameter family. The scale references `zeta1`, `zeta2` — one per
+parent, supplied by [`split_block`](@ref): the parent value magnitudes wherever they carry a scale,
+the weighted absolute sensitivities where they do not — pick a member, giving `eta_i` the units of
 `sqrt(f)/[v_{p_i}]` and making the cover scale-covariant. The result is continuous in all five
-arguments except where a vanishing scale reference meets a degenerate block; see the extended
-help.
+arguments except where a vanishing scale reference meets a degenerate block; see the extended help.
 
 # Extended help
 
-The three constraints confine `rho1` to the segment `[sqrt(c11), c12/sqrt(c22)]` — nonempty
-precisely because `c12^2 > c11*c22` — and fix `rho2 = c12/rho1`. Every returned cover lies on
+The three constraints confine `eta1` to the segment `[sqrt(c11), c12/sqrt(c22)]` — nonempty
+precisely because `c12^2 > c11*c22` — and fix `eta2 = c12/eta1`. Every returned cover lies on
 this segment, which is what makes it entrywise unimprovable: a competitor smaller in both
-entries would have `rho1*rho2 < c12`.
+entries would have `eta1*eta2 < c12`.
 
 The position along the segment is the point that equalizes the value-weighted scales,
-`rho1*z1 == rho2*z2`, clamped to the segment when that point falls outside. Covariance follows:
-under a rescaling `v_i -> d_i*v_i` of the intermediate variables, `c_ij -> c_ij/(d_i*d_j)` and
-`z_i -> d_i*z_i`, so both endpoints and the equalizing point scale as `1/d_1`; `clamp` is
-positively homogeneous, so `rho_1 -> rho_1/d_1` and `rho_2 -> rho_2/d_2`.
+`eta1*zeta1 == eta2*zeta2`, clamped to the segment when that point falls outside. Covariance
+follows: under a rescaling `v_i -> lambda_i*v_i` of the intermediate variables,
+`c_ij -> c_ij/(lambda_i*lambda_j)` and `zeta_i -> lambda_i*zeta_i`, so both endpoints and the
+equalizing point scale as `1/lambda_1`; `clamp` is positively homogeneous, so
+`eta_1 -> eta_1/lambda_1` and `eta_2 -> eta_2/lambda_2`.
 
 Clamping is also what keeps the result continuous as a parent value vanishes: the equalizing
 point runs off to an endpoint, and the endpoint absorbs it. Nothing computes those limits
-separately, because floating-point arithmetic already carries them. `sqrt(c12*z2/z1)` is `Inf`
-at `z1 == 0` and `0` at `z2 == 0`, which `clamp` resolves to the upper and the lower endpoint;
-`c12/sqrt(c22)` is `Inf` at `c22 == 0`, placing the upper endpoint there. Only `z1 == z2 == 0`
+separately, because floating-point arithmetic already carries them. `sqrt(c12*zeta2/zeta1)` is `Inf`
+at `zeta1 == 0` and `0` at `zeta2 == 0`, which `clamp` resolves to the upper and the lower endpoint;
+`c12/sqrt(c22)` is `Inf` at `c22 == 0`, placing the upper endpoint there. Only `zeta1 == zeta2 == 0`
 leaves a `NaN` that no clamp resolves, and that is what reaches the fallback.
 
 That reasoning needs the endpoint being approached to be a positive finite scale, and it is
 not when the corresponding diagonal entry vanishes: `c22 == 0` puts the upper endpoint at
 infinity, `c11 == 0` puts the lower endpoint at zero. Nor is there any limit to take when both
-values vanish at once, since the equalizing point then depends on the ratio `z2/z1` alone. In
+values vanish at once, since the equalizing point then depends on the ratio `zeta2/zeta1` alone. In
 those cases the geometric mean of the endpoints is used, which is covariant and
 permutation-equivariant.
 
-So the result is continuous except at three families of inputs, where it is the ratio `z2/z1`
+So the result is continuous except at three families of inputs, where it is the ratio `zeta2/zeta1`
 that carries the information and the ratio is unavailable:
 
-  - `z1 == 0` with `c22 == 0`,
-  - `z2 == 0` with `c11 == 0`,
-  - `z1 == z2 == 0`, for any block.
+  - `zeta1 == 0` with `c22 == 0`,
+  - `zeta2 == 0` with `c11 == 0`,
+  - `zeta1 == zeta2 == 0`, for any block.
 
 A multiplication node with a vanishing operand has `c11 == c22 == 0` and meets all three at
 once. Among the other elementals of `overloads.jl`, a quotient `u/w` meets the first at `u == 0`,
 since `c22 = 2u/w^3` vanishes with the numerator, and `x^y` meets the second at a zero exponent,
-where `c11 == 0` and `z2 == 0` while `c22 > 0`.
+where `c11 == 0` and `zeta2 == 0` while `c22 > 0`.
 
 The continuity above is continuity in the values with the block held fixed. At those two
 elementals the block moves with the value: the diagonal entry that bounds the feasible segment is
@@ -361,40 +361,41 @@ These zero-reference cases concern the value channel, and they are exactly the o
 and a declared scale vanishes only at a slot whose intermediate gradient is zero, which
 [`cover_slots!`](@ref) covers diagonally instead of splitting. So a split reaches this function with
 a pair that is not degenerate, and a pair carrying a ratio reaches the geometric mean only when
-`c12*z2/z1` leaves the range of the element type at a block whose feasible segment has a degenerate
-endpoint. There the equalizing point is recomputed from the separated exponents, which represents it
-whenever it is representable at all; see [`split_fallback`](@ref). A split that is genuinely out of
-range throws, since every pair returned here is a cover. Entries that are already non-finite are
-returned as IEEE arithmetic gives them, which is what `check=false` asks for.
+`c12*zeta2/zeta1` leaves the range of the element type at a block whose feasible segment has a
+degenerate endpoint. There the equalizing point is recomputed from the separated exponents, which
+represents it whenever it is representable at all; see [`split_fallback`](@ref). A split that is
+genuinely out of range throws, since every pair returned here is a cover. Entries that are already
+non-finite are returned as IEEE arithmetic gives them, which is what `check=false` asks for.
 """
-function balanced_split(c11, c12, c22, z1, z2)
+function balanced_split(c11, c12, c22, zeta1, zeta2)
     lo = sqrt(c11)
     hi = c12 / sqrt(c22)
     # The equalizing point carries the vanishing-reference limits itself, and clamping resolves
     # them when the feasible interval has a finite endpoint. Only an unresolved NaN or unbounded
     # target reaches the fallback.
-    rho1 = clamp(sqrt(c12 * z2 / z1), lo, hi)
-    if !(isfinite(rho1) && rho1 > 0)
-        rho1 = clamp(split_fallback(lo, hi, c12, z1, z2), lo, hi)
+    eta1 = clamp(sqrt(c12 * zeta2 / zeta1), lo, hi)
+    if !(isfinite(eta1) && eta1 > 0)
+        eta1 = clamp(split_fallback(lo, hi, c12, zeta1, zeta2), lo, hi)
     end
-    rho2 = c12 / rho1
-    if !(isfinite(rho1) && rho1 > 0 && isfinite(rho2) && rho2 > 0)
-        all(isfinite, (c11, c12, c22, z1, z2)) || return rho1, rho2
+    eta2 = c12 / eta1
+    if !(isfinite(eta1) && eta1 > 0 && isfinite(eta2) && eta2 > 0)
+        all(isfinite, (c11, c12, c22, zeta1, zeta2)) || return eta1, eta2
         throw(
             ArgumentError(
                 "the balanced split of the block [$c11 $c12; $c12 $c22] against the scale " *
-                    "references ($z1, $z2) is outside the floating-point range of " *
-                    "$(typeof(rho1)): it asks for rho = ($rho1, $rho2)"
+                    "references ($zeta1, $zeta2) is outside the floating-point range of " *
+                    "$(typeof(eta1)): it asks for eta = ($eta1, $eta2)"
             )
         )
     end
-    return rho1, rho2
+    return eta1, eta2
 end
 
 """
-    split_fallback(lo, hi, c12, z1, z2) -> rho1
+    split_fallback(lo, hi, c12, zeta1, zeta2) -> eta1
 
-The equalizing point [`balanced_split`](@ref) aims at, for blocks where `sqrt(c12*z2/z1)` misses it.
+The equalizing point [`balanced_split`](@ref) aims at, for blocks where `sqrt(c12*zeta2/zeta1)`
+misses it.
 
 A pair with a ratio to read misses it only by overflow or underflow of the product under the root,
 and `frexp` recovers the point from the separated exponents: the exponent arithmetic is exact, and
@@ -403,12 +404,12 @@ exactly as the product form is. A pair with no ratio — a vanishing or non-fini
 the geometric mean of the endpoints, the covariant, permutation-equivariant point of the feasible
 segment.
 """
-function split_fallback(lo, hi, c12::AbstractFloat, z1::AbstractFloat, z2::AbstractFloat)
-    (isfinite(c12) && c12 > 0 && isfinite(z1) && z1 > 0 && isfinite(z2) && z2 > 0) ||
+function split_fallback(lo, hi, c12::AbstractFloat, zeta1::AbstractFloat, zeta2::AbstractFloat)
+    (isfinite(c12) && c12 > 0 && isfinite(zeta1) && zeta1 > 0 && isfinite(zeta2) && zeta2 > 0) ||
         return sqrt(lo * hi)
     m12, e12 = frexp(c12)
-    m2, e2 = frexp(z2)
-    m1, e1 = frexp(z1)
+    m2, e2 = frexp(zeta2)
+    m1, e1 = frexp(zeta1)
     m = m12 * m2 / m1
     e = e12 + e2 - e1
     if isodd(e)
@@ -420,31 +421,32 @@ function split_fallback(lo, hi, c12::AbstractFloat, z1::AbstractFloat, z2::Abstr
 end
 
 # An element type with no exponent to separate has the geometric mean and nothing else.
-split_fallback(lo, hi, c12, z1, z2) = sqrt(lo * hi)
+split_fallback(lo, hi, c12, zeta1, zeta2) = sqrt(lo * hi)
 
 """
-    value_bounds_split(c11, c12, c22, z1, z2, ratio) -> Bool
+    value_bounds_split(c11, c12, c22, zeta1, zeta2, ratio) -> Bool
 
-Whether the value pair `(z1, z2)` fixes the split of the block `[c11 c12; c12 c22]`.
+Whether the value pair `(zeta1, zeta2)` fixes the split of the block `[c11 c12; c12 c22]`.
 
-[`balanced_split`](@ref) aims at `sqrt(c12*z2/z1)` and clamps it to the feasible segment
+[`balanced_split`](@ref) aims at `sqrt(c12*zeta2/zeta1)` and clamps it to the feasible segment
 `[sqrt(c11), c12/sqrt(c22)]`, so a pair carrying no scale still yields a covariant split wherever
 the endpoint it runs toward is positive and finite: the clamp supplies the answer, and both
 endpoints are covariant. What is left is the pair of cases where that endpoint is degenerate as
 well — `c22 == 0` puts the upper endpoint at infinity, `c11 == 0` puts the lower one at zero —
-together with two vanishing values, which leave the ratio `z2/z1` undefined whatever the block.
+together with two vanishing values, which leave the ratio `zeta2/zeta1` undefined whatever the
+block.
 `ratio` is how lopsided a pair must be to count as carrying no scale.
 
-The test compares `z1` and `z2` directly, which is not invariant when the two parents carry
+The test compares `zeta1` and `zeta2` directly, which is not invariant when the two parents carry
 different units, so it is applied only where no covariant split exists. In particular a block
 whose bounding diagonal entry is proportional to the vanishing value — a quotient's numerator, a
 power's exponent — has its split fixed by the values until the value is exactly zero, and that
 split grows without bound on the approach; see [`balanced_split`](@ref).
 """
-function value_bounds_split(c11, c12, c22, z1, z2, ratio)
-    (z1 == 0 && z2 == 0) && return false
-    z1 <= ratio * z2 && return c22 > 0
-    z2 <= ratio * z1 && return c11 > 0
+function value_bounds_split(c11, c12, c22, zeta1, zeta2, ratio)
+    (zeta1 == 0 && zeta2 == 0) && return false
+    zeta1 <= ratio * zeta2 && return c22 > 0
+    zeta2 <= ratio * zeta1 && return c11 > 0
     return true
 end
 
@@ -457,7 +459,7 @@ point was given, in `M =` [`magtype`](@ref)`(T)`. `nothing` means `sqrt(eps(M))`
 `ratio` is how lopsided a value pair must be before [`value_bounds_split`](@ref) counts it as
 carrying no scale, and it must lie in `[0, 1)`: at `1` every pair is condemned. It caps the split
 asymmetry the value channel can express, since a multiplication block aims at
-`rho1 = sqrt(c12*z2/z1)` and so at a ratio of `sqrt(ratio)` between the two references.
+`eta1 = sqrt(c12*zeta2/zeta1)` and so at a ratio of `sqrt(ratio)` between the two references.
 
 The default resolves against `M` rather than being stored as a constant because the quantity it
 bounds is representability. `eps(M)` is the floor below which one parent value is
@@ -726,17 +728,17 @@ what a given tape does.
 function guards_any_block(t::Tape{T}; ratio = nothing) where {T}
     M = magtype(T)
     r = split_ratio(ratio, T)
-    z = AbsValues(t.vals)
+    zeta = AbsValues(t.vals)
     for k in (t.ninputs + 1):nnodes(t)
         C, ps = t.Cs[k], t.parents[k]
         if C isa BinaryCurvature
             c11, c12, c22 = magnitude(C.c11), magnitude(C.c12), magnitude(C.c22)
             offdiag_active(c11, c12, c22) || continue   # the diagonal cover consults no scale
-            value_bounds_split(c11, c12, c22, z[ps[1]], z[ps[2]], r) || return true
+            value_bounds_split(c11, c12, c22, zeta[ps[1]], zeta[ps[2]], r) || return true
         elseif C isa PairedCurvature
             for j in 1:C.q
                 # Every pair of an inner product is the multiplication block `[0 c; c 0]`.
-                value_bounds_split(zero(M), one(M), zero(M), z[ps[j]], z[ps[C.q + j]], r) ||
+                value_bounds_split(zero(M), one(M), zero(M), zeta[ps[j]], zeta[ps[C.q + j]], r) ||
                     return true
             end
         end
@@ -745,7 +747,7 @@ function guards_any_block(t::Tape{T}; ratio = nothing) where {T}
 end
 
 """
-    split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale) -> (rho1, rho2)
+    split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale) -> (eta1, eta2)
 
 The member of the block's cover family the split selects, from the two channels each slot carries.
 
@@ -772,22 +774,22 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
     # The split only picks a member of the family; an upward-rounded bound need not reach it, and
     # the cover is made to hold afterwards (see `cover_slots!`).
     c11, c12, c22 = plainvalue(c11), plainvalue(c12), plainvalue(c22)
-    z1, z2 = plainvalue(s1.value), plainvalue(s2.value)
-    value_bounds_split(c11, c12, c22, z1, z2, plainvalue(ratio)) &&
-        return balanced_split(c11, c12, c22, z1, z2)
+    zeta1, zeta2 = plainvalue(s1.value), plainvalue(s2.value)
+    value_bounds_split(c11, c12, c22, zeta1, zeta2, plainvalue(ratio)) &&
+        return balanced_split(c11, c12, c22, zeta1, zeta2)
     return balanced_split(
         c11, c12, c22, plainvalue(declared_scale(s1)), plainvalue(declared_scale(s2))
     )
 end
 
 """
-    local_covers(t::Tape, vbar; check::Bool=true) -> (rhos, theta)
+    local_covers(t::Tape, vbar; check::Bool=true) -> (etas, theta)
 
-Per-node rank-1 covers. For node `k`, `rhos[k][i] >= 0` satisfies
-`rhos[k][i] * rhos[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
+Per-node rank-1 covers. For node `k`, `etas[k][i] >= 0` satisfies
+`etas[k][i] * etas[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
 except at
 entries a [`dead_slot`](@ref) empties; nodes with no second-order contribution get an empty
-`rhos[k]`. `theta[j] = sum_k rhos[k][i]` collects the weight each node receives as a parent, which
+`etas[k]`. `theta[j] = sum_k etas[k][i]` collects the weight each node receives as a parent, which
 seeds the reverse sweep of [`abs_reverse`](@ref); it is in [`boundtype`](@ref) of the tape's
 element type, so the sweep it seeds rounds as the tape asks.
 
@@ -807,29 +809,29 @@ function local_covers(
     N = nnodes(t)
     r = split_ratio(ratio, T)
     sc = split_scales(scales, t)
-    rhos = [magtype(T)[] for _ in 1:N]
+    etas = [magtype(T)[] for _ in 1:N]
     theta = zeros(boundtype(T), N)
     for k in (t.ninputs + 1):N
-        rho = local_cover_slots(r, t, k, magnitude(vbar[k]), sc; check)
-        rho === nothing && continue
-        rhos[k] = rho
+        eta = local_cover_slots(r, t, k, magnitude(vbar[k]), sc; check)
+        eta === nothing && continue
+        etas[k] = eta
         for (i, p) in enumerate(t.parents[k])
-            theta[p] += rho[i]
+            theta[p] += eta[i]
         end
     end
-    return rhos, theta
+    return etas, theta
 end
 
 """
     local_cover_slots(t::Tape{T}, k::Integer, av; check::Bool=true) -> Union{Nothing,Vector{M}}
     local_cover_slots(ratio, t::Tape, k::Integer, av, scales; check::Bool=true)
 
-The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `rho` with
-`rho[i]*rho[j] >= av*magnitude(C^k[i,j])` wherever both slots have a nonzero intermediate
-gradient (see [`dead_slot`](@ref)), and `av` the absolute adjoint `magnitude(vbar[k])`. `rho` and
+The rank-1 cover of a single node, slot-aligned with its parents: nonnegative `eta` with
+`eta[i]*eta[j] >= av*magnitude(C^k[i,j])` wherever both slots have a nonzero intermediate
+gradient (see [`dead_slot`](@ref)), and `av` the absolute adjoint `magnitude(vbar[k])`. `eta` and
 `av` are in `M =` [`magtype`](@ref)`(T)`. Returns `nothing` when the node contributes no
 second-order term (`av == 0`, or a [`NoCurvature`](@ref) node). This is the per-node kernel shared
-by [`local_covers`](@ref), which accumulates the results into `(rhos, theta)`, and the
+by [`local_covers`](@ref), which accumulates the results into `(etas, theta)`, and the
 [`CoverOnly`](@ref) sweep, which deposits them directly into the absolute adjoint channel. It reads
 the node's [`Curvature`](@ref) off the tape and forwards to [`cover_slots`](@ref), which holds the
 construction for each form. `check` verifies the covering invariant on recorded nodes.
@@ -854,7 +856,7 @@ Throw unless the adjoint weight `av` of the elemental at `site` and its covering
 all finite, reporting the values around it.
 
 The covering invariant is a set of comparisons against `c`, so it cannot fire meaningfully when
-`c` is not finite: every comparison against `NaN` is false and no finite `rho` covers an infinite
+`c` is not finite: every comparison against `NaN` is false and no finite `eta` covers an infinite
 entry, so the test would reject a split that is not at fault. A non-finite `c` says instead that
 the program is not twice-differentiable where it was evaluated — a division by zero, or a power,
 logarithm or root at its singularity. A non-finite `av` says the same of a node downstream, whose
@@ -986,7 +988,7 @@ local covering conditions.
 Two merges are available:
 
 - **sum merge**, `h_sum = sum_k s_k`: the cross terms of `(sum_k s_k)(sum_k s_k)'` are
-  nonnegative slack;
+  nonnegative;
 - **quadrature merge**, `h_quad[i] = sqrt(sum_atoms s_atom[i]^2)`: valid by Cauchy–Schwarz, and
   the minimal cover of the no-cancellation surrogate `M = sum_atoms s_atom s_atom'`. An atom (see
   [`atom_slots`](@ref)) is a whole node for unary and binary elementals and one parent pair for
@@ -1013,12 +1015,12 @@ sweep carries the ordinary adjoint, the absolute cover channel, and the squared 
 together:
 
     vbar[p_i] += d_i * vbar[k]                              # signed channel: reverse-mode AD
-    abar[p_i] += magnitude(d_i) * abar[k] + rho_k[i]        # absolute channel: the cover
-    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + rho_k[i]^2    # squared channel: h_var^2
+    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]        # absolute channel: the cover
+    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + eta_k[i]^2    # squared channel: h_var^2
 
-with `rho_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
+with `eta_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
-on the tape and are processed first. That makes `rho_k` — which needs the finished `vbar[k]` —
+on the tape and are processed first. That makes `eta_k` — which needs the finished `vbar[k]` —
 computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:ninputs]` up to
 roundoff.
 
@@ -1069,9 +1071,9 @@ function cover_hessian(
     vbar = adjoints(t, outidx)
     u = sensitivities(t)
     B = tomag(T, hessian_bound(t, vbar, u))
-    rhos, theta = local_covers(t, vbar; check, scales, ratio)
+    etas, theta = local_covers(t, vbar; check, scales, ratio)
 
-    h_sum, h_quad = tomag.(T, merge_atoms(t, rhos, u))
+    h_sum, h_quad = tomag.(T, merge_atoms(t, etas, u))
     h_sum_rev = tomag(T, abs_reverse(t, theta)[1:n])
 
     if check
@@ -1133,11 +1135,11 @@ function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Boo
         vk, ak, qk = vbar[k], abar[k], qbar[k]
         ps = t.parents[k]
         avk = magnitude(vk)
-        rho = local_cover_slots(r, t, k, avk, sc; check)
-        if rho !== nothing
+        eta = local_cover_slots(r, t, k, avk, sc; check)
+        if eta !== nothing
             for (i, p) in enumerate(ps)
-                abar[p] += rho[i]
-                qbar[p] += rho[i]^2
+                abar[p] += eta[i]
+                qbar[p] += eta[i]^2
             end
         end
         # Without adjoint propagation, a node whose channels are both zero has nothing to send.

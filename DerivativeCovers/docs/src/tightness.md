@@ -5,7 +5,7 @@ CurrentModule = DerivativeCovers
 # Tightness
 
 Every cover computed by this package is valid, but some are much looser than
-others. This page describes how to measure looseness and where it comes from.
+others. This page describes how to measure excess and where it comes from.
 
 ## Measuring tightness
 
@@ -18,12 +18,18 @@ on which the cover is tightest, however: if `r = max_coverage_ratio(h, H)`,
 then `sqrt(r) * h` has ratio exactly 1, however loose it remains elsewhere.
 For a Jacobian cover `(a, b)`, the ratio is `max_coverage_ratio(a, b, J)`.
 
-A reference cover computed from `H` itself, such as `symcover(H)` from
+A reference cover computed from `H` itself, such as the ℓ₂-minimal cover
+`symcover_min(H)` from
 [MatrixCovers](https://github.com/HolyLab/MatrixCovers.jl), allows a
-comparison entry by entry, which separates a uniform excess from a nonuniform
-one.
+comparison entry by entry. `level_dispersion(h, href, H)`, also from
+MatrixCovers, summarizes it as the mean (the *level*) and the standard
+deviation (the *dispersion*) of `log((h[i]*h[j]) / (href[i]*href[j]))` over
+the nonzero entries of `H`. The level is a uniform excess, which a scalar
+rescaling of the cover removes; the dispersion is the nonuniform part, which no
+scalar removes. For a Jacobian cover the call is
+`level_dispersion((a, b), (aref, bref), J)`.
 
-## Where looseness comes from
+## Where excess comes from
 
 ### The rank-one form
 

@@ -110,14 +110,14 @@ struct JacobianDiagnostics{T}
 end
 
 """
-    cover_jacobian([mode,] t::Tape, outidxs; start=:covariant, rounds=4, a=nothing, check=true)
+    cover_jacobian([mode,] t::Tape, outidxs; start=:logscale, rounds=4, a=nothing, check=true)
     cover_jacobian([mode,] r, x0::AbstractVector; ...)
 
 Asymmetric rank-1 cover of a vector-valued function's Jacobian: weights with
 `a[k] * b[j] >= abs(J[k,j])`. Pass either a tape and its output nodes, or a function and an
 evaluation point.
 
-`a` is chosen by the balancing construction: `start` is `:covariant`, whose products on the
+`a` is chosen by the balancing construction: `start` is `:logscale`, whose products on the
 support transform exactly under a rescaling of the program's inputs, outputs and intermediates, or
 `:equal`, which is permutation equivariant instead; `rounds` alternation rounds then refine it,
 and `rounds = nothing` runs [`balance_cover`](@ref)'s alternation to convergence instead.
@@ -254,7 +254,7 @@ The cost is `O(G * L)` for `G = maximum(groups)`, without forming the full surro
 
 The output weights are [`cover_jacobian`](@ref)'s, chosen by the same keywords:
 
-  - `start`: `:covariant` (the default) or `:equal`.
+  - `start`: `:logscale` (the default) or `:equal`.
   - `rounds`: alternation rounds refining them, `4` by default.
   - `a`: fixed weights of your own instead, strictly positive on every output some input reaches
     and optionally zero on the others. It rules out `start` and `rounds`.
@@ -565,10 +565,10 @@ struct MaxMerge <: MergeRule end
 """
     SignAveragedMerge <: MergeRule
 
-The sign-averaged pair: [`balance_cover`](@ref)'s marginal alternation run in quadrature on
+The sign-averaged pair: [`balance_cover`](@ref)'s marginal iteration run in quadrature on
 `R` ([`quadrature_surrogate`](@ref)),
 
-    a_k ← sqrt((1/ρ_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/γ_j) ∑_k R_kj² / a_k²),
+    a_k ← sqrt((1/r_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/c_j) ∑_k R_kj² / a_k²),
 
 followed by the final b-step `b_j = sqrt(∑_k R_kj² / a_k²)`. Squared, this is the
 [`SumMerge`](@ref) alternation applied to the squared channel `Ũ⁽²⁾ = R.^2` with factors
@@ -585,8 +585,8 @@ The pair is a sign-averaged cover, **not a cover of `J`**. The final b-step give
 `R <= Ũ`, with equality only where an entry has a single path, so `a_k b_j` can fall below `Ũ_kj`,
 and below `abs(J_kj)` where several paths add with the same sign. If each parent slot's local
 partial carries an independent, equiprobable sign, `R_kj² = E[J_kj²]`, and at convergence the pair
-standardizes the signed Jacobian in expectation: the normalized iterate `(a, b ./ sqrt.(γ))` has
-expected row sums of squares `∑_j E[J_kj²] / (a_k² b_j² / γ_j) = ρ_k` and column sums `γ_j`, and
+standardizes the signed Jacobian in expectation: the normalized iterate `(a, b ./ sqrt.(c))` has
+expected row sums of squares `∑_j E[J_kj²] / (a_k² b_j² / c_j) = r_k` and column sums `c_j`, and
 the returned `b` has expected column sums of squares `1`.
 """
 struct SignAveragedMerge <: MergeRule end
@@ -599,7 +599,7 @@ struct SignAveragedMerge <: MergeRule end
 Output and input weights covering the absolute-sensitivity surrogate: `a[k] * b[j] >= Ũ_kj`, and
 so `>= abs(J_kj)`, for every `merge` except [`SignAveragedMerge`](@ref).
 
-By default the weights come from a scale-covariant start, `rounds` rounds of a marginal
+By default the weights come from the log-scale start, `rounds` rounds of a marginal
 alternation toward row and column targets the sparsity pattern makes realizable, and a final
 [`MergeRule`](@ref) b-step for the `a` those rounds reached. The b-step is what makes the pair a
 cover, so the result covers whatever the rounds did or did not settle. The accompanying manuscript
@@ -608,8 +608,11 @@ without it.
 
 # Keywords
 
-  - `start = :covariant`: products on the support then transform exactly under a rescaling of the
-    inputs and outputs — and, on the tape path, the intermediates — at every round count.
+  - `start = :logscale`: a least-squares fit of log-scales — on a tape, of the node potentials of
+    [`tape_potentials`](@ref); on a matrix, MatrixCovers' unconstrained start
+    (`initialize_cover(U; strategy = :unconstrained)`). Products on the support then transform
+    exactly under a rescaling of the inputs and outputs — and, on the tape path, the
+    intermediates — at every round count.
     `start = :equal` starts at `a = 1` instead, which is permutation equivariant at every round
     count but covariant only in the limit. Both reach the same fixed point.
   - `a0`: starting weights of your own, positive on every live output and zero on the others.
@@ -719,7 +722,7 @@ function _balance_tape(
     end
 
     roots, nties = nothing, nothing
-    if a0 === nothing && something(start, :covariant) === :covariant
+    if a0 === nothing && something(start, :logscale) === :logscale
         a0, roots, nties = _potential_start(t, outidxs, root, cgiters, li)
     end
     a = _balance_start(a0, m, M, li.liverow)
@@ -802,7 +805,7 @@ function _balance_matrix(
         altmerge = SumMerge()
         acc = +
     end
-    if a0 === nothing && something(start, :covariant) === :covariant
+    if a0 === nothing && something(start, :logscale) === :logscale
         a0 = _surrogate_start(Utilde, T)
     end
     a = _balance_start(a0, m, T, liverow)
@@ -927,27 +930,27 @@ end
 
 const _DEFAULT_ROUNDS = 4
 
-# Non-convergence hint for the marginal alternation, specific to how each merge can fail.
+# Non-convergence hint for the marginal iteration, specific to how each merge can fail.
 # `suggest` is the pattern-feasible `targets` value of the call form that produced the failure.
 _marginal_hint(::MergeRule, suggest::Symbol) =
-    "; the marginal alternation with uniform targets requires the surrogate's sparsity pattern to have total support — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+    "; the marginal iteration with uniform targets requires the surrogate's sparsity pattern to have total support — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
 _marginal_hint(::MaxMerge, suggest::Symbol) =
-    "; the max merge's marginal alternation can enter a limit cycle — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
+    "; the max merge's marginal iteration can enter a limit cycle — targets=$(repr(suggest)) or arule=:geomean converges for every pattern"
 
 # `potentialstart` says whether this call form reaches the tape-potential start, the only one the
 # root keywords mean anything for.
 function _check_start(start, a0, root, cgiters::Integer, potentialstart::Bool)
-    start === nothing || start === :covariant || start === :equal ||
-        throw(ArgumentError("start must be :covariant or :equal; got $(repr(start))"))
+    start === nothing || start === :logscale || start === :equal ||
+        throw(ArgumentError("start must be :logscale or :equal; got $(repr(start))"))
     a0 === nothing || start === nothing ||
         throw(ArgumentError("a0 replaces the start, so it cannot be combined with start=$(repr(start))"))
-    if !(potentialstart && a0 === nothing && something(start, :covariant) === :covariant)
+    if !(potentialstart && a0 === nothing && something(start, :logscale) === :logscale)
         root === nothing && cgiters == 0 ||
             throw(
             ArgumentError(
                 "root and cgiters belong to the tape-potential start, which this call does not " *
                     "reach: it needs the tape form with merge=SumMerge() or SignAveragedMerge(), " *
-                    "arule=:marginal, start=:covariant and no a0"
+                    "arule=:marginal, start=:logscale and no a0"
             )
         )
     end
@@ -990,17 +993,17 @@ function _potential_start(t::Tape{T}, outidxs, root, cgiters::Integer, li::LiveI
     return a0, pot.roots, pot.nties
 end
 
-# Output weights from MatrixCovers' scale-covariant asymmetric start on the surrogate. That
+# Output weights from MatrixCovers' unconstrained asymmetric start on the surrogate. That
 # function returns a full pair; only the a-side is a start here, and the b-step supplies the rest.
 # `feasible = :none` keeps it a start rather than inflating it into a cover, which the b-step would
 # discard anyway. Unsupported rows come back zero, which is the convention used here as well.
 function _surrogate_start(Utilde, ::Type{T}) where {T}
-    a0, b0 = initialize_cover(Utilde; strategy = :covariant, feasible = :none)
+    a0, b0 = initialize_cover(Utilde; strategy = :unconstrained, feasible = :none)
     # That routine balances the two sides against each other, so both must be representable for
     # the pair it returns to mean anything.
     (all(isfinite, a0) && all(isfinite, b0)) || throw(
         ArgumentError(
-            "the covariant start has no representable form on this matrix: its log-scales span " *
+            "the log-scale start has no representable form on this matrix: its log-scales span " *
                 "more than $(T) can hold. Use start=:equal, or supply a0."
         )
     )
@@ -1065,11 +1068,11 @@ function _matrix_targets(targets, arule::Symbol, U, m::Int, n::Int, ::Type{T}) w
     return _check_targets(targets[1], targets[2], rcount .> 0, ccount .> 0, T)
 end
 
-# Only the marginal alternation normalizes to prescribed marginals; the geometric-mean fit has no
+# Only the marginal iteration normalizes to prescribed marginals; the geometric-mean fit has no
 # targets, so naming any is a mistake rather than something to ignore.
 function _reject_targets(targets, arule::Symbol)
     targets === nothing ||
-        throw(ArgumentError("targets applies to the marginal alternation; arule=$(repr(arule)) prescribes no marginals"))
+        throw(ArgumentError("targets applies to the marginal iteration; arule=$(repr(arule)) prescribes no marginals"))
     return nothing
 end
 
@@ -1274,10 +1277,10 @@ _target_nonconvergence(maxiter, delta, rtol) = error(
 # Overrelaxation of the targeted alternation. In the log-scales `x = log a`, `y = log b`, the
 # alternation is block coordinate descent on the convex function
 # `∑_kj Ũ_kj exp(-x_k - y_j) + ∑_k r_k x_k + ∑_j c_j y_j`, and its restriction to one `x_k` is
-# `r_k ψ(x_k - F_k)` plus a constant, with `F_k` the plain step and `ψ(z) = exp(-z) - 1 + z`
+# `r_k exc(x_k - F_k)` plus a constant, with `F_k` the plain step and `exc(u) = exp(-u) - 1 + u`
 # (likewise for `y_j`). The relaxed step moves to `F_k + (1 - w)(x_k - F_k)`, and is taken only if
-# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `ψ`; otherwise `w - 1` is halved a few
-# times before falling back to the plain step. Every half-step thus removes a fixed fraction of
+# it leaves at most `(1 + (w - 1)²)/2` of the block's excess `exc`; otherwise `w - 1` is halved a
+# few times before falling back to the plain step. Every half-step thus removes a fixed fraction of
 # what the plain one would, which keeps the iteration convergent for any `ω < 2`.
 #
 # `ω` is estimated as in MatrixCovers' power-mean solver: a few plain rounds measure the
@@ -1398,8 +1401,8 @@ _relax_window(ω) = _RELAX_WINDOW + round(Int, _RELAX_WINDOW_SCALE / (2 - ω))
 _relax_omega_max(::Type{T}, rtol) where {T} =
     clamp(2 - 64 * eps(T) / T(rtol), one(T), T(_RELAX_OMEGA_MAX))
 
-# `ψ(z) = exp(-z) - 1 + z`, the excess of one block's objective over its minimum, per unit target.
-_relax_ψ(z) = expm1(-z) + z
+# `exc(u) = exp(-u) - 1 + u`, the excess of one block's objective over its minimum, per unit target.
+_relax_excess(u) = expm1(-u) + u
 
 # Move each live `x[i]` from its current value toward the plain step `F[i]`, overrelaxed by `ω` in
 # log space and safeguarded as described at `_balance_targets_relaxed`. Entries with a zero target
@@ -1412,10 +1415,10 @@ function _relaxed_step!(x, F, tgt, ω)
         imb = max(imb, abs(expm1(-δ)))
         xi = F[i]
         if ω != 1
-            ψδ = _relax_ψ(δ)
+            excδ = _relax_excess(δ)
             w = ω
             for _ in 0:_RELAX_NBACKTRACK
-                if _relax_ψ((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * ψδ
+                if _relax_excess((1 - w) * δ) <= (1 + (w - 1)^2) / 2 * excδ
                     xi = F[i] * exp((1 - w) * δ)
                     break
                 end

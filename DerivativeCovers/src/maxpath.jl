@@ -88,8 +88,8 @@ The (max, ×) row statistic of the Hessian at `outidx` relative to the scales `d
 
     m[i] = max over atoms of smax[i] * max_{l != i} smax[l] / d[l] / d[i],
 
-where an atom's `smax[l] = max_{slots} rho[slot] * U[parent, l]` takes each slot along its largest
-path (`U` as in [`maxpath_forward`](@ref)) and the largest of its slots, and `rho` are the local
+where an atom's `smax[l] = max_{slots} eta[slot] * U[parent, l]` takes each slot along its largest
+path (`U` as in [`maxpath_forward`](@ref)) and the largest of its slots, and `eta` are the local
 covers of [`local_cover_slots`](@ref) under the same `scales` and `ratio` the cover sweeps use.
 
 This is the max-merge counterpart of the largest normalized off-diagonal entry in row `i` of the
@@ -118,20 +118,20 @@ function maxpath_rowcorrelation(
         vk = vbar[k]
         avk = magnitude(vk)
         ps = t.parents[k]
-        rho = local_cover_slots(r, t, k, avk, sc; check)
-        if rho !== nothing
+        eta = local_cover_slots(r, t, k, avk, sc; check)
+        if eta !== nothing
             for atom in atom_slots(t.Cs[k], length(ps))
                 g = (zero(M), 0, zero(M), 0)
                 for i in atom
                     p = ps[i]
-                    g = offer(g..., rho[i] * F.v1[p], F.i1[p])
-                    g = offer(g..., rho[i] * F.v2[p], F.i2[p])
+                    g = offer(g..., eta[i] * F.v1[p], F.i1[p])
+                    g = offer(g..., eta[i] * F.v2[p], F.i2[p])
                 end
                 g1, j1, g2, j2 = g
                 for i in atom
                     p = ps[i]
-                    offer!(R, p, rho[i] * g1, j1)
-                    offer!(R, p, rho[i] * g2, j2)
+                    offer!(R, p, eta[i] * g1, j1)
+                    offer!(R, p, eta[i] * g2, j2)
                 end
             end
         end

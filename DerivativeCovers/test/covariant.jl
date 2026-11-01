@@ -1,4 +1,4 @@
-# Path-count targets, tape potentials, and the covariant output weighting they combine into.
+# Flow targets, tape potentials, and the covariant output weighting they combine into.
 #
 # The defining property is covariance: rescaling the program's inputs, outputs or intermediates
 # must move the products `a_k*b_j` by exactly the rescaling factors, at every round count.
@@ -245,7 +245,7 @@
         @test max_coverage_ratio(bald.a, bald.b, jacobian_surrogate(td, od)) <= GATE
     end
 
-    @testset "tape_potentials and the covariant start cover — $name" for (name, r, x0) in PROGRAMS
+    @testset "tape_potentials and the log-scale start cover — $name" for (name, r, x0) in PROGRAMS
         t, outidxs = tape_function(r, x0)
         U = jacobian_surrogate(t, outidxs)
         J = ForwardDiff.jacobian(r, x0)
@@ -281,7 +281,7 @@
     end
 
     @testset "a start of ones is not covariant at a finite budget" begin
-        # The path-count targets are invariant and the alternation is equivariant, so only the
+        # The flow targets are invariant and the alternation is equivariant, so only the
         # start can break covariance — and a constant start does, until convergence.
         t, outidxs = tape_function(triangular, [0.6, -0.4, 0.9])
         s = ones(nnodes(t))
@@ -392,7 +392,7 @@
         U = jacobian_surrogate(t, outidxs)
 
         # The tiers agree on what they share, for every start and budget.
-        for start in (:covariant, :equal), rounds in (0, 1, 4)
+        for start in (:logscale, :equal), rounds in (0, 1, 4)
             c = cover_jacobian(t, outidxs; start, rounds)
             d = cover_jacobian(WithDiagnostics(), t, outidxs; start, rounds)
             @test c.a == d.a
@@ -401,8 +401,8 @@
             @test max_coverage_ratio(c.a, c.b_sum, U) <= GATE
             @test all(d.b_max .<= d.b_quad .* GATE)
             @test all(d.b_quad .<= d.b_sum .* GATE)
-            @test (start === :covariant) == (c.roots !== nothing)
-            @test (start === :covariant) == (c.nties !== nothing)
+            @test (start === :logscale) == (c.roots !== nothing)
+            @test (start === :logscale) == (c.nties !== nothing)
         end
 
         # `a = ones` reproduces the plain uniform-weight cover both tiers used to give.
@@ -458,7 +458,7 @@
         U = jacobian_surrogate(t, outidxs)
 
         # The default weights are the ones cover_jacobian chooses, for every start and budget.
-        for start in (:covariant, :equal), rounds in (0, 4)
+        for start in (:logscale, :equal), rounds in (0, 4)
             c = cover_jacobian(WithDiagnostics(), t, outidxs; start, rounds)
             @test cover_jacobian_hybrid(t, outidxs, 1; start, rounds).b ≈ c.b_sum
             @test cover_jacobian_hybrid(t, outidxs, 3; start, rounds).b ≈ c.b_max
@@ -494,7 +494,7 @@
         rd = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
         td, od = tape_function(rd, [0.7, 1.3])
         Ud = jacobian_surrogate(td, od)
-        for start in (:covariant, :equal)
+        for start in (:logscale, :equal)
             ad = cover_jacobian(td, od; start).a
             @test ad[2] == 0
             bd = cover_jacobian_hybrid(td, od, 2; start).b
@@ -508,7 +508,7 @@
         r = xs -> [xs[1] * xs[2], 3 * one(eltype(xs)), xs[1] + xs[2]]
         t, outidxs = tape_function(r, [0.7, 1.3, -0.5])
         U = jacobian_surrogate(t, outidxs)
-        for start in (:covariant, :equal)
+        for start in (:logscale, :equal)
             c = cover_jacobian(t, outidxs; start)
             d = cover_jacobian(WithDiagnostics(), t, outidxs; start)
             for x in (c, d)
@@ -564,7 +564,7 @@
 
         # `a0` and an explicit `start` are incompatible, whichever start was named.
         @test_throws "cannot be combined with start" balance_cover(
-            Ud; a0 = ones(3), start = :covariant
+            Ud; a0 = ones(3), start = :logscale
         )
         @test_throws "cannot be combined with start" balance_cover(Ud; a0 = ones(3), start = :equal)
 
@@ -627,7 +627,7 @@
         @test balance_cover(tt, ot; rounds = 0).iters == 0
 
         # A zero budget merges the start whatever the targets, and still validates them.
-        for start in (:covariant, :equal)
+        for start in (:logscale, :equal)
             z = [balance_cover(tt, ot; rounds = 0, start, targets) for targets in (:flow, :support, :uniform)]
             @test z[1].a == z[2].a == z[3].a
             @test z[1].b == z[2].b == z[3].b
@@ -798,7 +798,7 @@
             v2 = balance_cover(t2, outidxs; merge = SignAveragedMerge(), rounds, cgiters)
             @test product_drift(t, outidxs, s, v.a, v.b, v2.a, v2.b) < 1.0e-10
         end
-        # The matrix form's covariant start transforms with `R -> C R D⁻¹`.
+        # The matrix form's log-scale start transforms with `R -> C R D⁻¹`.
         R = quadrature_surrogate(t, outidxs)
         c = 2.0 .^ rand(MersenneTwister(17), -10:10, length(outidxs))
         d = 2.0 .^ rand(MersenneTwister(19), -10:10, t.ninputs)

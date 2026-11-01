@@ -108,7 +108,7 @@ julia> round(max_coverage_ratio(h, H); digits=3), round(max_coverage_ratio(hs, H
 ## Jacobians
 
 For a Jacobian cover `(a, b)`, the scale-invariant matrix is
-`Jhat = J ./ (a .* b')`, computed by [`equilibrate`](@ref). The Jacobian
+`Jhat = J ./ (a .* b')`, computed by [`cover_normalize`](@ref). The Jacobian
 counterparts of the functions above are [`scaled_singular_value`](@ref), which
 computes the largest singular value of `Jhat` (by power iteration with
 [`jvp`](@ref) and [`vjp`](@ref) when given a tape). If `σ < 1`, then

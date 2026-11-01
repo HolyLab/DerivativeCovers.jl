@@ -74,7 +74,7 @@ end
     _flow_targets(t::Tape, outidxs, li::LiveInfo) -> (r, c)
 
 Row and column targets from the two flow weightings of the live slot graph, mixed so that neither
-side dominates: `r = ρ_fwd/nrow + ρ_rev/ncol` and `c = γ_fwd/nrow + γ_rev/ncol`, with `nrow` the
+side dominates: `r = r_fwd/nrow + r_rev/ncol` and `c = c_fwd/nrow + c_rev/ncol`, with `nrow` the
 live output positions and `ncol` the live inputs. Marginals are linear in the weight matrix, so the
 mixture is itself the marginal pair of a nonnegative matrix with `Ũ`'s pattern, which is what makes
 the targets realizable.
@@ -88,7 +88,7 @@ function _flow_targets(t::Tape, outidxs, li::LiveInfo)
     N, nin, m = nnodes(t), t.ninputs, length(outidxs)
     (li.nrow > 0 && li.ncol > 0) || return zeros(Float64, m), zeros(Float64, nin)
 
-    # Forward flow: ρ is 1 at every live output position, and γ comes from the transposed sweep
+    # Forward flow: r is 1 at every live output position, and c comes from the transposed sweep
     # seeded there.
     rseed = zeros(Float64, N)
     for (k, o) in enumerate(outidxs)
@@ -96,7 +96,7 @@ function _flow_targets(t::Tape, outidxs, li::LiveInfo)
     end
     gf = _reverse_sweep(ForwardFlow(li), t, rseed)
 
-    # Reverse flow: γ is 1 at every live input, and ρ comes from the forward sweep seeded there,
+    # Reverse flow: c is 1 at every live input, and r comes from the forward sweep seeded there,
     # read through the sink slot's own 1/outdeg factor.
     fseed = zeros(Float64, N)
     for j in 1:nin
@@ -469,7 +469,7 @@ end
 
 Log-scale potentials on the live tape graph: one number per node, least-squares-fitting the slot
 equations `θ_child - θ_parent = log|d|`. `exp(θ)` at the output nodes is the start
-[`balance_cover`](@ref) uses for `start = :covariant` on a tape, because rescaling a node's value
+[`balance_cover`](@ref) uses for `start = :logscale` on a tape, because rescaling a node's value
 by `s` shifts its potential by `log s` and leaves every difference within a component covariant.
 
 A node is *live* when it lies on some input-to-output path whose local derivatives are all nonzero;
@@ -517,7 +517,7 @@ function tape_potentials(r, x0::AbstractVector; kwargs...)
     return tape_potentials(t, outidxs; kwargs...)
 end
 
-# `balance_cover`'s covariant start needs the components for its per-component gauge shift, but
+# `balance_cover`'s log-scale start needs the components for its per-component gauge shift, but
 # they are not part of the result, so they are handed back separately.
 function _tape_potentials(
         t::Tape{T}, outidxs::AbstractVector{<:Integer}, li::LiveInfo = _live_info(t, outidxs);

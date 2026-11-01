@@ -103,9 +103,9 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test eltype(sensitivities(t)[1]) === Float32
         @test eltype(abs_forward(t, zeros(Float32, nnodes(t)))) === Float32
         @test eltype(abs_reverse(t, zeros(Float32, nnodes(t)))) === Float32
-        rhos, theta = local_covers(t, adjoints(t, outidx))
+        etas, theta = local_covers(t, adjoints(t, outidx))
         @test eltype(theta) === Float32
-        @test all(r -> eltype(r) === Float32, rhos)
+        @test all(r -> eltype(r) === Float32, etas)
 
         # The fallback channel is typed too, whether or not it is seeded with declared scales,
         # and the threshold resolves against the tape rather than to a `Float64` constant.

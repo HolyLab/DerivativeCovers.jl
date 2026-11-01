@@ -5,7 +5,7 @@ CurrentModule = DerivativeCovers
 # Computing and using covers
 
 Names that are public but not exported are part of the supported API; call
-them with the module prefix, for example `DerivativeCovers.equilibrate`.
+them with the module prefix, for example `DerivativeCovers.cover_normalize`.
 
 ```@index
 Pages = ["covers.md"]
@@ -73,5 +73,5 @@ adjoints
 ```@docs
 scaled_spectral_radius
 scaled_singular_value
-equilibrate
+cover_normalize
 ```

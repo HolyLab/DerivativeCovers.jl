@@ -138,7 +138,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test res.h_sum_rev ≈ res.h_sum rtol = 1.0e-12
     end
 
-    @testset "exact cover of the factored quadratic with constant weights" begin
+    @testset "minimal cover of the factored quadratic with constant weights" begin
         f = dot_const_prim(W0_CONST)
         x0 = [0.3, -1.2, 2.0, -0.5]
         res = cover_hessian(WithDiagnostics(), f, x0)
@@ -146,7 +146,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test res.h_quad ≈ abs.(W0_CONST) rtol = 1.0e-12
 
         # The entrywise expansion of the same function loses the factored structure and is
-        # strictly looser, as METHODS.md's tightness study predicts.
+        # strictly looser.
         n = 4
         f_entrywise = z -> begin
             acc = 0.0 * z[1]
@@ -163,7 +163,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         @test maximum(res_e.h_sum ./ abs.(W0_CONST)) > 2
     end
 
-    @testset "exact cover of least squares in the weights" begin
+    @testset "minimal cover of least squares in the weights" begin
         rng = MersenneTwister(31)
         p, q = 3, 2
         x0v = randn(rng, q)
@@ -197,7 +197,7 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
     end
 
     # A square written `r*r` records a binary multiplication node, whose two identical parents the
-    # split treats as distinct: its atom is `2*rho*utilde_r` against the true contribution
+    # split treats as distinct: its atom is `2*eta*utilde_r` against the true contribution
     # `utilde_r*utilde_r'`, a factor 2 on the outer product. Where the squares carry the program's
     # whole curvature that is exactly sqrt(2) on every cover coordinate. `B` is untouched, which
     # places the whole cost in the split rather than in the elementwise bound.
@@ -409,11 +409,11 @@ const PRIMITIVE_VALIDITY = [(name, f, x0) for (name, f, _, x0) in PRIMITIVE_PARI
         # is still there for the next node.
         site = DerivativeCovers.ElementalSite(3.0, (1.0, 2.0))
         r = DerivativeCovers.split_ratio(nothing, Float64)
-        rho = [1.0, 2.0]
+        eta = [1.0, 2.0]
         @test !DerivativeCovers.cover_slots!(
-            rho, DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
+            eta, DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)
         )
-        @test rho == [1.0, 2.0]
+        @test eta == [1.0, 2.0]
         # The allocating form answers the same question with `nothing`.
         @test DerivativeCovers.cover_slots(
             DerivativeCovers.NoCurvature(), r, site, 1.0, (1.0, 2.0)

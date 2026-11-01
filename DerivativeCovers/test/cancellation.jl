@@ -66,12 +66,12 @@
         hstar = sqrt.(diag(Hc))
         @test all(abs(Hc[i, j]) <= hstar[i] * hstar[j] * GATE for i in 1:n, j in 1:n)
 
-        kappa = diag(Ha) ./ diag(Hc)
-        @test res.h_quad ./ hstar ≈ sqrt.(kappa) rtol = 1.0e-8
+        xi = diag(Ha) ./ diag(Hc)
+        @test res.h_quad ./ hstar ≈ sqrt.(xi) rtol = 1.0e-8
     end
 
-    @testset "looseness grows with m" begin
-        function gm_looseness(mval)
+    @testset "excess grows with m" begin
+        function gm_excess(mval)
             p = Problems.cancellation(16; m = mval, delta = 1.0e-2, aligned = false, rng = MersenneTwister(3))
             Hc = exact_hessian(p)
             hstar = sqrt.(diag(Hc))
@@ -79,7 +79,7 @@
             ratios = res.h_quad ./ hstar
             return exp(sum(log, ratios) / length(ratios))
         end
-        @test gm_looseness(16) > 1.5 * gm_looseness(4)
+        @test gm_excess(16) > 1.5 * gm_excess(4)
     end
 
     @testset "support variant" begin
@@ -147,12 +147,12 @@
 
         # A cover that cannot tell the variants apart must cover the aligned Hessian too, so on
         # the canceling variant it exceeds the minimal cover sqrt.(diag(Hc)) by at least
-        # sqrt(kappa) on the support.
+        # sqrt(xi) on the support.
         hstar = sqrt.(diag(Hc))
-        sqrtkappa = sqrt.(diag(Ha) ./ diag(Hc))
+        sqrtxi = sqrt.(diag(Ha) ./ diag(Hc))
         vc = cover_hessian(tc, oc)
         for h in (rc.h_sum, rc.h_quad, cover_hybrid(tc, oc, 4), vc.h_var)
-            @test all(h[support] .>= sqrtkappa[support] .* hstar[support] .* (1 - 1.0e-8))
+            @test all(h[support] .>= sqrtxi[support] .* hstar[support] .* (1 - 1.0e-8))
         end
 
         # Hessian-vector products read signs. A probe along a coordinate no quartet touches sees

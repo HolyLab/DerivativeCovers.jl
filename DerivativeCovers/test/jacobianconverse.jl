@@ -58,32 +58,32 @@
         @test sv[2] <= 1.0e-10 * sv[1]
     end
 
-    @testset "the floor: balanced max-merge pays exactly kappa, sum merge multiplies by q-mass" begin
+    @testset "the floor: balanced max-merge pays exactly xi, sum merge multiplies by q-mass" begin
         for kwargs in [
                 (; nout = 5, m = 6, delta = 1.0e-3, sigma = 0.7, seed = 6),
                 (; nout = 3, m = 4, delta = 1.0e-1, support = 2:5, seed = 7),
             ]
             pm, pp = pair(; kwargs...)
             Jm, Jp = exact_jacobian(pm), exact_jacobian(pp)
-            kappa = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))    # constant down each column
+            xi = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))    # constant down each column
             # Uniform output weights: the merge-gap identity below is a statement about them.
             cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(noutputs(pm)))
 
-            # The minimax cover of the (rank-1) surrogate attains looseness kappa_j at every
+            # The minimax cover of the (rank-1) surrogate attains the excess factor xi_j at every
             # entry of the cancel member — the theorem says no magnitude method beats it.
             bal = balance_cover(cm.Utilde; merge = MaxMerge(), arule = :geomean)
-            loose = (bal.a * bal.b') ./ abs.(Jm)
-            @test loose ≈ ones(noutputs(pm)) * kappa' rtol = 1.0e-8
+            excess = (bal.a * bal.b') ./ abs.(Jm)
+            @test excess ≈ ones(noutputs(pm)) * xi' rtol = 1.0e-8
 
-            # Off-support columns carry no cancellation: kappa = 1 there, exactly.
+            # Off-support columns carry no cancellation: xi = 1 there, exactly.
             supp = collect(get(kwargs, :support, 1:8))
             off = setdiff(1:8, supp)
-            @test all(kappa[off] .≈ 1)
-            isempty(off) || @test all(kappa[supp] .> 10)
+            @test all(xi[off] .≈ 1)
+            isempty(off) || @test all(xi[supp] .> 10)
 
             # Every shipped merge is in the magnitude class, so each pays at least the floor.
             for b in (cm.b_sum, cm.b_quad, cm.b_max)
-                @test all((cm.a * b') ./ abs.(Jm) .>= (ones(noutputs(pm)) * kappa') .* (1 - 1.0e-10))
+                @test all((cm.a * b') ./ abs.(Jm) .>= (ones(noutputs(pm)) * xi') .* (1 - 1.0e-10))
             end
 
             # The sum/max gap is the effective output multiplicity of q, uniform over inputs.
@@ -96,12 +96,12 @@
     @testset "off the support, no scalar correction can tighten a magnitude cover" begin
         pm, pp = pair(; nout = 4, m = 8, delta = 1.0e-3, sigma = 0.5, support = 3:6, seed = 2)
         Jm, Jp = exact_jacobian(pm), exact_jacobian(pp)
-        kappa = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))
+        xi = vec(maximum(abs.(Jp) ./ abs.(Jm); dims = 1))
         off = setdiff(1:8, 3:6)
-        @test all(==(1), kappa[off])
-        @test all(kappa[3:6] .> 10)
-        # At every off-support input some output is covered with no slack, so c*b fails to cover
-        # for any c < 1, and the on-support excess kappa cannot be traded away by a scalar.
+        @test all(==(1), xi[off])
+        @test all(xi[3:6] .> 10)
+        # At every off-support input some output is covered with equality, so c*b fails to cover
+        # for any c < 1, and the on-support excess factor xi cannot be traded away by a scalar.
         cm = cover_jacobian(WithDiagnostics(), pm.r, pm.x0; a = ones(4))
         bal = balance_cover(cm.Utilde; merge = MaxMerge(), arule = :geomean, start = :equal, rounds = nothing)
         for (a, b) in ((cm.a, cm.b_max), (bal.a, bal.b)), j in off
