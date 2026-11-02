@@ -879,7 +879,7 @@ _output_sweep(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A} =
 function _output_seeds(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A}
     theta = zeros(boundtype(T), nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
-        theta[o] = acc(theta[o], sk)
+        theta[o] = acc(theta[o], tobound(T, sk))
     end
     return theta
 end

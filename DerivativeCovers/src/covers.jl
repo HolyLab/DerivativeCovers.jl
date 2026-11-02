@@ -357,23 +357,31 @@ covers stay finite, and at the zero itself the block falls into the families abo
 cover jumps to a finite one.
 
 These zero-reference cases concern the value channel, and they are exactly the ones
-[`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there,
-and a declared scale vanishes only at a slot whose intermediate gradient is zero, which
-[`cover_slots!`](@ref) covers diagonally instead of splitting. So a split reaches this function with
-a pair that is not degenerate, and a pair carrying a ratio reaches the geometric mean only when
-`c12*zeta2/zeta1` leaves the range of the element type at a block whose feasible segment has a
-degenerate endpoint. There the equalizing point is recomputed from the separated exponents, which
-represents it whenever it is representable at all; see [`split_fallback`](@ref). A split that is
-genuinely out of range throws, since every pair returned here is a cover. Entries that are already
-non-finite are returned as IEEE arithmetic gives them, which is what `check=false` asks for.
+[`value_bounds_split`](@ref) detects: [`split_block`](@ref) substitutes the declared scales there.
+The declared scales are propagated in [`ExpScaled`](@ref), which neither underflows nor
+overflows, so a declared scale vanishes only at a slot whose intermediate gradient is zero, which
+[`cover_slots!`](@ref) covers diagonally instead of splitting, and is finite wherever the partials
+are. So a split reaches this function with a pair that is not degenerate.
+
+A declared pair is an `ExpScaled` pair, and `c12*zeta2/zeta1` is then computed with separated
+exponents, so the equalizing point is found before it is rounded to the cover's element type. A
+value pair is in the element type, and reaches the geometric mean only when `c12*zeta2/zeta1`
+leaves that type's range at a block whose feasible segment has a degenerate endpoint. There the
+equalizing point is recomputed from the separated exponents; see [`split_fallback`](@ref). Either
+way the point is represented whenever it is representable at all, so a split that still leaves the
+range is genuinely out of range, and it throws, since every pair returned here is a cover. Entries
+that are already non-finite are returned as IEEE arithmetic gives them, which is what
+`check=false` asks for.
 """
 function balanced_split(c11, c12, c22, zeta1, zeta2)
     lo = sqrt(c11)
     hi = c12 / sqrt(c22)
     # The equalizing point carries the vanishing-reference limits itself, and clamping resolves
     # them when the feasible interval has a finite endpoint. Only an unresolved NaN or unbounded
-    # target reaches the fallback.
-    eta1 = clamp(sqrt(c12 * zeta2 / zeta1), lo, hi)
+    # target reaches the fallback. A declared pair computes it in `ExpScaled`, whose range is wider
+    # than the cover's, so it is rounded to the cover's type first: a point outside that range has
+    # to meet the clamp and the tests below as the zero or infinity it rounds to.
+    eta1 = clamp(convert(typeof(lo), sqrt(c12 * zeta2 / zeta1)), lo, hi)
     if !(isfinite(eta1) && eta1 > 0)
         eta1 = clamp(split_fallback(lo, hi, c12, zeta1, zeta2), lo, hi)
     end
@@ -403,8 +411,14 @@ a rescaling by powers of two shifts `e` by an even amount, so this form is covar
 exactly as the product form is. A pair with no ratio — a vanishing or non-finite reference — gets
 the geometric mean of the endpoints, the covariant, permutation-equivariant point of the feasible
 segment.
+
+An [`ExpScaled`](@ref) pair has already been through the same separated-exponent arithmetic in
+`balanced_split`, so for it this recomputes the same point.
 """
-function split_fallback(lo, hi, c12::AbstractFloat, zeta1::AbstractFloat, zeta2::AbstractFloat)
+function split_fallback(
+        lo, hi, c12::AbstractFloat,
+        zeta1::Union{AbstractFloat, ExpScaled}, zeta2::Union{AbstractFloat, ExpScaled}
+    )
     (isfinite(c12) && c12 > 0 && isfinite(zeta1) && zeta1 > 0 && isfinite(zeta2) && zeta2 > 0) ||
         return sqrt(lo * hi)
     m12, e12 = frexp(c12)
@@ -547,7 +561,7 @@ mutable struct DeclaredScales{M, W, TT <: Tape}
     sigmas::Vector{M}
     lives::Vector{Bool}
 end
-DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, magtype(T)[], Bool[])
+DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, ExpScaled{magtype(T)}[], Bool[])
 
 function declared_scale(d::DeclaredScales, i::Integer)
     isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.w, d.tape))
@@ -567,8 +581,11 @@ Which nodes of `t` have an intermediate gradient that is not identically zero. `
 that is exactly zero (whose [`magnitude`](@ref) is zero), and then `∇v_k` is the zero vector in any
 arithmetic: every term of every path product carries an exact zero factor.
 
-The test is on the recorded partials rather than on a propagated magnitude, so it neither
-underflows a live node to dead nor depends on the declared input scales.
+The test is on the recorded partials rather than on a propagated magnitude, so it does not
+depend on the declared input scales, and it is a pass over flags rather than the arithmetic of
+[`sensitivity_scales`](@ref). That matters because [`dead_slot`](@ref) is asked at every block
+whose off-diagonal is active, while the declared scales are needed only at the blocks that fall
+back to them.
 
 Costs one `O(L)` forward pass, paid once per cover and only by a program carrying a block whose
 off-diagonal is active.
@@ -623,9 +640,10 @@ The test is exact: a tolerance would either declare a live slot dead, leaving a 
 uncovered, or compare two quantities with different units.
 
 A slot reported by a bare number carries no liveness of its own, and the number is read as the
-whole answer — which a declared scale is only while it cannot underflow. The backends here supply
-a reference that reports liveness separately: [`DeferredScale`](@ref) over a tape,
-[`ForwardScale`](@ref) in a propagation.
+whole answer: zero means dead. That is exact for a scale in [`ExpScaled`](@ref), which a live slot
+cannot underflow to zero, and not for one in a plain floating-point type. The backends here report
+liveness separately, from the recorded partials, so the test never needs the declared scales:
+[`DeferredScale`](@ref) over a tape, [`ForwardScale`](@ref) in a propagation.
 """
 dead_slot(s::SplitScale) = dead_slot(s.declared)
 dead_slot(sigma::Real) = sigma == 0
@@ -687,11 +705,16 @@ covariance argument of [`balanced_split`](@ref) applies to them unchanged; under
 rescaling `x -> D*x` the cover stays exactly covariant when the scales are rescaled alongside,
 `w -> D*w`.
 
+The sweep runs in [`ExpScaled`](@ref)`{magtype(T)}`, so `sigma` neither underflows nor
+overflows: `sigma_j > 0` exactly when node `j` is live (see [`live_nodes`](@ref)), and `sigma_j` is
+finite whenever the recorded partials are. Where the plain sweep in `magtype(T)` would stay in
+the normal range, it rounds to the same values.
+
 Cost: one `O(L)` forward sweep, paid once per cover and only by a program that reaches the
 fallback.
 """
 function sensitivity_scales(w, t::Tape{T}) where {T}
-    theta = zeros(magtype(T), nnodes(t))
+    theta = zeros(ExpScaled{magtype(T)}, nnodes(t))
     if w === nothing
         fill!(view(theta, 1:t.ninputs), 1)
     else
@@ -941,8 +964,6 @@ end
 
 # The magnitude weighting, as a plain function so that the sweeps specialize on it.
 _absslot(d, k, i, p) = magnitude(d)
-# The squared magnitude, which carries squared seeds along each path.
-_sqslot(d, k, i, p) = magnitude(d)^2
 
 """
     CoverOnly()
@@ -1014,9 +1035,9 @@ This mode takes one forward pass and one reverse sweep, or `O(L)` time and memor
 sweep carries the ordinary adjoint, the absolute cover channel, and the squared channel
 together:
 
-    vbar[p_i] += d_i * vbar[k]                              # signed channel: reverse-mode AD
-    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]        # absolute channel: the cover
-    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + eta_k[i]^2    # squared channel: h_var^2
+    vbar[p_i] += d_i * vbar[k]                                    # signed channel: reverse-mode AD
+    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]              # absolute channel: the cover
+    rbar[p_i] = hypot(rbar[p_i], magnitude(d_i) * rbar[k], eta_k[i])   # squared channel: h_var
 
 with `eta_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
@@ -1025,9 +1046,10 @@ computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:nin
 roundoff.
 
 `abar` sums, over every path from a parent slot of a node to an input, the slot's seed times the
-product of the absolute first partials along the path. `qbar` sums the squares of the same path
-contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the sign-averaged cover of
-[`HessianCover`](@ref), which does not cover the Hessian.
+product of the absolute first partials along the path. `rbar` is the root of the sum of the
+squares of the same path contributions, accumulated with `hypot` so that no square is formed, and
+`h_var = rbar[1:ninputs]` is the sign-averaged cover of [`HessianCover`](@ref), which does not
+cover the Hessian.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
 
@@ -1106,8 +1128,8 @@ function cover_hessian(
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    abar, qbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+    abar, rbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
 end
 
 function cover_hessian(
@@ -1118,11 +1140,11 @@ function cover_hessian(
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
-    abar, qbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+    abar, rbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
 end
 
-# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, qbar)`.
+# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, rbar)`.
 # With `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the
 # adjoints into it alongside the two channels. With `Val(false)`, `vbar` holds finished adjoints
 # and is only read. Both forms perform the same channel operations in the same order, so they
@@ -1130,29 +1152,31 @@ end
 function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Bool) where {propagate, T}
     N = nnodes(t)
     abar = zeros(boundtype(T), N)
-    qbar = zeros(magtype(T), N)
+    rbar = zeros(magtype(T), N)
     for k in N:-1:1
-        vk, ak, qk = vbar[k], abar[k], qbar[k]
+        vk, ak, rk = vbar[k], abar[k], rbar[k]
         ps = t.parents[k]
         avk = magnitude(vk)
         eta = local_cover_slots(r, t, k, avk, sc; check)
         if eta !== nothing
             for (i, p) in enumerate(ps)
                 abar[p] += eta[i]
-                qbar[p] += eta[i]^2
+                rbar[p] = hypot(rbar[p], eta[i])
             end
         end
         # Without adjoint propagation, a node whose channels are both zero has nothing to send.
-        ((!propagate || iszero(avk)) && ak == 0 && qk == 0) && continue
+        ((!propagate || iszero(avk)) && ak == 0 && rk == 0) && continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
             propagate && (vbar[p] += ds[i] * vk)
             d = magnitude(ds[i])
+            # A slot that transmits nothing is skipped, which keeps an infinite channel out of it.
+            iszero(d) && continue
             abar[p] += d * ak
-            qbar[p] += d^2 * qk
+            iszero(rk) || (rbar[p] = hypot(rbar[p], d * rk))
         end
     end
-    return abar, qbar
+    return abar, rbar
 end
 
 function cover_hessian(

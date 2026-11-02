@@ -8,7 +8,7 @@ using DerivativeCovers: CoverVar, submapnode, value, isconstant, nnodes, natoms,
     compose_hessian_cover, compose_jacobian_cover, gn_ab, nls_loss_tape,
     declare_submap, submap, cyclic_partition, level_partition, node_levels,
     nls_partition, adjoints, sensitivities, intermediate_gradients, abs_reverse, abs_forward,
-    local_covers, merge_atoms, balanced_split, squared_seeds, dependency_sweep,
+    local_covers, merge_atoms, balanced_split, quadrature_seeds, dependency_sweep,
     jacobian_surrogate, marginal_weights, balance_cover, tape_potentials,
     MergeRule, SumMerge, QuadMerge, MaxMerge, SignAveragedMerge, squared_surrogate,
     quadrature_surrogate,
@@ -58,8 +58,8 @@ end
 function staged_channels(t, outidx)
     n = t.ninputs
     etas, theta = local_covers(t, adjoints(t, outidx))
-    abar, qbar = dependency_sweep(t, theta, squared_seeds(t, etas))
-    return DerivativeCovers.plainvalue.(abar[1:n]), sqrt.(qbar[1:n])
+    abar, rbar = dependency_sweep(t, theta, quadrature_seeds(t, etas))
+    return DerivativeCovers.plainvalue.(abar[1:n]), rbar[1:n]
 end
 
 # `U2[k, j]` sums, over the paths from input `j` to output `k`, the squared path product: the
@@ -99,6 +99,7 @@ include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
 include("rounding.jl")
+include("expscaled.jl")
 include("intervals.jl")
 include("maxpath.jl")
 
@@ -116,6 +117,7 @@ include("maxpath.jl")
         # product rules, and `wrap` and `MulAddMul` appear in their signatures. They are slated to
         # become public; until the release that declares them, every version this package supports
         # needs them excused here. The SparseArrays types below resolve product-method ties.
+        # `decompose` is what `hash(::Real)` reads to hash a new real type consistently with `==`.
         test_explicit_imports(
             DerivativeCovers;
             all_explicit_imports_are_public = public_ok,
@@ -124,6 +126,7 @@ include("maxpath.jl")
                     ignore = (
                         :broadcastable, :generic_matvecmul!, :generic_matmatmul!, :wrap, :MulAddMul,
                         :SparseVectorUnion, :AbstractSparseMatrixCSC, :UpperOrLowerTriangular,
+                        :decompose,
                     ),
                 ) : false
         )
@@ -180,7 +183,7 @@ include("maxpath.jl")
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
             :split_fallback,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
-            :squared_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
+            :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :SignAveragedMerge, :squared_surrogate,
             :quadrature_surrogate,
             :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
@@ -1182,7 +1185,7 @@ include("maxpath.jl")
 
     # Independent reference for the squared channel: propagate the squared partials forward from
     # each input, so `u2[k][a]` is the sum over paths from input `a` to node `k` of the squared
-    # partials along the path. Contracting with the squared seeds gives the channel's value.
+    # partials along the path. Contracting with the squared seeds gives the square of the channel.
     function squared_sensitivities(t)
         n, N = t.ninputs, nnodes(t)
         u2 = [zeros(n) for _ in 1:N]
@@ -1212,9 +1215,9 @@ include("maxpath.jl")
         @test all(isfinite, severity(vc))
 
         etas, _ = local_covers(t, adjoints(t, outidx))
-        theta2 = squared_seeds(t, etas)
+        rho = quadrature_seeds(t, etas)
         u2 = squared_sensitivities(t)
-        ref = [sqrt(sum(theta2[j] * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
+        ref = [sqrt(sum(rho[j]^2 * u2[j][a] for j in 1:nnodes(t))) for a in 1:t.ninputs]
         @test vc.h_var ≈ ref rtol = 1.0e-12
     end
 
@@ -1299,16 +1302,36 @@ include("maxpath.jl")
         theta = Float64[k == outidx ? 1.0 : 0.0 for k in 1:N]
 
         # A zero squared seed leaves the hard channel exactly the single-channel sweep.
-        abar, vbar = dependency_sweep(t, theta, zeros(N))
+        abar, rbar = dependency_sweep(t, theta, zeros(N))
         @test abar ≈ abs_reverse(t, theta)
-        @test all(iszero, vbar)
-        # Seeding only the squared channel squares the coefficients along the way.
-        _, vbar = dependency_sweep(t, zeros(N), theta)
-        @test vbar[1] ≈ (t.ds[outidx][1] * t.ds[outidx - 1][1])^2
+        @test all(iszero, rbar)
+        # A single path carries the magnitude of its product of partials in both channels.
+        _, rbar = dependency_sweep(t, zeros(N), theta)
+        @test rbar[1] ≈ abs(t.ds[outidx][1] * t.ds[outidx - 1][1])
 
         @test_throws DimensionMismatch dependency_sweep(t, theta, zeros(N + 1))
         @test_throws DimensionMismatch dependency_sweep(t, zeros(N - 1), zeros(N))
 
+    end
+
+    @testset "the squared channel forms no squares" begin
+        # The split weight of `u = x[1]*1e-200` is about `1e200` and the partial into `x[1]` is
+        # `1e-200`: their product is 1, while their squares overflow and underflow.
+        f = x -> (x[1] * 1.0e-200) * (x[2] * 1.0e200)
+        x0 = [1.0, 1.0]
+        vc = cover_hessian(f, x0)
+        @test all(isfinite, vc.h_var)
+        @test vc.h_var ≈ vc.h_sum rtol = 1.0e-12     # one contribution per coordinate
+        t, outidx = tape_function(f, x0)
+        @test staged_channels(t, outidx)[2] ≈ vc.h_var rtol = 1.0e-12
+
+        nc = cover_nls(x -> [(x[1] * 1.0e-200) * (x[2] * 1.0e200), x[2]], x0)
+        @test all(isfinite, nc.h_var) && all(isfinite, nc.h_var_gn)
+        @test all(nc.h_var_gn .<= nc.h_var .* GATE) && all(nc.h_var .<= nc.h .* GATE)
+
+        # A weight whose root is moderate, with partials whose squares leave the range.
+        tg, og = tape_function(x -> [x[1] * 1.0e-200 * 1.0e200, x[2]], x0)
+        @test DerivativeCovers.gramvariance(tg, og, [1.0e100, 1.0]) ≈ [1.0e50, 1.0]
     end
 
     @testset "hvp — $name" for (name, f, x0) in PROBLEMS
