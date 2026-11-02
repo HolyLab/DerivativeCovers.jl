@@ -26,18 +26,18 @@
 # outidxs)` computes in one O(L) sweep of the residual tape; it satisfies
 # h_gn[j] ≤ c[j] ≤ √n_j h_gn[j], with n_j the number of residuals that input j reaches.
 #
-# Squaring the local partials instead sums squared path products, Ũ⁽²⁾ ≤ Ũ², and one O(L) sweep
-# seeded at the residuals gives h_var_gn[j] = √(∑ₖ Ũ⁽²⁾_kj) ≤ h_gn[j] (`gramvariance`), the
+# Combining the paths in quadrature instead sums squared path products, Ũ⁽²⁾ ≤ Ũ², and one O(L)
+# sweep seeded at the residuals gives h_var_gn[j] = √(∑ₖ Ũ⁽²⁾_kj) ≤ h_gn[j] (`gramvariance`), the
 # root-mean-square column norm of J under random local signs. It is a sign-averaged cover, which
 # does not cover JᵀJ.
 #
-# The same squared sweep carries a second channel, seeded with the squared atoms of the
-# residual-curvature nodes: its root c_var is the sign-averaged form of the residual-curvature
-# channel c, and c_var ≤ c because a sum of squares of nonnegative contributions is at most the
-# square of their sum. h_var = √(h_var_gn² + c_var²) is the sign-averaged cover of the full
-# Hessian, with h_var_gn ≤ h_var ≤ h. Because the squared channel is linear in its seeds and each
-# square node's atom is 1, h_var is `cover_hessian`'s `h_var` of the loss tape, split into its two
-# sources.
+# The same quadrature sweep carries a second channel, seeded with the atoms of the
+# residual-curvature nodes: it is c_var, the sign-averaged form of the residual-curvature channel
+# c, and c_var ≤ c because a sum of squares of nonnegative contributions is at most the square of
+# their sum. h_var = √(h_var_gn² + c_var²) is the sign-averaged cover of the full Hessian, with
+# h_var_gn ≤ h_var ≤ h. Because the squared channel is linear in its squared seeds and each square
+# node's atom is 1, h_var is `cover_hessian`'s `h_var` of the loss tape, split into its two
+# sources. Both channels accumulate with `hypot`, so no square is formed.
 
 """
     NLSCover{T, M}
@@ -250,8 +250,8 @@ end
 cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwargs...)
 
 # One grouped reverse sweep supplies both covers: the residual channels `1:gres` merge to `h_gn`,
-# and all the channels together merge to `h`. A two-channel sweep through squared partials supplies
-# both scales in the same way: the residual channel gives `h_var_gn`, both together `h_var`.
+# and all the channels together merge to `h`. A two-channel quadrature sweep supplies both scales in
+# the same way: the residual channel gives `h_var_gn`, both together `h_var`.
 function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, ratio)
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
     n = t.ninputs
@@ -263,29 +263,30 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     T = eltype(t)
     h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n])
     h_gn = tomag(T, [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in 1:n])
-    Qbar = _reverse_sweep(_sqslot, t, _nls_squared_seeds(t, etas, groups, gres + 1, residx))
-    h_var_gn = tomag(T, [sqrt(Qbar[1, j]) for j in 1:n])
-    h_var = tomag(T, [sqrt(Qbar[1, j] + Qbar[2, j]) for j in 1:n])
+    Rho = _nls_quadrature_seeds(t, etas, groups, gres + 1, residx)
+    Rbar = _reverse_sweep(hypot, _absslot, t, Rho)
+    h_var_gn = tomag(T, Rbar[1, 1:n])
+    h_var = tomag(T, [hypot(Rbar[1, j], Rbar[2, j]) for j in 1:n])
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var, h_var_gn)
 end
 
-# Seeds of the two squared channels. Row 1 places unit weight at each residual, as
-# `gramvariance` does; row 2 holds the `squared_seeds` of the nodes in the residual-curvature
+# Seeds of the two quadrature channels, in root form. Row 1 places unit weight at each residual, as
+# `gramvariance` does; row 2 holds the `quadrature_seeds` of the nodes in the residual-curvature
 # group `curv`.
-function _nls_squared_seeds(t::Tape{T}, etas, groups, curv, residx) where {T}
-    Theta2 = zeros(boundtype(T), 2, nnodes(t))
+function _nls_quadrature_seeds(t::Tape{T}, etas, groups, curv, residx) where {T}
+    Rho = zeros(boundtype(T), 2, nnodes(t))
     for k in residx
-        Theta2[1, k] += 1
+        Rho[1, k] = hypot(Rho[1, k], one(eltype(Rho)))
     end
     for k in (t.ninputs + 1):nnodes(t)
         groups[k] == curv || continue
         eta = etas[k]
         isempty(eta) && continue
         for (i, p) in enumerate(t.parents[k])
-            Theta2[2, p] += eta[i]^2
+            Rho[2, p] = hypot(Rho[2, p], tobound(T, eta[i]))
         end
     end
-    return Theta2
+    return Rho
 end
 
 # The residual channels are the square nodes' cover atoms, which are unit only because the loss

@@ -964,8 +964,6 @@ end
 
 # The magnitude weighting, as a plain function so that the sweeps specialize on it.
 _absslot(d, k, i, p) = magnitude(d)
-# The squared magnitude, which carries squared seeds along each path.
-_sqslot(d, k, i, p) = magnitude(d)^2
 
 """
     CoverOnly()
@@ -1037,9 +1035,9 @@ This mode takes one forward pass and one reverse sweep, or `O(L)` time and memor
 sweep carries the ordinary adjoint, the absolute cover channel, and the squared channel
 together:
 
-    vbar[p_i] += d_i * vbar[k]                              # signed channel: reverse-mode AD
-    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]        # absolute channel: the cover
-    qbar[p_i] += magnitude(d_i)^2 * qbar[k] + eta_k[i]^2    # squared channel: h_var^2
+    vbar[p_i] += d_i * vbar[k]                                    # signed channel: reverse-mode AD
+    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]              # absolute channel: the cover
+    rbar[p_i] = hypot(rbar[p_i], magnitude(d_i) * rbar[k], eta_k[i])   # squared channel: h_var
 
 with `eta_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
@@ -1048,9 +1046,10 @@ computable in place, and `abar[1:ninputs]` equal to `abs_reverse(t, theta)[1:nin
 roundoff.
 
 `abar` sums, over every path from a parent slot of a node to an input, the slot's seed times the
-product of the absolute first partials along the path. `qbar` sums the squares of the same path
-contributions, and `h_var = sqrt.(qbar[1:ninputs])` is the sign-averaged cover of
-[`HessianCover`](@ref), which does not cover the Hessian.
+product of the absolute first partials along the path. `rbar` is the root of the sum of the
+squares of the same path contributions, accumulated with `hypot` so that no square is formed, and
+`h_var = rbar[1:ninputs]` is the sign-averaged cover of [`HessianCover`](@ref), which does not
+cover the Hessian.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
 
@@ -1129,8 +1128,8 @@ function cover_hessian(
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    abar, qbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+    abar, rbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
 end
 
 function cover_hessian(
@@ -1141,11 +1140,11 @@ function cover_hessian(
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
-    abar, qbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), sqrt.(qbar[1:n]))
+    abar, rbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
+    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
 end
 
-# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, qbar)`.
+# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, rbar)`.
 # With `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the
 # adjoints into it alongside the two channels. With `Val(false)`, `vbar` holds finished adjoints
 # and is only read. Both forms perform the same channel operations in the same order, so they
@@ -1153,29 +1152,31 @@ end
 function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Bool) where {propagate, T}
     N = nnodes(t)
     abar = zeros(boundtype(T), N)
-    qbar = zeros(magtype(T), N)
+    rbar = zeros(magtype(T), N)
     for k in N:-1:1
-        vk, ak, qk = vbar[k], abar[k], qbar[k]
+        vk, ak, rk = vbar[k], abar[k], rbar[k]
         ps = t.parents[k]
         avk = magnitude(vk)
         eta = local_cover_slots(r, t, k, avk, sc; check)
         if eta !== nothing
             for (i, p) in enumerate(ps)
                 abar[p] += eta[i]
-                qbar[p] += eta[i]^2
+                rbar[p] = hypot(rbar[p], eta[i])
             end
         end
         # Without adjoint propagation, a node whose channels are both zero has nothing to send.
-        ((!propagate || iszero(avk)) && ak == 0 && qk == 0) && continue
+        ((!propagate || iszero(avk)) && ak == 0 && rk == 0) && continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
             propagate && (vbar[p] += ds[i] * vk)
             d = magnitude(ds[i])
+            # A slot that transmits nothing is skipped, which keeps an infinite channel out of it.
+            iszero(d) && continue
             abar[p] += d * ak
-            qbar[p] += d^2 * qk
+            iszero(rk) || (rbar[p] = hypot(rbar[p], d * rk))
         end
     end
-    return abar, qbar
+    return abar, rbar
 end
 
 function cover_hessian(

@@ -216,8 +216,8 @@ each entry of `J` has a single path, `Ũ⁽²⁾ = Ũ.^2 = abs2.(J)` on a point 
 and the column norms of `sqrt.(abs.(W))*J`. Rescaling the inputs, `x -> D*x`, gives `h -> inv(D)*h`;
 rescaling the outputs by a diagonal `C` together with `w -> w ./ C.^2` leaves `h` unchanged.
 
-`h` comes from one reverse sweep with squared local partials (the squared channel of
-[`dependency_sweep`](@ref), without its linear channel) seeded `abs(w[k])` at output node
+`h` comes from one reverse sweep that combines the paths in quadrature (the squared channel of
+[`dependency_sweep`](@ref), without its linear channel) seeded `sqrt(abs(w[k]))` at output node
 `outidxs[k]`, so it costs `O(L)` for a tape of length `L`, where `h_gn` needs one channel per
 output. [`gramvariance!`](@ref) writes `h` into a supplied vector.
 
@@ -259,13 +259,14 @@ Write [`gramvariance`](@ref)'s scale of the Gram matrix of the tape outputs `out
 return it. `h` must be indexed like the inputs (`eachindex(h) == 1:t.ninputs`).
 """
 gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}) =
-    _output_squared_sweep!(h, t, outidxs, Iterators.repeated(1, length(outidxs)))
+    _output_quadrature_sweep!(h, t, outidxs, Iterators.repeated(1, length(outidxs)))
 
 function gramvariance!(
-        h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, w::AbstractVector
-    )
+        h::AbstractVector, t::Tape{T}, outidxs::AbstractVector{<:Integer}, w::AbstractVector
+    ) where {T}
     _check_diagonal_weight(outidxs, w)
-    return _output_squared_sweep!(h, t, outidxs, (abs(w[k]) for k in eachindex(w)))
+    seeds = (sqrt(tobound(T, abs(w[k]))) for k in eachindex(w))
+    return _output_quadrature_sweep!(h, t, outidxs, seeds)
 end
 
 gramvariance!(h::AbstractVector, t::Tape, outidxs::AbstractVector{<:Integer}, W::Diagonal) =
@@ -279,16 +280,12 @@ gramvariance!(::AbstractVector, ::Tape, ::AbstractVector{<:Integer}, W::Abstract
     )
 )
 
-# `h .= sqrt.(∑_k seeds[k] * Ũ⁽²⁾[k, :])` from a reverse sweep through squared partials.
-function _output_squared_sweep!(h::AbstractVector, t::Tape, outidxs, seeds)
+# `h .= sqrt.(∑_k seeds[k]^2 * Ũ⁽²⁾[k, :])` from a reverse sweep that combines paths in quadrature.
+function _output_quadrature_sweep!(h::AbstractVector, t::Tape, outidxs, seeds)
     eachindex(h) == Base.OneTo(t.ninputs) || throw(
         DimensionMismatch(
             "h has indices $(eachindex(h)), expected $(Base.OneTo(t.ninputs)) (one per input)"
         )
     )
-    qbar = _reverse_sweep(_sqslot, t, _output_seeds(t, outidxs, seeds))
-    for j in eachindex(h)
-        h[j] = sqrt(qbar[j])
-    end
-    return h
+    return copyto!(h, _output_sweep(t, outidxs, seeds, hypot))
 end
