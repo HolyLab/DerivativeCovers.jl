@@ -90,16 +90,17 @@ struct ForwardChannels{T, S, M, SM}
 end
 
 """
-    FVar{T, S, M, SM}
+    FVar{T, S, M, SM, SG}
 
 A scalar of type `T` that propagates a Hessian cover forward. This is the tape-free
 [`CoverVar`](@ref) backend.
 
-`S` and `SM` are the storage of the intermediate-gradient and cover channels, and `M =`
-[`boundtype`](@ref)`(T)` the type the cover and the declared scale are propagated in (see
-[`ForwardContext`](@ref)). `M` and `SM` follow from `T` and `S`, so `FVar{T, S}` names the variable
-type as well. A constant carries the storage too, because generic numerical code builds typed
-literals from `eltype`, which is all it has to reach the backend by.
+`S` and `SM` are the storage of the intermediate-gradient and cover channels, `M =`
+[`boundtype`](@ref)`(T)` the type the cover is propagated in (see [`ForwardContext`](@ref)), and
+`SG =` [`ExpScaled`](@ref)`{magtype(T)}` the type of the declared scale. `M`, `SM` and `SG` follow
+from `T` and `S`, so `FVar{T, S}` names the variable type as well. A constant carries the storage
+too, because generic numerical code builds typed literals from `eltype`, which is all it has to
+reach the backend by.
 
 For each variable, the propagation holds the value, the intermediate gradient `∇v`, a squared cover
 of `∇²v` (see [`ForwardChannels`](@ref)), the scalar declared scale `sigma` the split falls back on,
@@ -109,9 +110,9 @@ costs `O(n × live width)` and never materializes a tape.
 
 Build one with [`forward_cover`](@ref) rather than directly.
 """
-struct FVar{T, S, M, SM} <: CoverVar{T}
+struct FVar{T, S, M, SM, SG} <: CoverVar{T}
     val::T
-    sigma::M
+    sigma::SG
     live::Bool
     ctx::Union{ForwardContext{T, S, M, SM}, Nothing}
     g::S
@@ -122,23 +123,27 @@ struct FVar{T, S, M, SM} <: CoverVar{T}
     # concrete for the same reason -- an immutable `S` is then stored inline, where a
     # `Union{S,Nothing}` would be copied to the heap at every node -- so a constant, which has no
     # channels, gets `constantchannel` in the fields and is recognized by a null context instead.
-    FVar{T, S, M, SM}(val, sigma, live, ctx, g, G) where {T, S, M, SM} =
-        new{T, S, M, SM}(val, sigma, live, ctx, g, G)
+    FVar{T, S, M, SM, SG}(val, sigma, live, ctx, g, G) where {T, S, M, SM, SG} =
+        new{T, S, M, SM, SG}(val, sigma, live, ctx, g, G)
 end
 
 # A constant. Its storage is named rather than defaulted: a constant of the wrong storage combines
 # with nothing in the propagation that produced it.
 function FVar{T, S}(val) where {T, S}
     M = boundtype(T)
-    return FVar{T, S, M, channeltype(S, M)}(val)
+    return FVar{T, S, M, channeltype(S, M), sigmatype(T)}(val)
 end
 
-FVar{T, S, M, SM}(val) where {T, S, M, SM} =
-    FVar{T, S, M, SM}(val, zero(M), false, nothing, constantchannel(S), constantchannel(SM))
+# The type of the declared scale; see `ForwardScale`.
+sigmatype(::Type{T}) where {T} = ExpScaled{magtype(T)}
+
+FVar{T, S, M, SM, SG}(val) where {T, S, M, SM, SG} =
+    FVar{T, S, M, SM, SG}(val, zero(SG), false, nothing, constantchannel(S), constantchannel(SM))
 
 isconstant(x::FVar) = x.ctx === nothing
 value(x::FVar) = x.val
-constantvar(::Type{FVar{T, S, M, SM}}, c::Real) where {T, S, M, SM} = FVar{T, S, M, SM}(c)
+constantvar(::Type{FVar{T, S, M, SM, SG}}, c::Real) where {T, S, M, SM, SG} =
+    FVar{T, S, M, SM, SG}(c)
 
 @noinline _constant_channels(x::FVar) = throw(
     ArgumentError(
@@ -154,7 +159,7 @@ The intermediate-gradient and cover channels behind `x`. A constant has neither:
 folds a constant operand into one that propagates, so reaching here with a constant means a caller
 bypassed that folding.
 """
-function channels(x::FVar{T, S, M, SM}) where {T, S, M, SM}
+function channels(x::FVar{T, S, M, SM, SG}) where {T, S, M, SM, SG}
     ctx = x.ctx
     ctx === nothing && _constant_channels(x)
     return ForwardChannels{T, S, M, SM}(ctx, x.g, x.G)
@@ -232,10 +237,10 @@ end
 # program reaches its inputs at indices it computes, and a static container answers such an index
 # only by spilling the whole thing to the stack. The channels inside are static or not according
 # to the point, which is where the cost of the propagation actually lies.
-function input_vars(::Type{FVar{T, S, M, SM}}, ctx, x0, w) where {T, S, M, SM}
-    sigma(a) = w === nothing ? one(M) : convert(M, w[a])
+function input_vars(::Type{FVar{T, S, M, SM, SG}}, ctx, x0, w) where {T, S, M, SM, SG}
+    sigma(a) = w === nothing ? one(SG) : convert(SG, w[a])
     # Parent channels are read-only, so inputs can share `ctx.zerochannel`.
-    var(a) = FVar{T, S, M, SM}(x0[a], sigma(a), true, ctx, channel_basis(x0, T, a), ctx.zerochannel)
+    var(a) = FVar{T, S, M, SM, SG}(x0[a], sigma(a), true, ctx, channel_basis(x0, T, a), ctx.zerochannel)
     # `Base.OneTo`, not `eachindex(x0)`: a static point indexes over `SOneTo`, and a comprehension
     # over that rebuilds the static container this is here to avoid. The caller has already
     # declared one-based indexing.
@@ -274,12 +279,12 @@ site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operan
 The declared channel of one slot of a forward propagation: the scale `sigma` that stands in for a
 parent value carrying none, and whether the slot's intermediate gradient is identically zero.
 
-Liveness travels separately from `sigma` because `sigma` cannot report it. It is a sum of products
-of first partials, so it underflows on a long chain of small factors while the intermediate gradient
-it bounds is still there, and a slot dropped on that evidence would leave a real Hessian entry
-uncovered. The flag is carried by the same recursion [`live_nodes`](@ref) runs over a tape — a slot
-is live when some parent is live and reaches it through a nonzero partial — so both backends drop
-exactly the same entries.
+`sigma` is a sum of products of first partials, held in [`ExpScaled`](@ref) so that a long chain
+of small factors cannot underflow it to zero while the intermediate gradient it bounds is still
+there. The liveness flag is carried by the same recursion [`live_nodes`](@ref) runs over a tape — a
+slot is live when some parent is live and reaches it through a nonzero partial — so both backends
+decide which entries to drop by the same test on the recorded partials. With positive input
+scales, `sigma > 0` exactly when the flag is set.
 """
 struct ForwardScale{T}
     sigma::T
@@ -329,7 +334,7 @@ function add_atoms(G, C::Curvature, ctx::ForwardContext, site, sl, gs)
     return G
 end
 
-function unarynode(x::FVar{T, S, M, SM}, val, d, c) where {T, S, M, SM}
+function unarynode(x::FVar{T, S, M, SM, SG}, val, d, c) where {T, S, M, SM, SG}
     ch = channels(x)
     ctx = ch.ctx
     dT = convert(T, d)
@@ -342,12 +347,12 @@ function unarynode(x::FVar{T, S, M, SM}, val, d, c) where {T, S, M, SM}
     if !iszero(magnitude(c))
         G = add_atoms(G, UnaryCurvature(convert(T, c)), ctx, site, (), (ch.g,))
     end
-    return FVar{T, S, M, SM}(val, sigma, x.live && !iszero(ad), ctx, g, G)
+    return FVar{T, S, M, SM, SG}(val, sigma, x.live && !iszero(ad), ctx, g, G)
 end
 
 function binarynode(
-        x::FVar{T, S, M, SM}, y::FVar{T, S, M, SM}, val, d1, d2, c11, c12, c22
-    ) where {T, S, M, SM}
+        x::FVar{T, S, M, SM, SG}, y::FVar{T, S, M, SM, SG}, val, d1, d2, c11, c12, c22
+    ) where {T, S, M, SM, SG}
     cx, cy = channels(x), channels(y)
     ctx = cx.ctx
     ctx === cy.ctx || throw(ArgumentError("cannot combine FVars from different propagations"))
@@ -364,17 +369,17 @@ function binarynode(
         G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
     live = (x.live && !iszero(aa)) || (y.live && !iszero(ab))
-    return FVar{T, S, M, SM}(val, sigma, live, ctx, g, G)
+    return FVar{T, S, M, SM, SG}(val, sigma, live, ctx, g, G)
 end
 
 function linearnode(
-        coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, S, M, SM}}
-    ) where {T, S, M, SM}
+        coeffs::AbstractVector{<:Real}, xs::AbstractVector{<:FVar{T, S, M, SM, SG}}
+    ) where {T, S, M, SM, SG}
     isempty(xs) && throw(ArgumentError("cannot propagate an empty linear combination"))
     idxs = eachindex(coeffs, xs)
     ctx = channels(xs[first(idxs)]).ctx
     val = zero(T)
-    sigma = zero(M)
+    sigma = zero(SG)
     live = false
     g = freshgradient(ctx)
     G = freshchannel(ctx)
@@ -389,18 +394,18 @@ function linearnode(
         g = add_scaled!(g, cj, ch.g)
         G = add_scaled!(G, acj, ch.G)
     end
-    return FVar{T, S, M, SM}(val, sigma, live, ctx, g, G)
+    return FVar{T, S, M, SM, SG}(val, sigma, live, ctx, g, G)
 end
 
 function dotnode(
-        ws::AbstractVector{<:FVar{T, S, M, SM}}, xs::AbstractVector{<:FVar{T, S, M, SM}}
-    ) where {T, S, M, SM}
+        ws::AbstractVector{<:FVar{T, S, M, SM, SG}}, xs::AbstractVector{<:FVar{T, S, M, SM, SG}}
+    ) where {T, S, M, SM, SG}
     isempty(ws) && throw(ArgumentError("cannot propagate an empty inner product"))
     idxs = eachindex(ws, xs)
     q = length(idxs)
     ctx = channels(ws[first(idxs)]).ctx
     val = zero(T)
-    sigma = zero(M)
+    sigma = zero(SG)
     live = false
     g = freshgradient(ctx)
     G = freshchannel(ctx)
@@ -425,7 +430,7 @@ function dotnode(
     site = ElementalSite(val, ops)
     sl = [forward_scale(v) for v in Iterators.flatten((ws, xs))]
     G = add_atoms(G, PairedCurvature(q), ctx, site, sl, gs)
-    return FVar{T, S, M, SM}(val, sigma, live, ctx, g, G)
+    return FVar{T, S, M, SM, SG}(val, sigma, live, ctx, g, G)
 end
 
 # A declared sub-map is not among the elementals a propagation handles: `declare_submap` builds the
@@ -523,11 +528,11 @@ function forward_cover(
     M = boundtype(T)
     z = channel_zero(x0, T)
     zm = channel_zero(x0, M)
-    S, SM = typeof(z), typeof(zm)
+    S, SM, SG = typeof(z), typeof(zm), sigmatype(T)
     ctx = ForwardContext{T}(split_ratio(ratio, T), check, z, zm)
-    xs = input_vars(FVar{T, S, M, SM}, ctx, x0, w)
+    xs = input_vars(FVar{T, S, M, SM, SG}, ctx, x0, w)
     out = f(xs)
-    out isa FVar{T, S, M, SM} ||
+    out isa FVar{T, S, M, SM, SG} ||
         throw(ArgumentError("program output is not an FVar of this propagation (got a $(typeof(out))); forward_cover covers a scalar-valued program"))
     isconstant(out) &&
         throw(ArgumentError("program output is a constant (value $(value(out))); it does not depend on the inputs"))

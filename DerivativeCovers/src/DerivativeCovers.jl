@@ -74,6 +74,7 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
     eval(Expr(:public, :gramvariance, :gramvariance!))
 end
 
+include("expscaled.jl")
 include("rounding.jl")
 include("curvature.jl")
 include("tape.jl")

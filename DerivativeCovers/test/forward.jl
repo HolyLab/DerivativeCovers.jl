@@ -60,10 +60,10 @@ const FORWARD_SPLITS = (
         end
     end
 
-    @testset "a slot is dead by its intermediate gradient, not by its declared scale" begin
-        # `sigma` is a sum of products of first partials, so a chain of small factors underflows it
-        # while the intermediate gradient it stands for is still there. Reading that as a dead slot
-        # would drop the block's off-diagonal entry, which is in the Hessian and has to be covered.
+    @testset "a live slot keeps a positive declared scale" begin
+        # `sigma` is a sum of products of first partials. Here the product is below the smallest
+        # `Float64`, but the intermediate gradient it stands for is still there, and dropping the
+        # slot would drop the block's off-diagonal entry, which is in the Hessian.
         f = x -> (x[1] * 1.0e-100) * x[2]
         x0 = [1.0e100, 2.0]
         w = [1.0e-300, 1.0]
@@ -71,7 +71,8 @@ const FORWARD_SPLITS = (
         fc = forward_cover(
             z -> (u = z[1] * 1.0e-100; captured[] = u; u * z[2]), x0; scales = w
         )
-        @test captured[].sigma == 0
+        @test Float64(captured[].sigma) == 0
+        @test captured[].sigma == DerivativeCovers.ExpScaled(1.0e-100) * 1.0e-300
         @test !DerivativeCovers.dead_slot(DerivativeCovers.forward_scale(captured[]))
         @test max_coverage_ratio(fc.h_quad, ForwardDiff.hessian(f, x0)) <= GATE
         @test fc.h_quad ≈ forward_corner(f, x0; scales = w) rtol = FORWARD_RTOL

@@ -112,10 +112,11 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         @test cover_hessian(t, outidx; scales = ones(Float32, 2)).h_sum isa Vector{Float32}
         @test cover_hessian(t, outidx; ratio = 0.5).h_sum isa Vector{Float32}
         @test DerivativeCovers.split_ratio(nothing, eltype(t)) === sqrt(eps(Float32))
-        @test eltype(DerivativeCovers.sensitivity_scales(nothing, t)) === Float32
+        @test eltype(DerivativeCovers.sensitivity_scales(nothing, t)) ===
+            DerivativeCovers.ExpScaled{Float32}
         let sc = DerivativeCovers.split_scales(nothing, t)
             @test sc[1].value isa Float32
-            @test DerivativeCovers.declared_scale(sc[1]) isa Float32
+            @test DerivativeCovers.declared_scale(sc[1]) isa DerivativeCovers.ExpScaled{Float32}
         end
 
         # Products mix the tape's type with the vector's.
@@ -228,7 +229,8 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         fc = ForwardCover{Float32}([1.0, 2.0], [1.0, 2.0])
         @test fc isa ForwardCover{Float32, Float32, Vector{Float32}, Vector{Float32}}
         @test ForwardCover(v, [1.0, 2.0]) isa ForwardCover{Float32, Float32}
-        @test FVar{Float32, Vector{Float32}}(1.5) isa FVar{Float32, Vector{Float32}, Float32, Vector{Float32}}
+        @test FVar{Float32, Vector{Float32}}(1.5) isa
+            FVar{Float32, Vector{Float32}, Float32, Vector{Float32}, DerivativeCovers.ExpScaled{Float32}}
         @test FVar{Float32, SVector{2, Float32}}(1.5).G isa SVector{2, Float32}
     end
 

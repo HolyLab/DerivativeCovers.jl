@@ -99,6 +99,7 @@ include("compose.jl")
 include("paired.jl")
 include("genericaxes.jl")
 include("rounding.jl")
+include("expscaled.jl")
 include("intervals.jl")
 include("maxpath.jl")
 
@@ -116,6 +117,7 @@ include("maxpath.jl")
         # product rules, and `wrap` and `MulAddMul` appear in their signatures. They are slated to
         # become public; until the release that declares them, every version this package supports
         # needs them excused here. The SparseArrays types below resolve product-method ties.
+        # `decompose` is what `hash(::Real)` reads to hash a new real type consistently with `==`.
         test_explicit_imports(
             DerivativeCovers;
             all_explicit_imports_are_public = public_ok,
@@ -124,6 +126,7 @@ include("maxpath.jl")
                     ignore = (
                         :broadcastable, :generic_matvecmul!, :generic_matmatmul!, :wrap, :MulAddMul,
                         :SparseVectorUnion, :AbstractSparseMatrixCSC, :UpperOrLowerTriangular,
+                        :decompose,
                     ),
                 ) : false
         )
