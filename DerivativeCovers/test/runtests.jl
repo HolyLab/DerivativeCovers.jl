@@ -1024,8 +1024,12 @@ include("maxpath.jl")
             end
             stored[xf] = !isempty(sc.store.sigmas)
             @test DerivativeCovers.guards_any_block(t) || isempty(sc.store.sigmas)
+            @test sc.store.nguarded == cover_hessian(t, outidx).nguarded
         end
         @test stored == Dict(xdot => false, xlive => false, xtail => true)
+        @test cover_hessian(fdot, xtail).nguarded == 1
+        @test forward_cover(fdot, xtail).nguarded == 1
+        @test cover_hessian(fdot, xdot).nguarded == 0
 
         # Declared scales must be strictly positive and finite: a zero entry would blank a live
         # slot's scale where the guard falls back on them. Both keywords are validated at the

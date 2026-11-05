@@ -11,8 +11,9 @@ work for a tape of length `L`. The result is deterministic and certified.
 A cover is covariant under rescaling: if `x -> D*x`, then `h -> inv(D)*h`; if `f -> c*f`, then
 `h -> sqrt(c)*h`. That holds exactly on any program whose blocks all split on parent values
 carrying a scale of their own. Where one does not, the split falls back on declared input scales
-and stays covariant when those are rescaled alongside, `scales -> D*scales`;
-[`guards_any_block`](@ref) says whether a given program is in that case.
+and stays covariant when those are rescaled alongside, `scales -> D*scales`. Every cover reports,
+in its `nguarded` field, how many blocks fell back at the point it was computed;
+[`guards_any_block`](@ref) predicts from a recorded program alone whether any might.
 
 `using DerivativeCovers` imports the main entry points and result types. Public utilities such as
 `cover_normalize` are not exported; call them with the `DerivativeCovers.` prefix.

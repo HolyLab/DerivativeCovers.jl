@@ -24,6 +24,9 @@ The standard result returned by [`cover_hessian`](@ref). `T` is the element type
 - `h_var::Vector{M}`: the sign-averaged cover, the root-sum-square of the path contributions that
   `h_sum` adds. It covers the mean magnitude of the sign ensemble described below, **not the
   Hessian**.
+- `nguarded::Int`: the number of blocks at which the split fell back on the declared input
+  scales; see [`split_block`](@ref). Zero means the `scales` keyword played no part in this
+  cover.
 
 `h_sum[i]` adds one contribution per pair of a seeded parent slot and a path from that slot to
 input `i`: the slot's seed times the product of the absolute first partials along the path.
@@ -60,8 +63,10 @@ struct HessianCover{T, M}
     grad::Vector{T}
     h_sum::Vector{M}
     h_var::Vector{M}
+    nguarded::Int
 end
-HessianCover{T}(grad, h_sum, h_var) where {T} = HessianCover{T, magtype(T)}(grad, h_sum, h_var)
+HessianCover{T}(grad, h_sum, h_var, nguarded) where {T} =
+    HessianCover{T, magtype(T)}(grad, h_sum, h_var, nguarded)
 
 """
     HessianDiagnostics{T, M}
@@ -76,6 +81,8 @@ the type of the bound and the covers. `HessianDiagnostics{T}` stands for
 - `h_sum`: cover computed with the sum merge.
 - `h_quad`: tighter cover computed by combining cover atoms in quadrature.
 - `h_sum_rev`: the absolute-value reverse sweep's own route to the sum merge, a consistency check.
+- `nguarded`: the number of blocks at which the split fell back on the declared input scales, as
+  in [`HessianCover`](@ref).
 
 Forming these diagnostics costs `O(n * L)` time and `O(n^2)` memory.
 """
@@ -85,9 +92,10 @@ struct HessianDiagnostics{T, M}
     h_sum::Vector{M}
     h_quad::Vector{M}
     h_sum_rev::Vector{M}
+    nguarded::Int
 end
-HessianDiagnostics{T}(grad, B, h_sum, h_quad, h_sum_rev) where {T} =
-    HessianDiagnostics{T, magtype(T)}(grad, B, h_sum, h_quad, h_sum_rev)
+HessianDiagnostics{T}(grad, B, h_sum, h_quad, h_sum_rev, nguarded) where {T} =
+    HessianDiagnostics{T, magtype(T)}(grad, B, h_sum, h_quad, h_sum_rev, nguarded)
 
 """
     adjoints(t::Tape, outidx::Integer) -> vbar
@@ -548,7 +556,8 @@ Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
 
 The two node channels a block may ask for beyond the values: [`sensitivity_scales`](@ref) seeded
 with the input scales `w`, and the [`live_nodes`](@ref) flags. Each is built by the first block
-that asks for it and shared by every block after.
+that asks for it and shared by every block after. `nguarded` counts the blocks whose split read
+the scales (see [`note_guarded`](@ref)).
 
 Deferring the sweeps is what makes them free on a program that never needs them. Deciding in
 advance would take its own `O(L)` pass over the recorded blocks, which on a tape whose blocks all
@@ -560,8 +569,9 @@ mutable struct DeclaredScales{M, W, TT <: Tape}
     const tape::TT
     sigmas::Vector{M}
     lives::Vector{Bool}
+    nguarded::Int
 end
-DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, ExpScaled{magtype(T)}[], Bool[])
+DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, ExpScaled{magtype(T)}[], Bool[], 0)
 
 function declared_scale(d::DeclaredScales, i::Integer)
     isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.w, d.tape))
@@ -670,6 +680,25 @@ end
 declared_scale(d::DeferredScale) = declared_scale(d.store, d.index)
 dead_slot(d::DeferredScale) = dead_slot(d.store, d.index)
 
+"""
+    note_guarded(s::SplitScale)
+
+Count one block whose split [`split_block`](@ref) took from the declared scales, in whatever
+store the backend behind `s` keeps: the tape's [`DeclaredScales`](@ref) through a
+[`DeferredScale`](@ref), the propagation's [`ForwardContext`](@ref) through a
+[`ForwardScale`](@ref). A slot reported by a bare number belongs to no store, and nothing is
+counted.
+
+Both slots of a split block reach the same store, so a block is counted through its first slot
+alone.
+"""
+note_guarded(s::SplitScale) = note_guarded(s.declared)
+note_guarded(::Real) = nothing
+function note_guarded(d::DeferredScale)
+    d.store.nguarded += 1
+    return nothing
+end
+
 # The scale references over a whole tape, gathered per slot on demand.
 struct SplitScales{T, V <: AbstractVector{T}, D} <:
     AbstractVector{SplitScale{T, DeferredScale{D}}}
@@ -746,7 +775,8 @@ at all.
 
 So this predicts which programs will ask for the declared scales without running a cover; the
 covers themselves build those scales on demand and never call it, and they are the authority on
-what a given tape does.
+what a given tape does: each result reports, in its `nguarded` field, how many blocks fell back
+at the point it was computed.
 """
 function guards_any_block(t::Tape{T}; ratio = nothing) where {T}
     M = magtype(T)
@@ -792,6 +822,9 @@ by the first block that asks for them rather than in advance. A program whose bl
 usable value pair therefore pays nothing for the fallback; one that reaches a guarded block pays
 one extra `O(L)` forward sweep, once. [`guards_any_block`](@ref) answers which case a tape is in
 without running a cover.
+
+Each fallback is counted through [`note_guarded`](@ref), and the covers report the total as
+`nguarded`.
 """
 function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
     # The split only picks a member of the family; an upward-rounded bound need not reach it, and
@@ -800,13 +833,14 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
     zeta1, zeta2 = plainvalue(s1.value), plainvalue(s2.value)
     value_bounds_split(c11, c12, c22, zeta1, zeta2, plainvalue(ratio)) &&
         return balanced_split(c11, c12, c22, zeta1, zeta2)
+    note_guarded(s1)
     return balanced_split(
         c11, c12, c22, plainvalue(declared_scale(s1)), plainvalue(declared_scale(s2))
     )
 end
 
 """
-    local_covers(t::Tape, vbar; check::Bool=true) -> (etas, theta)
+    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing) -> (etas, theta, nguarded)
 
 Per-node rank-1 covers. For node `k`, `etas[k][i] >= 0` satisfies
 `etas[k][i] * etas[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
@@ -814,7 +848,8 @@ except at
 entries a [`dead_slot`](@ref) empties; nodes with no second-order contribution get an empty
 `etas[k]`. `theta[j] = sum_k etas[k][i]` collects the weight each node receives as a parent, which
 seeds the reverse sweep of [`abs_reverse`](@ref); it is in [`boundtype`](@ref) of the tape's
-element type, so the sweep it seeds rounds as the tape asks.
+element type, so the sweep it seeds rounds as the tape asks. `nguarded` is the number of blocks
+whose split fell back on the declared input scales.
 
 Each node's cover comes from [`cover_slots`](@ref), dispatching on its [`Curvature`](@ref). A
 [`DeclaredCurvature`](@ref) node (a declared sub-map output, see [`submapnode`](@ref)) brings its
@@ -842,7 +877,7 @@ function local_covers(
             theta[p] += eta[i]
         end
     end
-    return etas, theta
+    return etas, theta, sc.store.nguarded
 end
 
 """
@@ -1002,9 +1037,10 @@ explicit elementwise bound and a tighter quadrature cover.
 
 The `scales` keyword declares the input scales the split falls back on where a block's parent
 values carry none, and `ratio` the threshold at which it does so; see [`split_block`](@ref) and
-[`split_ratio`](@ref). Neither affects validity, only which of the valid covers is chosen, and
-[`guards_any_block`](@ref) says whether a program consults them at all. `check=true` verifies the
-local covering conditions.
+[`split_ratio`](@ref). Neither affects validity, only which of the valid covers is chosen. The
+result's `nguarded` field counts the blocks at which this cover consulted `scales`;
+[`guards_any_block`](@ref) predicts from the tape alone whether a program might. `check=true`
+verifies the local covering conditions.
 
 Two merges are available:
 
@@ -1093,7 +1129,7 @@ function cover_hessian(
     vbar = adjoints(t, outidx)
     u = sensitivities(t)
     B = tomag(T, hessian_bound(t, vbar, u))
-    etas, theta = local_covers(t, vbar; check, scales, ratio)
+    etas, theta, nguarded = local_covers(t, vbar; check, scales, ratio)
 
     h_sum, h_quad = tomag.(T, merge_atoms(t, etas, u))
     h_sum_rev = tomag(T, abs_reverse(t, theta)[1:n])
@@ -1116,9 +1152,11 @@ function cover_hessian(
         s, q = worst_severity(mismatch(h_sum, pr.h_sum))
         s > 1 &&
             error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
+        pr.nguarded == nguarded ||
+            error("paired-sweep guarded-block count mismatch: forward=$nguarded paired=$(pr.nguarded)")
     end
 
-    return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev)
+    return HessianDiagnostics(vbar[1:n], B, h_sum, h_quad, h_sum_rev, nguarded)
 end
 
 function cover_hessian(
@@ -1128,8 +1166,9 @@ function cover_hessian(
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    abar, rbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
+    sc = split_scales(scales, t)
+    abar, rbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), sc, check)
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], sc.store.nguarded)
 end
 
 function cover_hessian(
@@ -1140,8 +1179,9 @@ function cover_hessian(
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
-    abar, rbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), split_scales(scales, t), check)
-    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n])
+    sc = split_scales(scales, t)
+    abar, rbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), sc, check)
+    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], sc.store.nguarded)
 end
 
 # The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, rbar)`.

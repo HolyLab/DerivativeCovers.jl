@@ -10,31 +10,39 @@ propagation ran in (see [`ForwardContext`](@ref)). `ForwardCover{T}` stands for
 
 - `grad::VG`: the exact gradient of the output, in `T`.
 - `h_quad::VH`: a certified Hessian cover formed by merging the cover atoms in quadrature, in `M`.
+- `nguarded::Int`: the number of blocks at which the split fell back on the declared input
+  scales, counted over every elemental the propagation covered up to the point the result was
+  read, including any that do not reach the output. Zero means the `scales` keyword played no
+  part in this cover.
 """
 struct ForwardCover{T, M, VG <: AbstractVector{T}, VH <: AbstractVector{M}}
     grad::VG
     h_quad::VH
+    nguarded::Int
 
-    ForwardCover{T, M, VG, VH}(grad, h_quad) where {T, M, VG, VH} =
-        new{T, M, VG, VH}(grad, h_quad)
+    ForwardCover{T, M, VG, VH}(grad, h_quad, nguarded) where {T, M, VG, VH} =
+        new{T, M, VG, VH}(grad, h_quad, nguarded)
 end
 
-ForwardCover(grad::AbstractVector{T}, h_quad) where {T} = ForwardCover{T}(grad, h_quad)
+ForwardCover(grad::AbstractVector{T}, h_quad, nguarded) where {T} =
+    ForwardCover{T}(grad, h_quad, nguarded)
 
-ForwardCover{T}(grad, h_quad) where {T} = ForwardCover{T, magtype(T)}(grad, h_quad)
+ForwardCover{T}(grad, h_quad, nguarded) where {T} =
+    ForwardCover{T, magtype(T)}(grad, h_quad, nguarded)
 
-function ForwardCover{T, M}(grad, h_quad) where {T, M}
+function ForwardCover{T, M}(grad, h_quad, nguarded) where {T, M}
     g = convert(AbstractArray{T}, grad)::AbstractArray{T}
     h = convert(AbstractArray{M}, h_quad)::AbstractArray{M}
-    return ForwardCover{T, M, typeof(g), typeof(h)}(g, h)
+    return ForwardCover{T, M, typeof(g), typeof(h)}(g, h, nguarded)
 end
 
 """
     ForwardContext{T, S, M, SM}
 
 State shared by every variable in a forward propagation: the degeneracy threshold local covers
-split at, whether each local cover is verified, and the scratch a node writes through while
-assembling its cover.
+split at, whether each local cover is verified, the scratch a node writes through while
+assembling its cover, and `nguarded`, the number of blocks so far whose split fell back on the
+declared scales (see [`note_guarded`](@ref)).
 
 `S` is the storage of the intermediate-gradient channel, one entry of `T` per input, and `SM` that
 of the cover channel, one entry of `M =` [`boundtype`](@ref)`(T)` per input. [`forward_cover`](@ref)
@@ -55,15 +63,16 @@ mutable struct ForwardContext{T, S <: AbstractVector{T}, M, SM <: AbstractVector
     const zerochannel::SM
     const scratch::SM
     const eta::Vector{M}
+    nguarded::Int
 
-    ForwardContext{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta) where {T, S, M, SM} =
-        new{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta)
+    ForwardContext{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta, nguarded) where {T, S, M, SM} =
+        new{T, S, M, SM}(ratio, check, zerogradient, zerochannel, scratch, eta, nguarded)
 end
 
 function ForwardContext{T}(ratio, check, zerogradient::AbstractVector{T}, zerochannel::AbstractVector) where {T}
     M = boundtype(T)
     return ForwardContext{T, typeof(zerogradient), M, typeof(zerochannel)}(
-        ratio, check, zerogradient, zerochannel, zero(zerochannel), M[]
+        ratio, check, zerogradient, zerochannel, zero(zerochannel), M[], 0
     )
 end
 
@@ -274,10 +283,12 @@ site_label(::ElementalSite) = "this elemental"
 site_values(s::ElementalSite) = "value $(s.val), operand values $(Tuple(s.operands))"
 
 """
-    ForwardScale(sigma, live)
+    ForwardScale(sigma, live, ctx)
 
 The declared channel of one slot of a forward propagation: the scale `sigma` that stands in for a
-parent value carrying none, and whether the slot's intermediate gradient is identically zero.
+parent value carrying none, whether the slot's intermediate gradient is identically zero, and the
+[`ForwardContext`](@ref) that counts the blocks whose split reads `sigma` (`nothing` for a
+constant, whose slot is never split).
 
 `sigma` is a sum of products of first partials, held in [`ExpScaled`](@ref) so that a long chain
 of small factors cannot underflow it to zero while the intermediate gradient it bounds is still
@@ -286,13 +297,18 @@ slot is live when some parent is live and reaches it through a nonzero partial â
 decide which entries to drop by the same test on the recorded partials. With positive input
 scales, `sigma > 0` exactly when the flag is set.
 """
-struct ForwardScale{T}
+struct ForwardScale{T, C}
     sigma::T
     live::Bool
+    ctx::C
 end
 
 declared_scale(f::ForwardScale) = f.sigma
 dead_slot(f::ForwardScale) = !f.live
+function note_guarded(f::ForwardScale{<:Any, <:ForwardContext})
+    f.ctx.nguarded += 1
+    return nothing
+end
 
 """
     forward_scale(x::FVar) -> SplitScale
@@ -309,7 +325,9 @@ Nothing is deferred here, unlike on a tape. `sigma` obeys the same recursion as 
 single scalar per variable rather than a pass over recorded nodes â€” so carrying it costs `O(1)` per
 elemental whether or not any block asks for it, against the `O(L)` sweep a tape would have to run.
 """
-forward_scale(x::FVar) = SplitScale(magnitude(value(x)), ForwardScale(x.sigma, x.live))
+forward_scale(x::FVar) = forward_scale(x, x.ctx)
+# The elementals pass the propagation's context, which they already hold with its concrete type.
+forward_scale(x::FVar, ctx) = SplitScale(magnitude(value(x)), ForwardScale(x.sigma, x.live, ctx))
 
 # The cover recursion of one elemental, in the squared channel:
 #
@@ -365,7 +383,7 @@ function binarynode(
     sigma = aa * x.sigma + ab * y.sigma
     if !(iszero(magnitude(c11)) && iszero(magnitude(c12)) && iszero(magnitude(c22)))
         C = BinaryCurvature(convert(T, c11), convert(T, c12), convert(T, c22))
-        sl = (forward_scale(x), forward_scale(y))
+        sl = (forward_scale(x, ctx), forward_scale(y, ctx))
         G = add_atoms(G, C, ctx, site, sl, (cx.g, cy.g))
     end
     live = (x.live && !iszero(aa)) || (y.live && !iszero(ab))
@@ -428,7 +446,7 @@ function dotnode(
         ops[n], ops[q + n] = vw, vx
     end
     site = ElementalSite(val, ops)
-    sl = [forward_scale(v) for v in Iterators.flatten((ws, xs))]
+    sl = [forward_scale(v, ctx) for v in Iterators.flatten((ws, xs))]
     G = add_atoms(G, PairedCurvature(q), ctx, site, sl, gs)
     return FVar{T, S, M, SM, SG}(val, sigma, live, ctx, g, G)
 end
@@ -543,5 +561,5 @@ end
 
 function forward_cover(x::FVar)
     ch = channels(x)
-    return ForwardCover(copy(ch.g), sqrt.(ch.G))
+    return ForwardCover(copy(ch.g), sqrt.(ch.G), ch.ctx.nguarded)
 end

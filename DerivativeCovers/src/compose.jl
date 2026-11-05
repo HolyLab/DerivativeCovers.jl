@@ -101,7 +101,7 @@ function compose_hessian_cover(
 end
 
 """
-    declare_submap(F, x0::AbstractVector; scales=nothing, ratio=nothing) -> (; y, J, S)
+    declare_submap(F, x0::AbstractVector; scales=nothing, ratio=nothing) -> (; y, J, S, nguarded)
 
 The declaration [`submapnode`](@ref) consumes, distilled from `F`'s own scratch tape at `x0`:
 exact values `y = F(x0)`, the exact signed Jacobian `J` from per-output reverse sweeps, and
@@ -120,7 +120,9 @@ including the zero-parent-value fallback exception of the local tie-break.
 `scales` and `ratio` govern the split behind the rows of `S`, as in [`cover_hessian`](@ref). The
 scratch tape's inputs are `F`'s arguments, so `scales` is expressed in *those* units, not in the
 recording tape's. The two splits are otherwise independent: the recording tape consumes `S` as a
-fixed bound, so its covers stay valid whatever choice stands behind the declaration.
+fixed bound, so its covers stay valid whatever choice stands behind the declaration. `nguarded`
+sums, over the rows of `S`, the blocks at which that split fell back on the declared scales (see
+[`HessianCover`](@ref)); a cover of the recording tape does not include them in its own count.
 
 `y` and `J` are in the element type of `x0` (as [`Tape`](@ref) assigns it) and `S` in its
 [`magtype`](@ref). The declaration holds wherever `x0` does: at a point for numeric `x0`, and at
@@ -138,11 +140,13 @@ function declare_submap(F, x0::AbstractVector; scales = nothing, ratio = nothing
     Vbar = adjoints(t, outidxs)
     J = Vbar[:, 1:n]
     S = Matrix{magtype(eltype(t))}(undef, q, n)
+    nguarded = 0
     for k in 1:q
-        _, theta = local_covers(t, Vbar[k, :]; scales, ratio)
+        _, theta, nk = local_covers(t, Vbar[k, :]; scales, ratio)
         S[k, :] = abs_reverse(t, theta)[1:n]
+        nguarded += nk
     end
-    return (; y, J, S)
+    return (; y, J, S, nguarded)
 end
 
 """

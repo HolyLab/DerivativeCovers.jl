@@ -58,6 +58,9 @@ the [`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the ty
   random local signs, [`gramvariance`](@ref) of the residuals. It covers the sign ensemble's mean
   magnitude, **not `JᵀJ`**; always `h_var_gn <= h_gn`.
 - `m`: the number of residuals.
+- `nguarded::Int`: the number of blocks at which the split fell back on the declared input
+  scales, as in [`HessianCover`](@ref). Zero means the `scales` keyword played no part in this
+  cover.
 
 Both covers are read off one grouped reverse sweep with `G` residual channels and one
 residual-curvature channel, so together they cost `O(G * L)` time and memory. With `G = 1`, the
@@ -79,9 +82,10 @@ struct NLSCover{T, M}
     h_var::Vector{M}
     h_var_gn::Vector{M}
     m::Int
+    nguarded::Int
 end
-NLSCover{T}(grad, h, h_gn, h_var, h_var_gn, m) where {T} =
-    NLSCover{T, magtype(T)}(grad, h, h_gn, h_var, h_var_gn, m)
+NLSCover{T}(grad, h, h_gn, h_var, h_var_gn, m, nguarded) where {T} =
+    NLSCover{T, magtype(T)}(grad, h, h_gn, h_var, h_var_gn, m, nguarded)
 
 """
     NLSDiagnostics{T, M}
@@ -105,9 +109,10 @@ struct NLSDiagnostics{T, M}
     h_var_gn::Vector{M}
     Utilde::Matrix{M}
     m::Int
+    nguarded::Int
 end
-NLSDiagnostics{T}(grad, h, h_gn, h_var, h_var_gn, Utilde, m) where {T} =
-    NLSDiagnostics{T, magtype(T)}(grad, h, h_gn, h_var, h_var_gn, Utilde, m)
+NLSDiagnostics{T}(grad, h, h_gn, h_var, h_var_gn, Utilde, m, nguarded) where {T} =
+    NLSDiagnostics{T, magtype(T)}(grad, h, h_gn, h_var, h_var_gn, Utilde, m, nguarded)
 
 """
     nls_loss_tape(r, x0) -> (t, outidx, residx, sqidx)
@@ -234,7 +239,7 @@ function cover_nls(
         scales = nothing, ratio = nothing
     )
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)
-    return NLSCover(c.grad, c.h, c.h_gn, c.h_var, c.h_var_gn, length(c.residx))
+    return NLSCover(c.grad, c.h, c.h_gn, c.h_var, c.h_var_gn, length(c.residx), c.nguarded)
 end
 
 function cover_nls(
@@ -244,7 +249,9 @@ function cover_nls(
     c = _nls_channels(r, x0, ngroups, check, scales, ratio)
     Utilde = jacobian_surrogate(c.t, c.residx)
     check && _check_gn_channels(c.h_gn, Utilde, c.rgroups, c.gres)
-    return NLSDiagnostics(c.grad, c.h, c.h_gn, c.h_var, c.h_var_gn, Utilde, length(c.residx))
+    return NLSDiagnostics(
+        c.grad, c.h, c.h_gn, c.h_var, c.h_var_gn, Utilde, length(c.residx), c.nguarded
+    )
 end
 
 cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwargs...)
@@ -258,7 +265,7 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     groups = nls_partition(nnodes(t), sqidx; ngroups)
     gres = maximum(groups) - 1
     vbar = adjoints(t, outidx)
-    etas, _ = local_covers(t, vbar; check, scales, ratio)
+    etas, _, nguarded = local_covers(t, vbar; check, scales, ratio)
     Abar = abs_reverse(t, group_seeds(t, etas, groups))
     T = eltype(t)
     h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in 1:n])
@@ -267,7 +274,9 @@ function _nls_channels(r, x0::AbstractVector, ngroups, check::Bool, scales, rati
     Rbar = _reverse_sweep(hypot, _absslot, t, Rho)
     h_var_gn = tomag(T, Rbar[1, 1:n])
     h_var = tomag(T, [hypot(Rbar[1, j], Rbar[2, j]) for j in 1:n])
-    return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var, h_var_gn)
+    return (;
+        t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, h_var, h_var_gn, nguarded,
+    )
 end
 
 # Seeds of the two quadrature channels, in root form. Row 1 places unit weight at each residual, as
