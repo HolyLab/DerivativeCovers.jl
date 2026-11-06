@@ -1201,19 +1201,29 @@ function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Boo
         if eta !== nothing
             for (i, p) in enumerate(ps)
                 abar[p] += eta[i]
-                rbar[p] = hypot(rbar[p], eta[i])
             end
         end
         # Without adjoint propagation, a node whose channels are both zero has nothing to send.
-        ((!propagate || iszero(avk)) && ak == 0 && rk == 0) && continue
+        sends = !((!propagate || iszero(avk)) && ak == 0 && rk == 0)
+        (sends || eta !== nothing) || continue
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
-            propagate && (vbar[p] += ds[i] * vk)
-            d = magnitude(ds[i])
-            # A slot that transmits nothing is skipped, which keeps an infinite channel out of it.
-            iszero(d) && continue
-            abar[p] += d * ak
-            iszero(rk) || (rbar[p] = hypot(rbar[p], d * rk))
+            x, transmits = zero(eltype(rbar)), false
+            if sends
+                propagate && (vbar[p] += ds[i] * vk)
+                d = magnitude(ds[i])
+                # A slot that transmits nothing is skipped, which keeps an infinite channel out of it.
+                if !iszero(d)
+                    abar[p] += d * ak
+                    iszero(rk) || ((x, transmits) = (d * rk, true))
+                end
+            end
+            # A slot's cover term and the term it transmits enter `rbar` in one `hypot`.
+            if eta === nothing
+                transmits && (rbar[p] = hypot(rbar[p], x))
+            else
+                rbar[p] = transmits ? hypot(rbar[p], eta[i], x) : hypot(rbar[p], eta[i])
+            end
         end
     end
     return abar, rbar
