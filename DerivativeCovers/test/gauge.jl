@@ -235,7 +235,8 @@
     end
 
     @testset "the guard fires at a structural zero and nowhere else" begin
-        # Whether any block read a declared scale during one pass of local covers.
+        # Whether any block read a declared scale during one pass of local covers, checked against
+        # the count the cover itself reports.
         function reads_declared_scales(t, outidx)
             sc = DerivativeCovers.split_scales(nothing, t)
             r = DerivativeCovers.split_ratio(nothing, eltype(t))
@@ -243,7 +244,9 @@
             for k in (t.ninputs + 1):nnodes(t)
                 DerivativeCovers.local_cover_slots(r, t, k, abs(vbar[k]), sc)
             end
-            return !isempty(sc.store.sigmas)
+            read = !isempty(sc.store.sigmas)
+            @test read == (cover_hessian(t, outidx).nguarded > 0)
+            return read
         end
 
         # (x[1] - x[1]) * x[2] has an exactly zero parent at every point, and H == 0.
@@ -265,6 +268,65 @@
             for _ in 1:3
                 xp = x0 .+ 0.01 .* randn(rng, length(x0))
                 @test !reads_declared_scales(tape_function(f, xp)...)
+            end
+        end
+    end
+
+    @testset "every cover reports the blocks that fell back" begin
+        # `(x[1] - 1) * (x[2] - 1)` has one multiplication block, which falls back exactly when
+        # both factors carry no scale.
+        fmul = x -> (x[1] - 1) * (x[2] - 1)
+        xg, xv = [1.0, 1.0], [3.0, 0.5]
+        for (x, ng) in ((xg, 1), (xv, 0))
+            t, outidx = tape_function(fmul, x)
+            @test cover_hessian(fmul, x).nguarded == ng
+            @test cover_hessian(CoverOnly(), t, adjoints(t, outidx)).nguarded == ng
+            @test cover_hessian(WithDiagnostics(), fmul, x).nguarded == ng
+            @test forward_cover(fmul, x).nguarded == ng
+            @test forward_cover(fmul, SVector{2}(x)).nguarded == ng
+            @test DerivativeCovers.local_covers(t, adjoints(t, outidx))[3] == ng
+            # A cover reporting no fallback reads no declared scale, so `scales` is inert there,
+            # bit for bit.
+            if ng == 0
+                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h_sum == cover_hessian(fmul, x).h_sum
+                @test forward_cover(fmul, x; scales = [3.0, 0.25]).h_quad == forward_cover(fmul, x).h_quad
+            else
+                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h_sum != cover_hessian(fmul, x).h_sum
+            end
+        end
+
+        # Each block counts once: two guarded products, and a pair of an inner product per pair.
+        f2 = x -> (x[1] - 1) * (x[2] - 1) + (x[2] - 1) * x[3]
+        @test cover_hessian(f2, [1.0, 1.0, 0.0]).nguarded == 2
+        @test forward_cover(f2, [1.0, 1.0, 0.0]).nguarded == 2
+        fdot2 = x -> dot([x[1], x[2]], [x[3], x[4]])
+        @test cover_hessian(fdot2, zeros(4)).nguarded == 2
+        @test forward_cover(fdot2, zeros(4)).nguarded == 2
+
+        # A block whose adjoint vanishes contributes no cover term, and on a tape is never split.
+        fdeadout = x -> 0 * ((x[1] - 1) * (x[2] - 1)) + x[1]^2
+        @test cover_hessian(fdeadout, xg).nguarded == 0
+
+        # The least-squares covers count over the loss tape, where a residual's curvature is
+        # weighted by the residual itself: the offset keeps it from vanishing at the guarded point.
+        rres = x -> [(x[1] - 1) * (x[2] - 1) + 1, x[1] - x[2]]
+        @test cover_nls(rres, xg).nguarded == 1
+        @test cover_nls(WithDiagnostics(), rres, xg).nguarded == 1
+        @test cover_nls(rres, xv).nguarded == 0
+
+        # A declaration counts its own splits; the recording tape does not include them.
+        d = DerivativeCovers.declare_submap(x -> [(x[1] - 1) * (x[2] - 1), x[1]^2], xg)
+        @test d.nguarded == 1
+        @test DerivativeCovers.declare_submap(x -> [(x[1] - 1) * (x[2] - 1), x[1]^2], xv).nguarded == 0
+
+        # Across the fixture programs: the paired sweep and the diagnostic covers count alike, the
+        # forward propagation agrees, and wherever nothing fell back the scales are inert.
+        @testset "$name" for (name, f, x0) in PROGS
+            c = cover_hessian(f, x0)
+            @test cover_hessian(WithDiagnostics(), f, x0).nguarded == c.nguarded
+            @test forward_cover(f, x0).nguarded == c.nguarded
+            if c.nguarded == 0
+                @test cover_hessian(f, x0; scales = fill(3.0, length(x0))).h_sum == c.h_sum
             end
         end
     end

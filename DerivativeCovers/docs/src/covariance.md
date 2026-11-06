@@ -76,17 +76,18 @@ infinite at `y = 0`, and no choice based on the argument values is both finite
 and covariant. At such operations the package uses *declared* scales for the
 inputs instead. The `scales` keyword, accepted by every cover function,
 supplies one positive scale per input; the default, `nothing`, sets them all
-to 1, which amounts to asserting that the inputs share units.
-[`guards_any_block`](@ref) reports whether a recorded program contains such an
-operation:
+to 1, which amounts to asserting that the inputs share units. Every cover
+reports, in its `nguarded` field, the number of operations at which it used
+the declared scales:
 
 ```jldoctest cov
 julia> x1 = [2.0, 0.0];
 
-julia> t, out = tape_function(f, x1);
+julia> cover_hessian(f, x0).nguarded
+0
 
-julia> DerivativeCovers.guards_any_block(t)
-true
+julia> cover_hessian(f, x1).nguarded
+1
 
 julia> cover_hessian(f, x1).h_sum
 2-element Vector{Float64}:
@@ -110,8 +111,24 @@ julia> cover_hessian(g, D .* x1; scales=D).h_sum .* D
  2.0
 ```
 
-On a program for which [`guards_any_block`](@ref) returns `false`, the
-`scales` keyword has no effect and the cover is covariant without it.
+A cover with `nguarded == 0` does not depend on the `scales` keyword at all.
+Two covers of the same program in different units are covariant, up to
+rounding, whenever both report `nguarded == 0`. The count belongs to the
+cover, not to the program: it is taken at the evaluation point, so a program
+can report `0` at one point and a positive count at another.
+
+[`guards_any_block`](@ref) predicts, from a recorded program alone, whether a
+cover of it might use the declared scales:
+
+```jldoctest cov
+julia> t, out = tape_function(f, x1);
+
+julia> DerivativeCovers.guards_any_block(t)
+true
+```
+
+The prediction can err in both directions; the `nguarded` count of a cover is
+the authority on what that cover did.
 
 The test for "carries no scale" is not limited to exact zeros. An argument
 pair whose magnitudes differ by more than a factor `ratio` is treated the same
