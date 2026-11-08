@@ -9,9 +9,9 @@ The real number `m * 2^e`, stored as a significand of type `F <: AbstractFloat` 
 exponent. It has the precision of `F` and an exponent range limited only by `Int`, so products and
 sums of positive values never underflow to zero or overflow to `Inf`.
 
-Wherever the exact result of an operation is a normal number of `F`, `+`, `-`, `*`, `/` and `sqrt`
-round to the same value `F` would give: the significand is computed in `F`, and scaling by a power
-of two does not change how a normal number rounds. Results below `F`'s normal range or above its
+Wherever the exact result of an operation is a normal number of `F`, `+`, `-`, `*`, `/`, `sqrt`
+and `hypot` round to the same value `F` would give: the significand is computed in `F`, and scaling
+by a power of two does not change how a normal number rounds. Results below `F`'s normal range or above its
 largest value keep full precision instead. Conversion back to `F` rounds once, saturating to
 zero or `Inf` outside `F`'s range.
 
@@ -118,6 +118,16 @@ function Base.sqrt(x::ExpScaled{F}) where {F}
         e -= 1
     end
     return ExpScaled{F}(sqrt(m), e >> 1)
+end
+
+function Base.hypot(a::ExpScaled{F}, b::ExpScaled{F}) where {F}
+    (isfinite(a.sig) && isfinite(b.sig)) || return ExpScaled{F}(hypot(a.sig, b.sig))
+    iszero(b.sig) && return abs(a)
+    iszero(a.sig) && return abs(b)
+    a.exp < b.exp && ((a, b) = (b, a))
+    # As in `+`: shifting both operands by one power of two leaves `F`'s `hypot` rounding unchanged
+    # while they stay normal, and a `b` shifted below that range is negligible next to `a`.
+    return ExpScaled{F}(hypot(a.sig, ldexp(b.sig, Base.Checked.checked_sub(b.exp, a.exp))), a.exp)
 end
 
 function Base.show(io::IO, x::ExpScaled{F}) where {F}

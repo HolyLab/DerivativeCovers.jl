@@ -299,13 +299,14 @@ function cover_jacobian_hybrid(
     a = first(_jacobian_a(t, outidxs, start, rounds, a, li))
 
     G = maximum(groups)
-    Theta = zeros(boundtype(T), G, N)
+    S = _weight_sweeptype(T)
+    Theta = zeros(S, G, N)
     for (k, o) in enumerate(outidxs)
         # A dead output seeds nothing: its sensitivities are zero whatever weight it carries.
-        a[k] > 0 && (Theta[groups[k], o] += inv(tobound(T, a[k])))
+        a[k] > 0 && (Theta[groups[k], o] += inv(convert(S, a[k])))
     end
     Abar = abs_reverse(t, Theta)              # G × N, group column-sums of Ũ/a at the inputs
-    b = tomag(T, [maximum(view(Abar, :, j)) for j in 1:n])
+    b = _toweights(T, [maximum(view(Abar, :, j)) for j in 1:n], "input weight b")
     _check_cover_factors(a, b, li)
 
     if check
@@ -349,21 +350,22 @@ function _check_cover_factors(a, b, li::LiveInfo; signaveraged::Bool = false)
         ("no input factor can cover its row", "no output factor can cover its column")
     for k in eachindex(a)
         (isfinite(a[k]) && (a[k] > 0 || !li.liverow[k])) || throw(
-            ArgumentError(
-                "output weight a[$k] is $(a[k]) on an output that inputs reach: the products " *
-                    "along those paths underflowed, so $rowtail"
-            )
+            ArgumentError(_factor_fault("output weight a[$k]", a[k], "an output that inputs reach", rowtail))
         )
     end
     for j in eachindex(b)
         (isfinite(b[j]) && (b[j] > 0 || !li.livecol[j])) || throw(
-            ArgumentError(
-                "input weight b[$j] is $(b[j]) on an input that reaches an output: the products " *
-                    "along those paths underflowed, so $coltail"
-            )
+            ArgumentError(_factor_fault("input weight b[$j]", b[j], "an input that reaches an output", coltail))
         )
     end
     return nothing
+end
+
+# The message for a factor `_check_cover_factors` refuses, naming what is wrong with its value.
+function _factor_fault(name, x, where_, tail)
+    cause = iszero(x) ? "it underflowed" : isinf(x) ? "it overflowed" :
+        isnan(x) ? "it is not a number" : "it is negative"
+    return "$name is $x on $where_: $cause, so $tail"
 end
 
 # Output weights are finite and strictly positive wherever an input reaches the output. A zero
@@ -454,9 +456,11 @@ marginal `∑_j Ũ_kj` lacks the second property, and the value rule `a_k = |r_k
 wherever residuals vanish.
 
 The tape method costs one `O(L)` [`abs_forward`](@ref) sweep seeded `1/b_j` at the inputs, never
-forming `Ũ`. A zero `b_j` is accepted only for an input no output depends on: it contributes
-nothing to any marginal. A zero `b_j` on an input that does reach an output is an error — no output
-weighting can restore validity there.
+forming `Ũ`. The sweep runs in [`ExpScaled`](@ref), so no node along a path overflows or
+underflows; a returned weight outside the normal range of its type is an error. A zero `b_j` is
+accepted only for an input no output depends on: it contributes nothing to any marginal. A zero
+`b_j` on an input that does reach an output is an error — no output weighting can restore validity
+there.
 """
 marginal_weights(t::Tape, outidxs::AbstractVector{<:Integer}, b::AbstractVector) =
     _marginal_weights(t, outidxs, b, _live_info(t, outidxs))
@@ -471,10 +475,11 @@ function _marginal_weights(
     length(b) == t.ninputs ||
         throw(DimensionMismatch("b has length $(length(b)), expected $(t.ninputs) (one per input)"))
     all(>=(0), b) || throw(ArgumentError("input cover b must be nonnegative"))
-    theta = zeros(magtype(T), nnodes(t))
+    S = ExpScaled{magtype(T)}
+    theta = zeros(S, nnodes(t))
     for j in 1:t.ninputs
         if b[j] > 0
-            theta[j] = 1 / b[j]
+            theta[j] = inv(convert(S, b[j]))
         else
             # A zero input weight is valid only for an input that reaches no output.
             li.livecol[j] && throw(
@@ -489,11 +494,7 @@ function _marginal_weights(
     end
     s = _forward_sweep(signaveraged ? hypot : +, _absslot, t, theta)
     # The balancing iteration indexes weights by output position.
-    a = Vector{eltype(s)}(undef, length(outidxs))
-    for (k, o) in enumerate(outidxs)
-        a[k] = s[o]
-    end
-    return a
+    return _toweights(T, [s[o] for o in outidxs], "output weight a")
 end
 
 marginal_weights(Utilde::AbstractMatrix, b::AbstractVector) = _marginal_weights(Utilde, b, +)
@@ -862,8 +863,48 @@ function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, signaveraged::Bool =
             )
         )
     end
-    seeds = (a[k] > 0 ? inv(tobound(T, a[k])) : zero(boundtype(T)) for k in eachindex(a))
-    return _output_sweep(t, outidxs, seeds, signaveraged ? hypot : +)
+    S = _weight_sweeptype(T)
+    acc = signaveraged ? hypot : +
+    seeds = (a[k] > 0 ? inv(convert(S, a[k])) : zero(S) for k in eachindex(a))
+    s = _reverse_sweep(acc, _absslot, t, _output_seeds(t, outidxs, seeds, acc, S))
+    return _toweights(T, view(s, 1:t.ninputs), "input weight b")
+end
+
+# The type the weight sweeps compute in. Their seeds are reciprocal weights, which spread as widely
+# as the weights do, so a node partway along a path can leave the floating-point range even where
+# the weight the sweep returns lies inside it; `ExpScaled` has no such limit. An upward-rounded
+# sweep stays in `boundtype(T)`, and so in the range of `magtype(T)`.
+_weight_sweeptype(::Type{T}) where {T} = roundsup(T) ? boundtype(T) : ExpScaled{magtype(T)}
+
+# The weights a sweep returned, in `magtype(T)`, with an entry that type cannot hold refused by
+# cause. An `ExpScaled` sweep is non-finite only through a non-finite partial, and its result must
+# land in the normal range: below it the conversion rounds away significant bits, and a weight
+# rounded down need not cover. An upward-rounded sweep computes in `magtype(T)` itself, so a small
+# result has already rounded up and stays a bound, and only a non-finite one is refused.
+function _toweights(::Type{T}, v::AbstractVector, name::String) where {T}
+    M = magtype(T)
+    w = Vector{M}(undef, length(v))
+    for (i, x) in zip(eachindex(w), v)
+        isfinite(x) || throw(
+            ArgumentError(
+                x isa ExpScaled ?
+                    "$name[$i] is $(convert(M, x)): a recorded partial on a path to it is not finite" :
+                    "$name[$i] is $(convert(M, x)): the upward-rounded sweep that computes it overflowed $M, " *
+                    "or a recorded partial on a path to it is not finite"
+            )
+        )
+        y = convert(M, x)
+        if x isa ExpScaled && !iszero(x) && !(isfinite(y) && y >= floatmin(M))
+            throw(
+                ArgumentError(
+                    "$name[$i] is $(x.sig) × 2^$(x.exp), which $(isfinite(y) ? "underflows" : "overflows") " *
+                        "the normal range of $M"
+                )
+            )
+        end
+        w[i] = y
+    end
+    return w
 end
 
 # `∑_k seeds[k] * Ũ_kj` at every input `j`, from one absolute-value reverse sweep seeded at the
@@ -874,12 +915,12 @@ end
 _output_sweep(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A} =
     tomag(T, _reverse_sweep(acc, _absslot, t, _output_seeds(t, outidxs, seeds, acc))[1:t.ninputs])
 
-# Per-node seed vector with `seeds[k]` placed at output node `outidxs[k]`; the seeds of a repeated
-# node combine with `acc`, as the sweep they feed does.
-function _output_seeds(t::Tape{T}, outidxs, seeds, acc::A = +) where {T, A}
-    theta = zeros(boundtype(T), nnodes(t))
+# Per-node seed vector of element type `S` with `seeds[k]` placed at output node `outidxs[k]`; the
+# seeds of a repeated node combine with `acc`, as the sweep they feed does.
+function _output_seeds(t::Tape{T}, outidxs, seeds, acc::A = +, ::Type{S} = boundtype(T)) where {T, A, S}
+    theta = zeros(S, nnodes(t))
     for (o, sk) in zip(outidxs, seeds)
-        theta[o] = acc(theta[o], tobound(T, sk))
+        theta[o] = acc(theta[o], convert(S, sk))
     end
     return theta
 end

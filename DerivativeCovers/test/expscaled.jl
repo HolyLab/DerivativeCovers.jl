@@ -11,7 +11,7 @@ using DerivativeCovers: ExpScaled, split_block, SplitScale
         mismatches = 0
         for _ in 1:20_000
             a, b = rnd(), rnd()
-            for op in (+, -, *, /)
+            for op in (+, -, *, /, hypot)
                 r = op(a, b)
                 isnormalresult(r) || continue
                 mismatches += F(op(ExpScaled(a), ExpScaled(b))) !== r

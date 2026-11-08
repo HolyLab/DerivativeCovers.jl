@@ -540,7 +540,8 @@
             sprint(showerror, e)
         end
         @test wider !== nothing
-        @test occursin("floating-point range", wider) || occursin("representable", wider)
+        @test occursin("input weight b[1]", wider)
+        @test occursin("overflows the normal range of Float64", wider)
         @test !occursin("is zero on live output", wider)
 
         # A structurally live row whose surrogate entries underflow is reported as underflow,
@@ -828,12 +829,12 @@
                 tz, oz; merge = SignAveragedMerge(), kw...
             )
         end
-        @test_throws "output weight a[1] is 0.0 on an output that inputs reach; no input cover can cover its row" balance_cover(
-            tz, oz; start = :equal
-        )
-        @test_throws "output weight a[1] is 0.0 on an output that inputs reach; no input factor can bound R on its row" balance_cover(
-            tz, oz; merge = SignAveragedMerge(), start = :equal
-        )
+        # The sweeps compute that weight exactly, and it is the conversion to Float64 that fails.
+        for merge in (SumMerge(), SignAveragedMerge())
+            @test_throws r"output weight a\[1\] is 0\.\d+ × 2\^-1328, which underflows the normal range of Float64" balance_cover(
+                tz, oz; merge, start = :equal
+            )
+        end
         # The factor check names the pair and what it bounds.
         tq, oq = tape_function(xs -> [xs[1] * xs[2], xs[2]], [1.0, 2.0])
         li = liveinfo(tq, oq)
