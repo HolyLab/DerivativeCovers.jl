@@ -667,7 +667,7 @@ include("maxpath.jl")
             z1 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
             z2 = rand(rng) < 0.1 ? 0.0 : exp(8 * randn(rng))
             if !determined(c11, c22, z1, z2)
-                @test_throws "outside the floating-point range" balanced_split(
+                @test_throws "is undetermined" balanced_split(
                     c11, c12, c22, z1, z2
                 )
                 continue
@@ -726,15 +726,21 @@ include("maxpath.jl")
             @test r2 * l2 === base[2]
         end
 
-        # A ratio no exponent can represent is refused rather than covered by something else.
-        @test_throws "outside the floating-point range" balanced_split(
-            0.0, 1.0e300, 0.0, 1.0e-300, 1.0e300
-        )
-        # So is a segment with no endpoint and a pair with no ratio, which between them leave
-        # nothing to place `eta1` by.
-        @test_throws "outside the floating-point range" balanced_split(
-            0.0, 3.0, 0.0, 0.0, 1.0
-        )
+        # An equalizing point outside the range is replaced by the nearest pair the window of
+        # `clamp_representable` holds, which still covers the block and is tight on its
+        # off-diagonal. Here the point is `eta1 = 1e450`.
+        U = 2.0^511
+        @test balanced_split(0.0, 1.0e300, 0.0, 1.0e-300, 1.0e300) === (U, 1.0e300 / U)
+        @test balanced_split(0.0, 1.0e300, 0.0, 1.0e300, 1.0e-300) === (1.0e300 / U, U)
+        # A small off-diagonal moves the bound from `U` to where the partner stays normal.
+        @test balanced_split(0.0, 1.0e-300, 0.0, 1.0e-300, 1.0e300) ===
+            (1.0e-300 / floatmin(Float64), floatmin(Float64))
+        # A finite endpoint is kept, though the equalizing point beyond it overflows.
+        hi = 1.0e10 / sqrt(1.0e-200)
+        @test balanced_split(1.0, 1.0e10, 1.0e-200, 1.0e-300, 1.0e300) === (hi, 1.0e10 / hi)
+        @test balanced_split(0.0f0, 1.0f30, 0.0f0, 1.0f-30, 1.0f30) === (2.0f0^63, 1.0f30 / 2.0f0^63)
+        # A segment with no endpoint and a pair with no ratio leave nothing to place `eta1` by.
+        @test_throws "is undetermined" balanced_split(0.0, 3.0, 0.0, 0.0, 1.0)
 
         # Selecting the fallback with `ifelse` rather than a branch gives bit-identical results, so
         # a backend that cannot branch on values has an equivalent form. The grid includes zero in

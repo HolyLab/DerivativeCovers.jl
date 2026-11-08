@@ -79,6 +79,12 @@ using DerivativeCovers: ExpScaled, split_block, SplitScale
         @test eval(Meta.parse(repr(tiny))) == tiny
     end
 
+    @testset "promotes with BigFloat" begin
+        @test promote_type(BigFloat, ExpScaled{Float64}) === ExpScaled{BigFloat}
+        @test promote_type(ExpScaled{BigFloat}, BigFloat) === ExpScaled{BigFloat}
+        @test big(2.0) * ExpScaled(0.5, -3000) == ExpScaled(big(0.5), -2999)
+    end
+
     @testset "an exponent beyond Int is an error" begin
         top = ExpScaled(0.5, typemax(Int))
         @test_throws OverflowError top * top
@@ -104,10 +110,11 @@ end
         # resolve although the product of the scales does not exist in `Float64`.
         @test eta1 * s1 ≈ eta2 * s2 rtol = 1.0e-12
     end
-    # A pair whose equalizing point is itself outside the range has no cover to return.
-    @test_throws "outside the floating-point range" split_block(
+    # A pair whose equalizing point, `2^2500`, is outside the range takes the nearest pair inside
+    # the window of `clamp_representable`.
+    @test split_block(
         1.0e-8, 0.0, 1.0, 0.0, SplitScale(0.0, tiny(-5000)), SplitScale(0.0, ExpScaled(1.0))
-    )
+    ) === (2.0^511, 2.0^-511)
 
     # Programs whose declared scales underflow or overflow `Float64` at a live slot.
     d3 = [1, 1, 4]
@@ -138,4 +145,18 @@ end
     @test all(isfinite, hc.h_sum)
     @test big(hc.h_sum[1]) * big(hc.h_sum[2]) >= big(1.0e200)^2 * (1 - 1.0e-12)
     @test forward_cover(fover, [0.0, 1.0]).h_quad isa Vector{Float64}
+
+    # A long product whose values underflow: the late multiplication blocks aim at an `eta` far
+    # beyond `floatmax`, and several of them seed the same chain of the reverse sweep. In
+    # `BigFloat` every split is representable, and rounding that cover gives the same result.
+    fprod = x -> sum(x)^2 + (prod(x) - 1)^2
+    x0 = [fill(1.0e-20, 59); 3.0]
+    hc = cover_hessian(fprod, x0)
+    fc = forward_cover(fprod, x0)
+    @test hc.nguarded > 0 && fc.nguarded > 0
+    @test hc.h_sum == Float64.(cover_hessian(fprod, big.(x0)).h_sum)
+    @test fc.h_quad == Float64.(forward_cover(fprod, big.(x0)).h_quad)
+    H = ForwardDiff.hessian(fprod, x0)
+    @test max_coverage_ratio(hc.h_sum, H) <= GATE
+    @test max_coverage_ratio(fc.h_quad, H) <= GATE
 end
