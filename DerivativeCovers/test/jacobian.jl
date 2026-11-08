@@ -595,4 +595,43 @@
         @test occursin("geomean", undersized.msg)
     end
 
+    @testset "weight sweeps hold path values beyond Float64's range" begin
+        # The weight a sweep returns is in range, but a node partway along the path is not: seeded
+        # with 1e10, the path passes through 1e310 before the second factor brings it back.
+        tr, orr = tape_function(x -> [(x[1] * 1.0e-300) * 1.0e300], [1.0])
+        @test cover_jacobian(tr, orr; a = [1.0e-10]).b_sum ≈ [1.0e10]
+        @test cover_jacobian_hybrid(tr, orr, 1; a = [1.0e-10]).b ≈ [1.0e10]
+        tf, of = tape_function(x -> [(x[1] * 1.0e300) * 1.0e-300], [1.0])
+        @test marginal_weights(tf, of, [1.0e-10]) ≈ [1.0e10]
+
+        # Brown's almost-linear system with one large coordinate. The last residual is a running
+        # product, so its seed is multiplied by x[n] before the 70 factors of 0.5 that follow.
+        function brown(xs)
+            n = length(xs)
+            s = sum(xs[j] for j in 1:n)
+            return [[xs[i] + s - (n + 1) for i in 1:(n - 1)]; prod(xs[j] for j in 1:n) - 1]
+        end
+        x = fill(0.5, 71)
+        x[end] = 7.0e297
+        t, outidxs = tape_function(brown, x)
+        c = cover_jacobian(t, outidxs)
+        @test max_coverage_ratio(c.a, c.b_sum, jacobian_surrogate(t, outidxs)) <= GATE
+        v = balance_cover(t, outidxs; merge = SignAveragedMerge())
+        @test max_coverage_ratio(v.a, v.b, quadrature_surrogate(t, outidxs)) <= GATE
+
+        # A weight its type cannot hold is refused by name and cause.
+        tb, ob = tape_function(x -> [1.0e300 * x[1]], [1.0])
+        @test_throws r"input weight b\[1\] is .*, which overflows the normal range of Float64" cover_jacobian(
+            tb, ob; a = [1.0e-300]
+        )
+        @test_throws r"output weight a\[1\] is .*, which overflows the normal range of Float64" marginal_weights(
+            tb, ob, [1.0e-300]
+        )
+        # A subnormal weight would have lost significant bits, and one rounded down need not cover.
+        ts, os = tape_function(x -> [1.0e-300 * x[1]], [1.0])
+        @test_throws r"input weight b\[1\] is .*, which underflows the normal range of Float64" cover_jacobian(
+            ts, os; a = [1.0e10]
+        )
+    end
+
 end

@@ -277,6 +277,15 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         @test_throws "power iteration is pointwise" scaled_spectral_radius(tf, o, ones(2))
     end
 
+    @testset "an upward-rounded weight sweep that overflows is refused by cause" begin
+        # The sweep rounds upward in Float64 itself, so the 1e310 partway along the path is Inf
+        # although the weight it leads to, 1e10, is in range.
+        t, outidxs = tape_function(x -> [(x[1] * 1.0e-300) * 1.0e300], [interval(1.0, 2.0)])
+        @test_throws "input weight b[1] is Inf: the upward-rounded sweep that computes it overflowed Float64" cover_jacobian(
+            t, outidxs; a = [1.0e-10]
+        )
+    end
+
     @testset "boundtype" begin
         @test DerivativeCovers.boundtype(Interval{Float64}) === DerivativeCovers.Upward{Float64}
     end
