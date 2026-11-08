@@ -375,11 +375,22 @@ A declared pair is an `ExpScaled` pair, and `c12*zeta2/zeta1` is then computed w
 exponents, so the equalizing point is found before it is rounded to the cover's element type. A
 value pair is in the element type, and reaches the geometric mean only when `c12*zeta2/zeta1`
 leaves that type's range at a block whose feasible segment has a degenerate endpoint. There the
-equalizing point is recomputed from the separated exponents; see [`split_fallback`](@ref). Either
-way the point is represented whenever it is representable at all, so a split that still leaves the
-range is genuinely out of range, and it throws, since every pair returned here is a cover. Entries
-that are already non-finite are returned as IEEE arithmetic gives them, which is what
-`check=false` asks for.
+equalizing point is recomputed from the separated exponents; see [`split_fallback`](@ref).
+
+The point found that way can still lie outside the element type's range. A product of many
+factors does this: its declared scale can lie far below the smallest `Float64`, and `[0 c; c 0]`
+against references `(2^-6000, 1)` aims at `eta1 = sqrt(c)*2^3000`. Wherever the clamped point
+exists as a positive real number but the pair `(eta1, c12/eta1)` would round to zero or infinity,
+the split moves `eta1` to the nearest point of the feasible segment inside the window of
+[`clamp_representable`](@ref), which keeps both entries normal numbers well short of the overflow
+threshold. That point is still a member of the family, so the cover stays valid and tight on the
+off-diagonal; covariance is given up only at blocks whose own point has no representation, and
+every split that is representable is returned unchanged. This adds a fourth discontinuity, at the
+edge of the element type's range.
+
+The three families above have no point to clamp: there the split throws, since every pair
+returned here is a cover. Entries that are already non-finite are returned as IEEE arithmetic
+gives them, which is what `check=false` asks for.
 """
 function balanced_split(c11, c12, c22, zeta1, zeta2)
     lo = sqrt(c11)
@@ -394,18 +405,53 @@ function balanced_split(c11, c12, c22, zeta1, zeta2)
         eta1 = clamp(split_fallback(lo, hi, c12, zeta1, zeta2), lo, hi)
     end
     eta2 = c12 / eta1
-    if !(isfinite(eta1) && eta1 > 0 && isfinite(eta2) && eta2 > 0)
-        all(isfinite, (c11, c12, c22, zeta1, zeta2)) || return eta1, eta2
-        throw(
-            ArgumentError(
-                "the balanced split of the block [$c11 $c12; $c12 $c22] against the scale " *
-                    "references ($zeta1, $zeta2) is outside the floating-point range of " *
-                    "$(typeof(eta1)): it asks for eta = ($eta1, $eta2)"
-            )
+    representable(eta1, eta2) = isfinite(eta1) && eta1 > 0 && isfinite(eta2) && eta2 > 0
+    representable(eta1, eta2) && return eta1, eta2
+    all(isfinite, (c11, c12, c22, zeta1, zeta2)) || return eta1, eta2
+    block = "the balanced split of the block [$c11 $c12; $c12 $c22] against the scale " *
+        "references ($zeta1, $zeta2)"
+    # Outside the three discontinuous families the clamped equalizing point is a positive real
+    # number, so only its representation is missing.
+    (zeta1 > 0 || c22 > 0) && (zeta2 > 0 || c11 > 0) || throw(
+        ArgumentError(
+            "$block is undetermined: the references carry no ratio, and the end of the " *
+                "feasible segment the split runs toward is zero or infinite"
         )
-    end
-    return eta1, eta2
+    )
+    eta1 = clamp(clamp_representable(eta1, c12), lo, hi)
+    eta2 = c12 / eta1
+    representable(eta1, eta2) && return eta1, eta2
+    throw(
+        ArgumentError(
+            "$block is outside the floating-point range of $(typeof(eta1)): " *
+                "it asks for eta = ($eta1, $eta2)"
+        )
+    )
 end
+
+"""
+    clamp_representable(eta1, c12) -> eta1
+
+`eta1` clamped to the window `[max(floatmin(F), c12/U), min(U, c12/floatmin(F))]`, on which both
+`eta1` and `c12/eta1` lie in `[floatmin(F), U]`. `F` is the type of `eta1`, and
+`U = 2^(exponent(floatmax(F)) ÷ 2)`, which is `2^511` for `Float64`. For a finite positive `c12`
+the window is never empty. [`balanced_split`](@ref) clamps to this window and then to the feasible
+segment, so it lands on their intersection whenever the two meet.
+
+`U` is set below `floatmax(F)` because each `eta` seeds a reverse sweep that adds it to its
+parent's accumulated weight and multiplies it by partials. A seed at the overflow threshold takes
+the first such sum to `Inf`, so `U` leaves half the exponent range as headroom. The cost falls on
+the pair's other entry, which becomes `c12/U` or `floatmin(F)` rather than its value at the
+equalizing point. `U` and `floatmin(F)` are powers of two, so both bounds are exact.
+
+A type without `floatmin`, `floatmax` and `exponent` is returned unchanged.
+"""
+function clamp_representable(eta1::F, c12) where {F <: AbstractFloat}
+    c = convert(F, c12)
+    U = ldexp(one(F), exponent(floatmax(F)) >> 1)
+    return clamp(eta1, max(floatmin(F), c / U), min(U, c / floatmin(F)))
+end
+clamp_representable(eta1, c12) = eta1
 
 """
     split_fallback(lo, hi, c12, zeta1, zeta2) -> eta1

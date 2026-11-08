@@ -52,6 +52,10 @@ Base.promote_rule(::Type{ExpScaled{F}}, ::Type{ExpScaled{G}}) where {F, G} =
     ExpScaled{promote_type(F, G)}
 Base.promote_rule(::Type{ExpScaled{F}}, ::Type{T}) where {F, T <: Real} =
     ExpScaled{promote_type(F, T)}
+# Base claims every `Real` for `BigFloat`; without this the two rules disagree and `promote_type`
+# recurses.
+Base.promote_rule(::Type{BigFloat}, ::Type{ExpScaled{F}}) where {F} =
+    ExpScaled{promote_type(F, BigFloat)}
 
 Base.float(::Type{E}) where {E <: ExpScaled} = E
 Base.float(x::ExpScaled) = x
