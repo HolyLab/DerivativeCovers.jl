@@ -110,7 +110,8 @@ struct JacobianDiagnostics{T}
 end
 
 """
-    cover_jacobian([mode,] t::Tape, outidxs; start=:logscale, rounds=4, a=nothing, check=true)
+    cover_jacobian([mode,] t::Tape, outidxs;
+                   start=:logscale, rounds=4, root=nothing, a=nothing, check=true)
     cover_jacobian([mode,] r, x0::AbstractVector; ...)
 
 Asymmetric rank-1 cover of a vector-valued function's Jacobian: weights with
@@ -121,9 +122,10 @@ evaluation point.
 support transform exactly under a rescaling of the program's inputs, outputs and intermediates, or
 `:equal`, which is permutation equivariant instead; `rounds` alternation rounds then refine it,
 and `rounds = nothing` runs [`balance_cover`](@ref)'s alternation to convergence instead.
-Passing `a` yourself fixes the weights and rules out `start` and `rounds`. `a` must be strictly
-positive on every output some input reaches and may be zero on the others, which then contribute
-to no merge.
+`root` names the root node of the `:logscale` start, overriding its default rule (see
+[`tape_potentials`](@ref)); naming it with `start = :equal` is an error. Passing `a` yourself
+fixes the weights and rules out `start`, `rounds` and `root`. `a` must be strictly positive on
+every output some input reaches and may be zero on the others, which then contribute to no merge.
 
 # Modes
 
@@ -154,21 +156,21 @@ true
 """
 function cover_jacobian(
         ::CoverOnly, t::Tape{T}, outidxs::AbstractVector{<:Integer};
-        start = nothing, rounds = missing, a = nothing, check::Bool = true
+        start = nothing, rounds = missing, root = nothing, a = nothing, check::Bool = true
     ) where {T}
     # `_jacobian_weights` rejects a factor that vanishes on a live row or column whatever `check`
     # says, because such a pair is not a cover; `check` has nothing further the sweeps can see.
-    w = _jacobian_weights(t, outidxs, start, rounds, a, _live_info(t, outidxs))
+    w = _jacobian_weights(t, outidxs, start, rounds, root, a, _live_info(t, outidxs))
     return JacobianCover(w.a, w.b, w.roots, w.nties, length(outidxs), t.ninputs)
 end
 
 function cover_jacobian(
         ::WithDiagnostics, t::Tape{T}, outidxs::AbstractVector{<:Integer};
-        start = nothing, rounds = missing, a = nothing, check::Bool = true
+        start = nothing, rounds = missing, root = nothing, a = nothing, check::Bool = true
     ) where {T}
     m, n = length(outidxs), t.ninputs
     li = _live_info(t, outidxs)
-    w = _jacobian_weights(t, outidxs, start, rounds, a, li)
+    w = _jacobian_weights(t, outidxs, start, rounds, root, a, li)
     Utilde = jacobian_surrogate(t, outidxs)
     _check_surrogate_support(t, outidxs, Utilde, li)
     M = magtype(T)
@@ -210,8 +212,8 @@ cover_jacobian(r, x0::AbstractVector; kwargs...) =
 # balancing construction outright, so naming a start or a round count alongside them asks for two
 # incompatible things. Where the sweeps round upward, `b` is the sum merge swept afresh from the
 # final `a`, so that no step after that sweep, such as a regauge, rounds it.
-function _jacobian_weights(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where {T}
-    aw, b, roots, nties = _jacobian_a(t, outidxs, start, rounds, a, li)
+function _jacobian_weights(t::Tape{T}, outidxs, start, rounds, root, a, li::LiveInfo) where {T}
+    aw, b, roots, nties = _jacobian_a(t, outidxs, start, rounds, root, a, li)
     (b === nothing || roundsup(T)) && (b = _sum_merge_b(t, outidxs, aw, li))
     _check_cover_factors(aw, b, li)
     return (; a = aw, b, roots, nties)
@@ -220,14 +222,14 @@ end
 # The output weights alone, together with whatever the balancing construction already computed
 # alongside them. Every entry point that needs weights goes through here, so they all read the same
 # keywords the same way.
-function _jacobian_a(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where {T}
+function _jacobian_a(t::Tape{T}, outidxs, start, rounds, root, a, li::LiveInfo) where {T}
     if a === nothing
         # Nothing here reads `delta`, so a fixed budget does not sweep for it.
-        bal = _balance_tape(t, outidxs, li; start, rounds, residual = false, check = false)
+        bal = _balance_tape(t, outidxs, li; start, rounds, root, residual = false, check = false)
         return bal.a, bal.b, bal.roots, bal.nties
     end
-    start === nothing && rounds === missing ||
-        throw(ArgumentError("a fixes the output weights, so start and rounds do not apply to it"))
+    start === nothing && rounds === missing && root === nothing ||
+        throw(ArgumentError("a fixes the output weights, so start, rounds and root do not apply to it"))
     m = length(outidxs)
     # Weights use output positions 1:m, independent of the axes of outidxs.
     Base.require_one_based_indexing(a)
@@ -257,8 +259,9 @@ The output weights are [`cover_jacobian`](@ref)'s, chosen by the same keywords:
 
   - `start`: `:logscale` (the default) or `:equal`.
   - `rounds`: alternation rounds refining them, `4` by default.
+  - `root`: the root node of the `:logscale` start, in place of its default rule.
   - `a`: fixed weights of your own instead, strictly positive on every output some input reaches
-    and optionally zero on the others. It rules out `start` and `rounds`.
+    and optionally zero on the others. It rules out `start`, `rounds` and `root`.
   - `check = true`: verify the returned `b` against the surrogate, at `O(m * L)`.
 
 Returns the weights used and the grouped merge for them: `a[k] * b[j] >= abs(J[k,j])`.
@@ -287,7 +290,7 @@ julia> round.(DerivativeCovers.cover_jacobian_hybrid(t, outidxs, 3; a = ones(3))
 """
 function cover_jacobian_hybrid(
         t::Tape{T}, outidxs::AbstractVector{<:Integer},
-        groups::AbstractVector{<:Integer}; start = nothing, rounds = missing,
+        groups::AbstractVector{<:Integer}; start = nothing, rounds = missing, root = nothing,
         a = nothing, check::Bool = true
     ) where {T}
     m, n, N = length(outidxs), t.ninputs, nnodes(t)
@@ -297,7 +300,7 @@ function cover_jacobian_hybrid(
         throw(DimensionMismatch("groups has length $(length(groups)), expected $m (one per output)"))
     all(>=(1), groups) || throw(ArgumentError("group indices must be positive"))
     li = _live_info(t, outidxs)
-    a = first(_jacobian_a(t, outidxs, start, rounds, a, li))
+    a = first(_jacobian_a(t, outidxs, start, rounds, root, a, li))
 
     G = maximum(groups)
     S = _weight_sweeptype(T)

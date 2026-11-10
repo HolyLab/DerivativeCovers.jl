@@ -414,14 +414,31 @@
         @test cover_jacobian(t, outidxs; a = ones(3)).b_sum ≈ d1.b_sum
 
         # Explicit weights replace the construction outright.
-        @test_throws "start and rounds do not apply" cover_jacobian(
+        @test_throws "start, rounds and root do not apply" cover_jacobian(
             t, outidxs;
             a = ones(3), start = :equal
         )
-        @test_throws "start and rounds do not apply" cover_jacobian(
+        @test_throws "start, rounds and root do not apply" cover_jacobian(
             WithDiagnostics(), t, outidxs; a = ones(3), rounds = 2
         )
         @test_throws DimensionMismatch cover_jacobian(t, outidxs; a = ones(2))
+
+        # A named root reaches the start, as in `balance_cover`, in both modes and the hybrid.
+        pot = tape_potentials(t, outidxs)
+        other = findfirst(v -> pot.live[v] && v != pot.roots[1], 1:nnodes(t))
+        bal = balance_cover(t, outidxs; root = other, residual = false, check = false)
+        for mode in (CoverOnly(), WithDiagnostics())
+            c = cover_jacobian(mode, t, outidxs; root = other)
+            @test c.a == bal.a && c.b_sum == bal.b
+            @test c.roots == [other] && c.nties == [1]
+        end
+        @test cover_jacobian_hybrid(t, outidxs, 1; root = other).a == bal.a
+        @test_throws "start, rounds and root do not apply" cover_jacobian(
+            t, outidxs; a = ones(3), root = other
+        )
+        @test_throws "root and cgiters belong to the tape-potential start" cover_jacobian(
+            t, outidxs; start = :equal, root = other
+        )
 
         # The sweep tier reaches no surrogate, with `check` either way.
         for check in (false, true)
@@ -482,10 +499,10 @@
             xs -> xs[1] * xs[2], [1.0, 2.0], 2
         )
 
-        @test_throws "start and rounds do not apply" cover_jacobian_hybrid(
+        @test_throws "start, rounds and root do not apply" cover_jacobian_hybrid(
             t, outidxs, 2; a = ones(3), start = :equal
         )
-        @test_throws "start and rounds do not apply" cover_jacobian_hybrid(
+        @test_throws "start, rounds and root do not apply" cover_jacobian_hybrid(
             t, outidxs, [1, 1, 2]; a = ones(3), rounds = 2
         )
         @test_throws DimensionMismatch cover_jacobian_hybrid(t, outidxs, 2; a = ones(2))
