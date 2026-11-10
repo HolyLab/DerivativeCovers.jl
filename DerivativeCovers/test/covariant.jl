@@ -919,8 +919,7 @@
         bnum = a -> DC._sum_merge_b(t, outidxs, a, li, signaveraged)
         anum = b -> DC._marginal_weights(t, outidxs, b, li, signaveraged)
         rtol = eps()^(2 // 3)
-        a, iters, delta = DC._balance_targets(anum, bnum, a, rt, ct, maxiter, rtol, nothing; relax)
-        b = bnum(a)
+        a, b, iters, delta = DC._balance_targets(anum, bnum, a, rt, ct, maxiter, rtol, nothing; relax)
         return (; a, b, iters, delta)
     end
     # Rows `w1[i] x[i] + w2[i] x[i+1]`, cyclically: one long cycle through the support, on which
@@ -948,6 +947,58 @@
         bal = balance_cover(jacobian_surrogate(t, outidxs); rounds = 5)
         @test bits(bal.a) == [0x3fe8087d82ac9a58, 0x3fe389d2861f4957, 0x3ff295eaca0f2aee]
         @test bits(bal.b) == [0x40060cff0d6f5edc, 0x40047372778c69dd, 0x40058d262909c733]
+    end
+
+    @testset "the last column sweep is the final merge — $name" for (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        li = liveinfo(t, outidxs)
+        for merge in (SumMerge(), SignAveragedMerge()), start in (:logscale, :equal),
+                rounds in (1, 4, nothing)
+            bal = balance_cover(t, outidxs; merge, start, rounds)
+            # A sweep from the returned `a` gives the returned `b`, bit for bit.
+            swept = DerivativeCovers._sum_merge_b(t, outidxs, bal.a, li, merge isa SignAveragedMerge)
+            @test bal.b == swept
+        end
+    end
+
+    @testset "a fixed budget takes 2*rounds + 1 sweeps, and one more for the residual" begin
+        DC = DerivativeCovers
+        r = xs -> [xs[1] * xs[2] + xs[3], sin(xs[3]) + xs[1] * xs[2], exp(xs[1]) + xs[2] * xs[3]]
+        t, outidxs = tape_function(r, [0.6, -0.4, 0.9])
+        li = liveinfo(t, outidxs)
+        rt, ct = flowtargets(t, outidxs)
+        nrow, ncol = Ref(0), Ref(0)
+        anum = b -> (nrow[] += 1; DC._marginal_weights(t, outidxs, b, li))
+        bnum = a -> (ncol[] += 1; DC._sum_merge_b(t, outidxs, a, li))
+        for rounds in (0, 1, 4), residual in (false, true)
+            nrow[] = ncol[] = 0
+            a0 = DC._balance_start(nothing, length(outidxs), Float64, li.liverow)
+            a, b, iters, delta = DC._balance_targets(anum, bnum, a0, rt, ct, 0, 0.0, rounds; residual)
+            @test (ncol[], nrow[]) == (rounds + 1, rounds + residual)
+            @test iters == rounds
+            @test residual ? isfinite(delta) : delta == Inf
+            @test b == DC._sum_merge_b(t, outidxs, a, li)
+        end
+
+        # Skipping the residual changes `delta` and nothing else, and the cover entry point
+        # returns the same pair.
+        bal = balance_cover(t, outidxs)
+        quick = balance_cover(t, outidxs; residual = false)
+        @test quick.a == bal.a && quick.b == bal.b
+        @test quick.delta == Inf
+        c = cover_jacobian(t, outidxs)
+        @test c.a == bal.a && c.b_sum == bal.b
+        # The measured residual is that of the returned `a` and the normalized column factor.
+        U = jacobian_surrogate(t, outidxs)
+        @test bal.delta ≈ maximum(abs.((U * (ct ./ bal.b)) ./ (bal.a .* rt) .- 1)) rtol = 1.0e-8
+        # On a matrix the residual is likewise optional.
+        @test balance_cover(U; rounds = 3, residual = false).delta == Inf
+        @test isfinite(balance_cover(U; rounds = 3).delta)
+
+        # A retained merge that the gauge shift moved out of the normal range is refused.
+        @test DC._retained_merge([0.0, 1.0]) == [0.0, 1.0]
+        @test_throws "underflows the normal range of Float64" DC._retained_merge([1.0, floatmin() / 2])
+        @test_throws "overflows the normal range of Float64" DC._retained_merge([Inf, 1.0])
     end
 
     @testset "overrelaxation: the plain fixed point, in fewer rounds" begin

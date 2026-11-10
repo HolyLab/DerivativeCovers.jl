@@ -222,7 +222,8 @@ end
 # keywords the same way.
 function _jacobian_a(t::Tape{T}, outidxs, start, rounds, a, li::LiveInfo) where {T}
     if a === nothing
-        bal = _balance_tape(t, outidxs, li; start, rounds, check = false)
+        # Nothing here reads `delta`, so a fixed budget does not sweep for it.
+        bal = _balance_tape(t, outidxs, li; start, rounds, residual = false, check = false)
         return bal.a, bal.b, bal.roots, bal.nties
     end
     start === nothing && rounds === missing ||
@@ -634,6 +635,11 @@ without it.
     `targets`, in log space with a factor adapted to the observed contraction, which reaches the
     same fixed point in far fewer rounds on slowly converging patterns; a fixed budget always runs
     the plain rounds.
+  - `residual = true`: whether a fixed budget toward non-uniform `targets` measures the
+    row-marginal residual of the pair it returns. No round needs that residual, so measuring it
+    takes one sweep beyond the rounds; `false` skips the sweep and reports `delta = Inf`. It has
+    no effect on a run to convergence, whose stopping test is that residual, or where `delta` is
+    the product change, which costs no sweep.
   - `maxiter`, `rtol`: bound and tolerance of a `rounds = nothing` run. `maxiter = nothing` picks
     `1000` rounds for `arule = :marginal` and `10000` for `:geomean`. Passing `maxiter` together
     with a `rounds` count is an error.
@@ -661,8 +667,10 @@ of `a_k b_j`, and the residual is `max_k |sqrt(∑_j R_kj²/b_j²) / (a_k sqrt(r
 # Cost
 
 The tape form with `merge = SumMerge()` or `SignAveragedMerge()` and `arule = :marginal` runs as
-`O(L)` sweeps per round and never forms `Ũ`. Every other combination, and `check = true`, forms it
-(or `R`) at `O(m*L)`.
+`O(L)` sweeps and never forms `Ũ`. After the start and the targets, a budget of `rounds >= 1`
+toward non-uniform `targets` takes `2 * rounds + 1` sweeps, one more with `residual = true`: the
+last round's column sweep is also the final b-step. Every other combination, and `check = true`,
+forms `Ũ` (or `R`) at `O(m*L)`.
 
 # Examples
 
@@ -682,11 +690,11 @@ function balance_cover(
         arule::Symbol = :marginal, targets = nothing, start = nothing, a0 = nothing,
         root = nothing, cgiters::Integer = 0,
         maxiter::Union{Nothing, Integer} = nothing, rounds = missing,
-        rtol::Union{Nothing, Real} = nothing, check::Bool = true
+        rtol::Union{Nothing, Real} = nothing, residual::Bool = true, check::Bool = true
     ) where {T}
     return _balance_tape(
         t, outidxs, _live_info(t, outidxs);
-        merge, arule, targets, start, a0, root, cgiters, maxiter, rounds, rtol, check
+        merge, arule, targets, start, a0, root, cgiters, maxiter, rounds, rtol, residual, check
     )
 end
 
@@ -699,7 +707,7 @@ function _balance_tape(
         merge::MergeRule = SumMerge(), arule::Symbol = :marginal, targets = nothing,
         start = nothing, a0 = nothing, root = nothing, cgiters::Integer = 0,
         maxiter::Union{Nothing, Integer} = nothing, rounds = missing,
-        rtol::Union{Nothing, Real} = nothing, check::Bool = true
+        rtol::Union{Nothing, Real} = nothing, residual::Bool = true, check::Bool = true
     ) where {T}
     m = length(outidxs)
     M = magtype(T)
@@ -718,7 +726,7 @@ function _balance_tape(
         _check_surrogate_support(t, outidxs, Utilde, li; signaveraged)
         return _balance_matrix(
             Utilde, tgt, li.liverow, li.livecol, merge, arule, start, a0,
-            maxiter, rounds, rtol, check, :flow
+            maxiter, rounds, rtol, residual, check, :flow
         )
     end
 
@@ -737,9 +745,12 @@ function _balance_tape(
         a, b, iters, delta =
             _balance(rawbstep, anumstep, a, maxiter, rtol, _marginal_hint(SumMerge(), :flow); rounds)
     else
-        a, iters, delta = _balance_targets(anumstep, rawbstep, a, tgt..., maxiter, rtol, rounds)
-        # The normalized iterate is not a cover; the plain sum merge for this `a` is.
-        b = rawbstep(a)
+        a, bsum, iters, delta =
+            _balance_targets(anumstep, rawbstep, a, tgt..., maxiter, rtol, rounds; residual)
+        # The normalized iterate is not a cover; the plain sum merge for this `a` is, and the last
+        # column sweep of the alternation computed it. Where the sweeps round upward it is swept
+        # afresh instead, so that no step after the sweep, such as the regauge, rounds it.
+        b = roundsup(T) ? rawbstep(a) : _retained_merge(bsum)
     end
     _check_cover_factors(a, b, li; signaveraged)
     if check
@@ -766,7 +777,8 @@ function balance_cover(
         Utilde::AbstractMatrix; merge::MergeRule = SumMerge(), arule::Symbol = :marginal,
         targets = nothing, start = nothing, a0 = nothing, root = nothing,
         cgiters::Integer = 0, maxiter::Union{Nothing, Integer} = nothing,
-        rounds = missing, rtol::Union{Nothing, Real} = nothing, check::Bool = true
+        rounds = missing, rtol::Union{Nothing, Real} = nothing, residual::Bool = true,
+        check::Bool = true
     )
     Base.require_one_based_indexing(Utilde)
     all(>=(0), Utilde) || throw(ArgumentError("the magnitude matrix must be nonnegative"))
@@ -779,7 +791,7 @@ function balance_cover(
     livecol = BitVector(any(!iszero, view(Utilde, :, j)) for j in 1:n)
     return _balance_matrix(
         Utilde, tgt, liverow, livecol, merge, arule, start, a0,
-        maxiter, rounds, rtol, check, :support
+        maxiter, rounds, rtol, residual, check, :support
     )
 end
 
@@ -788,7 +800,7 @@ end
 # that got here accepts.
 function _balance_matrix(
         Utilde, tgt, liverow, livecol, merge::MergeRule, arule::Symbol, start, a0,
-        maxiter, rounds, rtol, check::Bool, suggest::Symbol
+        maxiter, rounds, rtol, residual::Bool, check::Bool, suggest::Symbol
     )
     T = float(magtype(eltype(Utilde)))
     m = size(Utilde, 1)
@@ -816,8 +828,8 @@ function _balance_matrix(
     if arule === :marginal && tgt !== nothing
         rtgt, ctgt = tgt
         bnumstep = a -> _merge_bstep(Utilde, a, altmerge)
-        a, iters, delta =
-            _balance_targets(astep, bnumstep, a, rtgt, ctgt, maxiter, rtol, rounds)
+        a, _, iters, delta =
+            _balance_targets(astep, bnumstep, a, rtgt, ctgt, maxiter, rtol, rounds; residual)
         # The normalized iterate is not a cover; the `merge` b-step for this `a` is.
         b = bstep(a)
     elseif arule === :marginal
@@ -868,6 +880,24 @@ function _sum_merge_b(t::Tape{T}, outidxs, a, li::LiveInfo, signaveraged::Bool =
     seeds = (a[k] > 0 ? inv(convert(S, a[k])) : zero(S) for k in eachindex(a))
     s = _reverse_sweep(acc, _absslot, t, _output_seeds(t, outidxs, seeds, acc, S))
     return _toweights(T, view(s, 1:t.ninputs), "input weight b")
+end
+
+# The sum merge for the `a` a targeted alternation returned, taken from the column sums its last
+# column sweep computed rather than swept again. The regauge after that sweep scaled them by a
+# power of two, which is exact only while the result stays in the normal range, and a weight
+# rounded below it need not cover. One that left the range is refused, as `_toweights` refuses a
+# swept weight outside it.
+function _retained_merge(b)
+    M = eltype(b)
+    for j in eachindex(b)
+        (iszero(b[j]) || (isfinite(b[j]) && b[j] >= floatmin(M))) || throw(
+            ArgumentError(
+                "input weight b[$j] is $(b[j]) after the gauge shift, which " *
+                    "$(isfinite(b[j]) ? "underflows" : "overflows") the normal range of $M"
+            )
+        )
+    end
+    return b
 end
 
 # The type the weight sweeps compute in. Their seeds are reciprocal weights, which spread as widely
@@ -1270,6 +1300,12 @@ end
 # Alternation toward prescribed marginals. `anum(b)` returns `∑_j Ũ_kj/b_j` and `bnum(a)` returns
 # `∑_k Ũ_kj/a_k`; dividing them by `r` and `c` gives the two normalized steps.
 #
+# Returns `a`, the column sums `bnum(a)` for that `a`, the rounds run, and `delta`. The column sums
+# are the ones the last round computed, carried through the regauge that followed: a regauge
+# divides `a` by a power of two, which multiplies `bnum(a)` by the same power. They are the sum
+# merge of the returned `a`, so a caller that wants that merge has it without another sweep. They
+# are scaled in place, so `bnum` must return a vector it does not keep.
+#
 # Convergence is measured on the relative row-marginal residual
 # `max_k |∑_j R_kj/r_k - 1|` with `R_kj = Ũ_kj/(a_k b_j)`, which is what the iteration is trying to
 # drive to zero. The product increment is not a substitute: on slowly converging supports it falls
@@ -1278,34 +1314,40 @@ end
 # the next round's a-step needs, so testing it costs one extra `anum` over the whole run and
 # nothing per round.
 #
-# A fixed budget runs the plain alternation. A run to convergence is overrelaxed unless `relax`
-# is false (see `_balance_targets_relaxed`).
-function _balance_targets(anum, bnum, a, r, c, maxiter, rtol, rounds; relax::Bool = true)
-    b = _divide_targets(bnum(a), c)
-    _regauge!(a, b)
-    an = anum(b)
-    delta = _row_residual(an, a, r)
+# A fixed budget runs the plain alternation: one `bnum`, then one `anum` and one `bnum` per round.
+# No round reads the residual of the iterate it ends on, so measuring it is one further `anum`,
+# which `residual = false` skips, reporting `delta = Inf`. A run to convergence is overrelaxed
+# unless `relax` is false (see `_balance_targets_relaxed`).
+function _balance_targets(
+        anum, bnum, a, r, c, maxiter, rtol, rounds; relax::Bool = true, residual::Bool = true
+    )
+    bsum = bnum(a)
+    b = _divide_targets(bsum, c)
+    bsum .*= _regauge!(a, b)
     if rounds !== nothing
         rounds >= 0 || throw(ArgumentError("rounds must be nonnegative, got $rounds"))
         for _ in 1:rounds
-            a = _divide_targets(an, r)
-            b = _divide_targets(bnum(a), c)
-            _regauge!(a, b)
-            an = anum(b)
-            delta = _row_residual(an, a, r)
+            a = _divide_targets(anum(b), r)
+            bsum = bnum(a)
+            b = _divide_targets(bsum, c)
+            bsum .*= _regauge!(a, b)
         end
-        return a, rounds, delta
+        delta = residual ? _row_residual(anum(b), a, r) : float(real(eltype(a)))(Inf)
+        return a, bsum, rounds, delta
     end
     maxiter >= 1 || throw(ArgumentError("maxiter must be at least 1, got $maxiter"))
-    delta <= rtol && return a, 0, delta
+    an = anum(b)
+    delta = _row_residual(an, a, r)
+    delta <= rtol && return a, bsum, 0, delta
     relax && return _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
     for iters in 1:maxiter
         a = _divide_targets(an, r)
-        b = _divide_targets(bnum(a), c)
-        _regauge!(a, b)
+        bsum = bnum(a)
+        b = _divide_targets(bsum, c)
+        bsum .*= _regauge!(a, b)
         an = anum(b)
         delta = _row_residual(an, a, r)
-        delta <= rtol && return a, iters, delta
+        delta <= rtol && return a, bsum, iters, delta
     end
     return _target_nonconvergence(maxiter, delta, rtol)
 end
@@ -1363,20 +1405,22 @@ function _balance_targets_relaxed(anum, bnum, a, b, an, r, c, maxiter, rtol)
     delta = T(Inf)
     for iters in 1:maxiter
         ra = _relaxed_step!(a, _divide_targets(an, r), r, ω)
-        rb = _relaxed_step!(b, _divide_targets(bnum(a), c), c, ω)
-        _regauge!(a, b)
+        bsum = bnum(a)
+        rb = _relaxed_step!(b, _divide_targets(bsum, c), c, ω)
+        bsum .*= _regauge!(a, b)
         imb = max(ra, rb)
         # Near convergence a relaxed round finishes with the plain b-step, so that the row
         # residual after it is the plain convergence test. A plain round took that step already.
         exact = ω == 1 || imb <= rtol
         if ω != 1 && exact
-            b = _divide_targets(bnum(a), c)
-            _regauge!(a, b)
+            bsum = bnum(a)
+            b = _divide_targets(bsum, c)
+            bsum .*= _regauge!(a, b)
         end
         an = anum(b)
         if exact
             delta = _row_residual(an, a, r)
-            delta <= rtol && return a, iters, delta
+            delta <= rtol && return a, bsum, iters, delta
         end
         if ω == 1
             nplain += 1
@@ -1516,6 +1560,8 @@ function _logspread(v)
     return lo <= hi ? hi - lo : zero(hi - hi)
 end
 
+# Shift the gauge of the pair in place, `a ./= gamma` and `b .*= gamma`, and return the power of
+# two `gamma`.
 function _regauge!(a, b)
     # `a` and `1 ./ b` both scale by the same factor under the gauge, so centering their combined
     # log range is the shift that keeps the most room on both sides at once.
@@ -1533,7 +1579,7 @@ function _regauge!(a, b)
         blo, bhi = min(blo, -l), max(bhi, -l)
         lo, hi = min(lo, l), max(hi, l)
     end
-    lo <= hi || return
+    lo <= hi || return 1.0
     gamma = exp2(round((lo + hi) / 2))
     a ./= gamma
     b .*= gamma
@@ -1553,7 +1599,7 @@ function _regauge!(a, b)
             )
         )
     end
-    return
+    return gamma
 end
 
 function _logchange_extrema(v, vprev)
