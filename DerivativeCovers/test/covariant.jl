@@ -54,6 +54,8 @@
     liveinfo(t, outidxs) = DerivativeCovers._live_info(t, outidxs)
     flowtargets(t, outidxs) =
         DerivativeCovers._flow_targets(t, outidxs, liveinfo(t, outidxs))
+    pathflowtargets(t, outidxs, steps = 0) =
+        DerivativeCovers._pathflow_targets(t, outidxs, liveinfo(t, outidxs), steps)
     supportcounts(t, outidxs) =
         DerivativeCovers._support_counts(t, outidxs, liveinfo(t, outidxs))
 
@@ -97,6 +99,148 @@
         @test findall(iszero, rt) == findall(k -> all(iszero, view(U, k, :)), 1:length(outidxs))
         @test findall(iszero, ct) == findall(j -> all(iszero, view(U, :, j)), 1:t.ninputs)
         @test all(<=(2 + 1.0e-12), rt) && all(<=(2 + 1.0e-12), ct)
+    end
+
+    # The number of live paths from each input to each output position, one reverse sweep per
+    # position.
+    function path_count_matrix(t, outidxs)
+        DC = DerivativeCovers
+        li = liveinfo(t, outidxs)
+        N = zeros(length(outidxs), t.ninputs)
+        for (k, o) in enumerate(outidxs)
+            li.live[o] || continue
+            seed = zeros(nnodes(t))
+            seed[o] = 1.0
+            N[k, :] .= DC._reverse_sweep(DC.LiveSlot(li), t, seed)[1:t.ninputs]
+        end
+        return N
+    end
+
+    @testset "path-flow targets are the marginals of normalized path counts — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        U = jacobian_surrogate(t, outidxs)
+        li = liveinfo(t, outidxs)
+        N = path_count_matrix(t, outidxs)
+        @test (N .> 0) == (U .> 0)
+
+        # Path counts scaled to unit row sums, and to unit column sums.
+        rowsum, colsum = sum(N; dims = 2), sum(N; dims = 1)
+        Wf = [N[k, j] > 0 ? N[k, j] / rowsum[k] : 0.0 for k in axes(N, 1), j in axes(N, 2)]
+        Wr = [N[k, j] > 0 ? N[k, j] / colsum[j] : 0.0 for k in axes(N, 1), j in axes(N, 2)]
+        rt, ct = pathflowtargets(t, outidxs)
+        @test rt ≈ vec(sum(Wf; dims = 2)) ./ li.nrow .+ vec(sum(Wr; dims = 2)) ./ li.ncol
+        @test ct ≈ vec(sum(Wf; dims = 1)) ./ li.nrow .+ vec(sum(Wr; dims = 1)) ./ li.ncol
+        @test sum(rt) ≈ sum(ct) rtol = 1.0e-12
+        @test sum(rt) ≈ 2 rtol = 1.0e-12
+        @test findall(iszero, rt) == findall(k -> all(iszero, view(U, k, :)), 1:length(outidxs))
+        @test findall(iszero, ct) == findall(j -> all(iszero, view(U, :, j)), 1:t.ninputs)
+        @test all(<=(2 + 1.0e-12), rt) && all(<=(2 + 1.0e-12), ct)
+    end
+
+    @testset "PathFlow steps scale the path counts alternately — $name" for
+        (name, r, x0) in PROGRAMS
+        t, outidxs = tape_function(r, x0)
+        li = liveinfo(t, outidxs)
+        N = path_count_matrix(t, outidxs)
+        liverow, livecol = vec(any(>(0), N; dims = 2)), vec(any(>(0), N; dims = 1))
+        rowsto(W) = W .* [liverow[k] ? inv(li.nrow * sum(view(W, k, :))) : 0.0 for k in axes(W, 1)]
+        colsto(W) = W .* [livecol[j] ? inv(li.ncol * sum(view(W, :, j))) : 0.0 for j in axes(W, 2)]'
+        # One matrix has its rows scaled first and the other its columns; each step then switches
+        # the side of both.
+        A, B = rowsto(N), colsto(N)
+        for steps in 0:5
+            rt, ct = pathflowtargets(t, outidxs, steps)
+            @test rt ≈ vec(sum(A; dims = 2)) .+ vec(sum(B; dims = 2))
+            @test ct ≈ vec(sum(A; dims = 1)) .+ vec(sum(B; dims = 1))
+            @test sum(rt) ≈ 2 rtol = 1.0e-12
+            @test sum(ct) ≈ 2 rtol = 1.0e-12
+            @test all(>=(inv(li.nrow) * (1 - 1.0e-12)), rt[liverow])
+            @test all(>=(inv(li.ncol) * (1 - 1.0e-12)), ct[livecol])
+            @test all(iszero, rt[.!liverow]) && all(iszero, ct[.!livecol])
+            A, B = iseven(steps) ? (colsto(A), rowsto(B)) : (rowsto(A), colsto(B))
+        end
+    end
+
+    @testset "PathFlow steps approach equal row and column sums" begin
+        # A dense pattern has total support, so equal sums are realizable and the scaling
+        # converges to them.
+        dense = xs -> [xs[1] * xs[2] + xs[3] + xs[3], sin(xs[3]) + xs[1] * xs[2], exp(xs[1]) + xs[2] * xs[3]]
+        t, outidxs = tape_function(dense, [0.6, -0.4, 0.9])
+        spread(v) = maximum(v) / minimum(v)
+        spreads = [max(spread.(pathflowtargets(t, outidxs, steps))...) for steps in (0, 2, 8, 32)]
+        @test spreads[1] > 1.05
+        @test issorted(spreads; rev = true)
+        @test spreads[end] <= 1 + 1.0e-8
+
+        bal0 = balance_cover(t, outidxs; targets = DerivativeCovers.PathFlow(), rounds = nothing)
+        balp = balance_cover(t, outidxs; targets = :pathflow, rounds = nothing)
+        @test bal0.a == balp.a && bal0.b == balp.b
+        bal32 = balance_cover(t, outidxs; targets = DerivativeCovers.PathFlow(32), rounds = nothing)
+        balu = balance_cover(t, outidxs; targets = :uniform, rounds = nothing)
+        @test bal32.a .* bal32.b' ≈ balu.a .* balu.b' rtol = 1.0e-6
+        U = jacobian_surrogate(t, outidxs)
+        @test max_coverage_ratio(bal32.a, bal32.b, U) <= GATE
+    end
+
+    @testset "path-flow targets do not depend on how a sum is associated" begin
+        terms(xs) = [xs[j]^2 for j in eachindex(xs)]
+        tree(v) = length(v) == 1 ? v[1] : tree(v[1:(end ÷ 2)]) + tree(v[(end ÷ 2 + 1):end])
+        chained = xs -> [foldl(+, terms(xs)), xs[1] * xs[2]]
+        balanced = xs -> [tree(terms(xs)), xs[1] * xs[2]]
+        x0 = collect(range(0.5, 2.0; length = 8))
+        tc, oc = tape_function(chained, x0)
+        tb, ob = tape_function(balanced, x0)
+        for steps in (0, 3)
+            rc, cc = pathflowtargets(tc, oc, steps)
+            rb, cb = pathflowtargets(tb, ob, steps)
+            @test rc ≈ rb
+            @test cc ≈ cb
+        end
+        # `:flow` divides equally at each node, so its targets depend on the association.
+        @test !(flowtargets(tc, oc)[2] ≈ flowtargets(tb, ob)[2])
+
+        balc = balance_cover(tc, oc; targets = :pathflow, rounds = nothing)
+        balb = balance_cover(tb, ob; targets = :pathflow, rounds = nothing)
+        @test balc.a .* balc.b' ≈ balb.a .* balb.b' rtol = 1.0e-8
+    end
+
+    @testset "path-flow targets with path counts beyond Float64" begin
+        # Each loop iteration doubles the number of paths into the first output and leaves its
+        # derivative at 1; the second output is reached by one path from each input.
+        function halves(N)
+            return xs -> begin
+                v0 = xs[1] + xs[2]
+                v = v0
+                for _ in 1:N
+                    v = v / 2 + v / 2
+                end
+                return [v, v0]
+            end
+        end
+        t, outidxs = tape_function(halves(1100), [0.7, 1.9])
+        U = jacobian_surrogate(t, outidxs)
+        li = liveinfo(t, outidxs)
+        E = DerivativeCovers.ExpScaled{Float64}
+        @test isinf(Float64(DerivativeCovers._paths_from_inputs(t, outidxs, li, ones(E, 2))[1]))
+        @test isinf(Float64(DerivativeCovers._paths_from_outputs(t, outidxs, li, ones(E, 2))[1]))
+
+        rt, ct = pathflowtargets(t, outidxs)
+        @test rt ≈ [1.5, 0.5]
+        @test ct ≈ [1.0, 1.0]
+
+        # The row normalization gives each output half the weight whatever its path count, so
+        # the output reached by few paths keeps a quarter of each column.
+        bal = balance_cover(t, outidxs; targets = :pathflow, rounds = nothing)
+        @test max_coverage_ratio(bal.a, bal.b, U) <= GATE
+        @test U[2, :] ./ (bal.a[2] .* bal.b) ≈ [0.25, 0.25] rtol = 1.0e-8
+
+        # One step scales both matrices to equal row and column sums, which this pattern admits.
+        r1, c1 = pathflowtargets(t, outidxs, 1)
+        @test r1 ≈ [1.0, 1.0]
+        @test c1 ≈ [1.0, 1.0]
+        bal1 = balance_cover(t, outidxs; targets = DerivativeCovers.PathFlow(1), rounds = nothing)
+        @test U ./ (bal1.a .* bal1.b') ≈ fill(0.5, 2, 2) rtol = 1.0e-8
     end
 
     @testset "support counts equal the surrogate's nonzero counts — $name" for
@@ -182,6 +326,14 @@
         balm = balance_cover(U; targets = (rt, ct), rounds = nothing, a0 = bal.a)
         @test bal.a ≈ balm.a rtol = 1.0e-8
         @test bal.b ≈ balm.b rtol = 1.0e-8
+        balp = balance_cover(t, outidxs; targets = :pathflow, rounds = nothing)
+        @test balp.delta <= 1.0e-10
+        @test max_coverage_ratio(balp.a, balp.b, U) <= GATE
+        balpm = balance_cover(
+            U; targets = pathflowtargets(t, outidxs), rounds = nothing, a0 = balp.a
+        )
+        @test balp.a ≈ balpm.a rtol = 1.0e-8
+        @test balp.b ≈ balpm.b rtol = 1.0e-8
         # `:support` is the matrix form's built-in pattern-feasible choice.
         bals = balance_cover(U; targets = :support, rounds = nothing)
         @test max_coverage_ratio(bals.a, bals.b, U) <= GATE
@@ -227,8 +379,14 @@
             t, outidxs;
             targets = (ones(3), [1.0, 1.0, 2.0])
         )
-        @test_throws "must be :flow, :support" balance_cover(t, outidxs; targets = :pathcounts)
+        @test_throws "must be :flow, :pathflow, PathFlow(steps), :support" balance_cover(
+            t, outidxs;
+            targets = :pathcounts
+        )
         @test_throws "needs a tape" balance_cover(U; targets = :flow)
+        @test_throws "needs a tape" balance_cover(U; targets = :pathflow)
+        @test_throws "needs a tape" balance_cover(U; targets = DerivativeCovers.PathFlow(2))
+        @test_throws "steps >= 0" DerivativeCovers.PathFlow(-1)
         @test_throws "prescribes no marginals" balance_cover(
             t, outidxs;
             targets = :flow, arule = :geomean

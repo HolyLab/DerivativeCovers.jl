@@ -622,15 +622,22 @@ without it.
     count but covariant only in the limit. Both reach the same fixed point.
   - `a0`: starting weights of your own, positive on every live output and zero on the others.
     Combining it with an explicit `start` is an error.
-  - `targets`: `:flow` (tape default; `O(L)`; maximizes a flow-weighted mean log-tightness, which
-    can be noticeably looser than `:support` when outputs differ widely in the number of paths
-    reaching them), `:support` (matrix default;
-    maximizes the geometric-mean tightness of the sum-merge cover; on a tape it costs
-    `cld(n, 64) + cld(m, 64)` bit passes), an explicit `(r, c)`, or `:uniform` for unit row and
-    column sums. `:uniform` needs the pattern to have *total support* — every nonzero entry on some
-    positive diagonal — and without it the weights *drift*, separating without bound while every
-    iterate still covers, so a longer run returns a looser cover. Applies to `arule = :marginal`
-    only, and `:flow` needs a tape.
+  - `targets`: the row and column sums the alternation balances toward. Applies to
+    `arule = :marginal` only; `:flow`, `:pathflow` and `PathFlow` need a tape.
+      + `:flow` (tape default): `O(L)`; maximizes a flow-weighted mean log-tightness, which can be
+        noticeably looser than `:support` when outputs differ widely in the number of paths
+        reaching them.
+      + `:pathflow`: `O(L)`, two sweeps more than `:flow`. Each node divides its flow in proportion
+        to path counts rather than equally, so the targets do not depend on how a sum or product
+        was associated, but entries reached by many paths get more weight.
+      + [`PathFlow`](@ref)`(steps)`: the `:pathflow` targets moved toward equal row sums and equal
+        column sums, two sweeps per step.
+      + `:support` (matrix default): maximizes the geometric-mean tightness of the sum-merge cover;
+        on a tape it costs `cld(n, 64) + cld(m, 64)` bit passes.
+      + `:uniform`: unit row and column sums. It needs the pattern to have *total support* — every
+        nonzero entry on some positive diagonal — and without it the weights *drift*, separating
+        without bound while every iterate still covers, so a longer run returns a looser cover.
+      + an explicit `(r, c)`.
   - `rounds = 4`: run exactly this many rounds, with no convergence test and no error. `0` merges
     the start as it is, without computing `targets`, and reports `delta = Inf`. `nothing` runs to
     `delta <= rtol` instead and throws if `maxiter` rounds do not reach it; naming `maxiter` or
@@ -1111,13 +1118,16 @@ function _tape_targets(
     arule === :marginal || return _reject_targets(targets, arule)
     targets === nothing && (targets = :flow)
     targets === :uniform && return nothing
-    if targets === :flow || targets === :support
+    targets === :pathflow && (targets = PathFlow())
+    if targets === :flow || targets === :support || targets isa PathFlow
         needed || return nothing
-        r, c = targets === :flow ? _flow_targets(t, outidxs, li) : _support_counts(t, outidxs, li)
+        r, c = targets === :flow ? _flow_targets(t, outidxs, li) :
+            targets isa PathFlow ? _pathflow_targets(t, outidxs, li, targets.steps) :
+            _support_counts(t, outidxs, li)
         return (collect(T, r), collect(T, c))
     end
     targets isa Tuple{AbstractVector, AbstractVector} ||
-        throw(ArgumentError("targets must be :flow, :support, :uniform, or a tuple (r, c) of marginals; got $(repr(targets))"))
+        throw(ArgumentError("targets must be :flow, :pathflow, PathFlow(steps), :support, :uniform, or a tuple (r, c) of marginals; got $(repr(targets))"))
     tgt = _check_targets(targets[1], targets[2], li.liverow, li.livecol, T)
     return needed ? tgt : nothing
 end
@@ -1127,8 +1137,8 @@ end
 function _matrix_targets(targets, arule::Symbol, U, m::Int, n::Int, ::Type{T}) where {T}
     arule === :marginal || return _reject_targets(targets, arule)
     targets === nothing && (targets = :support)
-    targets === :flow &&
-        throw(ArgumentError("targets=:flow needs a tape: it reads the slot graph, which a magnitude matrix does not carry. Use :support"))
+    (targets === :flow || targets === :pathflow || targets isa PathFlow) &&
+        throw(ArgumentError("targets=$(repr(targets)) needs a tape: it reads the slot graph, which a magnitude matrix does not carry. Use :support"))
     targets === :uniform && return nothing
     rcount, ccount = zeros(T, m), zeros(T, n)
     for j in 1:n, k in 1:m
