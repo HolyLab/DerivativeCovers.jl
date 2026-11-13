@@ -3,7 +3,7 @@
 # sqrt.(diag(J'J)) with one channel per residual.
 
 "Loss `f = ½∑ₖ rₖ²` of a residual map, as a plain scalar program for ForwardDiff."
-nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
+nls_loss(rmap) = x -> sum(abs2, rmap(x)) / 2
 
 @testset "nls.jl" begin
 
@@ -223,7 +223,7 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
     @testset "constant residual is a loss offset" begin
         rmap(x) = [one(eltype(x)), 10 * (x[2] - x[1]^2), x[1] - 1]
         x0 = [0.4, 0.7]
-        floss = y -> 0.5 * sum(abs2, [1.0, 10 * (y[2] - y[1]^2), y[1] - 1])
+        floss = y -> sum(abs2, [1.0, 10 * (y[2] - y[1]^2), y[1] - 1]) / 2
         nls = cover_nls(WithDiagnostics(), rmap, x0)
         t, outidx, residx, sqidx = DerivativeCovers.nls_loss_tape(rmap, x0)
 

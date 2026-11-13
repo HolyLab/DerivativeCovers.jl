@@ -142,9 +142,11 @@ function nls_loss_tape(r, x0::AbstractVector)
         throw(ArgumentError("residuals were recorded on a different tape than the inputs"))
     rnodes = [isconstant(v) ? constantnode(t, value(v)) : v for v in rs]
     residx = [v.idx for v in rnodes]
-    sqs = [v^2 for v in rnodes]
+    # The same recording as `sum(abs2, rnodes) / 2`, which `sum(f, xs)` records as
+    # `sum(map(f, xs))`; the squares are named here so their indices can be returned.
+    sqs = map(abs2, rnodes)
     sqidx = [s.idx for s in sqs]
-    loss = 0.5 * sum(sqs)
+    loss = sum(sqs) / 2
     check_values(t)
     return t, loss.idx, residx, sqidx
 end
