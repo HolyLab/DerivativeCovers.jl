@@ -118,6 +118,10 @@
         theta[1:3] = wts
         @test abs_forward(t, theta)[outidxs] ≈ U * wts
         @test_throws DimensionMismatch abs_forward(t, zeros(nnodes(t) - 1))
+        # Restricted to the ancestors of one output, the sweep finishes exactly the values there.
+        cone = DerivativeCovers.ancestor_cone(t, outidxs[1:1])
+        @test cone[outidxs[1]] && !cone[outidxs[2]] && all(cone[1:3])
+        @test abs_forward(t, theta, cone)[cone] == abs_forward(t, theta)[cone]
     end
 
     @testset "marginal_weights: covariant a-rule, valid for any positive b" begin

@@ -121,7 +121,7 @@ function resolve_scales(
     hdrop = cover_only_sweep!(Val(false), merge, vbar, t, ratio, sc, check)
     isempty(drop.blocks) && return nothing
     redo = GuardedRedo(merge, t, vbar, ratio, hdrop, drop, sc.store.lives, check)
-    return first(derived_scales(cs, t, hdrop, dropped_pairs(drop), redo))
+    return first(derived_scales(cs, redo))
 end
 
 # The drop pass is a sweep of the entry point's own kind, and where it guards no block it read no
@@ -136,7 +136,7 @@ function cover_only_channel!(
     isempty(drop.blocks) && return hdrop, sc.store.nguarded
     # A propagating sweep has finished the adjoints in `vbar`, so the rest only reads them.
     redo = GuardedRedo(merge, t, vbar, r, hdrop, drop, sc.store.lives, check)
-    sigma, S = derived_scales(cs, t, hdrop, dropped_pairs(drop), redo)
+    sigma, S = derived_scales(cs, redo)
     etas, nguarded = guarded_covers(redo, sigma, S)
     return raised_cover(redo, etas), nguarded
 end
@@ -151,7 +151,7 @@ function local_covers(
     etas, theta, nguarded = local_covers!(t, vbar, r, sc, check)
     isempty(drop.blocks) && return etas, theta, nguarded
     redo = GuardedRedo(merge, t, vbar, r, drop_cover(merge, t, etas, theta), drop, sc.store.lives, check)
-    sigma, S = derived_scales(cs, t, redo.hdrop, dropped_pairs(drop), redo)
+    sigma, S = derived_scales(cs, redo)
     guarded, nguarded = guarded_covers(redo, sigma, S)
     for (j, k) in enumerate(redo.nodes)
         etas[k] = guarded[j]
@@ -169,10 +169,11 @@ drop_cover(::SignAveragedMerge, t::Tape, etas, theta) =
 
 What a cover under derived scales shares with its drop pass: the drop pass's cover `hdrop` of the
 kind `merge` selects, over all nodes, and the `nodes` whose blocks it dropped, in tape order, with
-the slot covers `etas` it gave them (from `drop`). Only those nodes read the declared scales, so
-[`guarded_covers`](@ref) recomputes theirs alone, and [`raised_cover`](@ref) adds the change to
-`hdrop` in one reverse sweep. `lives` is the drop pass's [`live_nodes`](@ref), which does not
-depend on the scales.
+the slot covers `etas` it gave them, and the parent nodes `pairs` of each dropped block (all from
+`drop`). Only those nodes read the declared scales, so [`guarded_covers`](@ref) recomputes theirs
+alone, and [`raised_cover`](@ref) adds the change to `hdrop` in one reverse sweep. `lives` is the
+drop pass's [`live_nodes`](@ref), which does not depend on the scales. `cone` is the
+[`ancestor_cone`](@ref) of `pairs`, the only nodes whose declared scales a split reads.
 """
 struct GuardedRedo{R <: SweepMerge, TT <: Tape, V, Q, H, M}
     merge::R
@@ -182,7 +183,9 @@ struct GuardedRedo{R <: SweepMerge, TT <: Tape, V, Q, H, M}
     hdrop::H
     nodes::Vector{Int}
     etas::Vector{Vector{M}}
+    pairs::Vector{Tuple{Int, Int}}
     lives::Vector{Bool}
+    cone::Vector{Bool}
     check::Bool
 end
 function GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded{M}, lives, check) where {M}
@@ -194,7 +197,9 @@ function GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded{M}, lives, 
         push!(nodes, b.node)
         push!(etas, b.eta)
     end
-    return GuardedRedo(merge, t, vbar, ratio, hdrop, nodes, etas, lives, check)
+    pairs = [b.parents for b in drop.blocks]
+    cone = ancestor_cone(t, (p for pr in pairs for p in pr))
+    return GuardedRedo(merge, t, vbar, ratio, hdrop, nodes, etas, pairs, lives, cone, check)
 end
 
 """
@@ -208,6 +213,7 @@ function guarded_covers(redo::GuardedRedo, sigma, S)
     t = redo.tape
     sc = split_scales(sigma, t)
     isempty(redo.lives) || (sc.store.lives = redo.lives)
+    sc.store.cone = redo.cone
     S === nothing || (sc.store.sigmas = S)
     etas = map(redo.nodes) do k
         eta = node_cover(redo.ratio, t, k, redo.vbar[k], sc, redo.check)
@@ -264,40 +270,43 @@ combine_channels(::SignAveragedMerge, h, d) = hypot(h, d)
     tomag(eltype(redo.tape), raised_cover(redo, first(guarded_covers(redo, sigma, S))))
 
 """
-    derived_scales(cs::CurvatureScales, t::Tape, hdrop, pairs, sweep) -> (sigma, S)
+    derived_scales(cs::CurvatureScales, redo::GuardedRedo) -> (sigma, S)
 
 The declared input scales [`CurvatureScales`](@ref) describes, in
-[`ExpScaled`](@ref)`{magtype(T)}`, from a completed drop pass over the program `t`:
-`hdrop[1:t.ninputs]` is its cover and `pairs` the parents of the blocks it dropped (see
-[`DropGuarded`](@ref)), of which there must be at least one. `sweep(sigma, S)` returns the cover
-at the inputs under the declared scales `sigma`, of the same kind as `hdrop`, and is called once
-per round after the first. `S` is the [`sensitivity_scales`](@ref) of the returned `sigma` where
-the check of unanchored inputs has already formed them, and `nothing` otherwise.
+[`ExpScaled`](@ref)`{magtype(T)}`, from a completed drop pass over the program `redo.tape`:
+`redo.hdrop[1:ninputs]` is its cover and `redo.pairs` the parents of the blocks it dropped (see
+[`DropGuarded`](@ref)), of which there must be at least one. `redo(sigma, S)` returns the cover
+at the inputs under the declared scales `sigma`, of the same kind as `redo.hdrop`, and is called
+once per round after the first. `S` is the [`sensitivity_scales`](@ref) of the returned `sigma` on
+`redo.cone` where the check of unanchored inputs has already formed them, and `nothing`
+otherwise.
 """
-function derived_scales(cs::CurvatureScales, t::Tape{T}, hdrop::AbstractVector, pairs, sweep) where {T}
+function derived_scales(cs::CurvatureScales, redo::GuardedRedo)
+    t, hdrop = redo.tape, redo.hdrop
+    T = eltype(t)
     n = t.ninputs
     M = magtype(T)
     E = ExpScaled{M}
     anchored = [plainvalue(hdrop[i]) > 0 for i in 1:n]
     sigma = E[anchored[i] ? inv(E(plainvalue(hdrop[i]))) : one(E) for i in 1:n]
     # Rederiving changes `sigma`, after which these no longer belong to it.
-    S = all(anchored) ? nothing : check_unanchored(t, sigma, anchored, pairs)
+    S = all(anchored) ? nothing : check_unanchored(t, sigma, anchored, redo.pairs, redo.cone)
     rederive!(sigma, h) = for i in 1:n
         anchored[i] && (sigma[i] = inv(E(h[i])))
     end
     if cs.rounds !== nothing
         for _ in 2:cs.rounds
-            rederive!(sigma, sweep(sigma, S))
+            rederive!(sigma, redo(sigma, S))
             S = nothing
         end
         return sigma, S
     end
     rtol = cs.rtol === nothing ? eps(M)^(2 // 3) : cs.rtol
-    hprev = sweep(sigma, S)
+    hprev = redo(sigma, S)
     rederive!(sigma, hprev)
     delta = M(Inf)
     for _ in 2:cs.maxiter
-        h = sweep(sigma, nothing)
+        h = redo(sigma, nothing)
         rederive!(sigma, h)
         delta = maximum(i -> anchored[i] ? abs(h[i] - hprev[i]) / h[i] : zero(M), 1:n)
         delta <= rtol && return sigma, nothing
@@ -310,11 +319,12 @@ function derived_scales(cs::CurvatureScales, t::Tape{T}, hdrop::AbstractVector, 
 end
 
 """
-    check_unanchored(t::Tape, sigma, anchored, pairs) -> S
+    check_unanchored(t::Tape, sigma, anchored, pairs, cone) -> S
 
 Throw unless every guarded block, given by its parent nodes in `pairs`, splits the same way
 whatever scales the unanchored inputs (`anchored[i] == false`) are given. Otherwise return
 `S = a + sum_j b_j`, the [`sensitivity_scales`](@ref) of `sigma`, whose unanchored entries are one.
+The sweeps visit only the nodes of `cone`, the [`ancestor_cone`](@ref) of `pairs`.
 
 A parent's propagated scale is linear in the input scales, `a_p + sum_j b_pj * sigma_j` over the
 unanchored inputs `j`, with `a_p` from the anchored scales in `sigma`. The split reads the ratio of
@@ -322,19 +332,19 @@ the two parents' scales, which is independent of every `sigma_j` exactly when th
 vectors `(a_p, b_p)` of the two parents are proportional. The test allows a relative discrepancy
 of `sqrt(eps)`, as the covering checks do.
 """
-function check_unanchored(t::Tape{T}, sigma::AbstractVector{E}, anchored, pairs) where {T, E}
+function check_unanchored(t::Tape{T}, sigma::AbstractVector{E}, anchored, pairs, cone) where {T, E}
     n, N = t.ninputs, nnodes(t)
     M = magtype(T)
     theta = zeros(E, N)
     for i in 1:n
         anchored[i] && (theta[i] = sigma[i])
     end
-    a = abs_forward(t, theta)
+    a = abs_forward(t, theta, cone)
     U = findall(!, anchored)
     b = map(U) do j
         fill!(theta, zero(E))
         theta[j] = one(E)
-        abs_forward(t, theta)
+        abs_forward(t, theta, cone)
     end
     tol = sqrt(eps(M))
     coefficients(p) = [a[p]; [bj[p] for bj in b]]

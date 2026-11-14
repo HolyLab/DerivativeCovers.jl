@@ -605,7 +605,8 @@ Base.getindex(s::SlotScales, i::Int) = s.scales[s.parents[i]]
 The two node channels a block may ask for beyond the values: [`sensitivity_scales`](@ref) seeded
 with the input scales `w`, and the [`live_nodes`](@ref) flags. Each is built by the first block
 that asks for it and shared by every block after. `nguarded` counts the blocks whose split read
-the scales (see [`note_guarded`](@ref)).
+the scales (see [`note_guarded`](@ref)). A `cone` (see [`ancestor_cone`](@ref)), set by a caller
+that knows which nodes will ask, restricts the scales to it, and a request outside it throws.
 
 Deferring the sweeps is what makes them free on a program that never needs them. Deciding in
 advance would take its own `O(L)` pass over the recorded blocks, which on a tape whose blocks all
@@ -618,11 +619,15 @@ mutable struct DeclaredScales{M, W, TT <: Tape}
     sigmas::Vector{M}
     lives::Vector{Bool}
     nguarded::Int
+    cone::Union{Nothing, Vector{Bool}}
 end
-DeclaredScales(w, t::Tape{T}) where {T} = DeclaredScales(w, t, ExpScaled{magtype(T)}[], Bool[], 0)
+DeclaredScales(w, t::Tape{T}) where {T} =
+    DeclaredScales(w, t, ExpScaled{magtype(T)}[], Bool[], 0, nothing)
 
 function declared_scale(d::DeclaredScales, i::Integer)
-    isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.w, d.tape))
+    isempty(d.sigmas) && (d.sigmas = sensitivity_scales(d.w, d.tape, d.cone))
+    d.cone === nothing || d.cone[i] ||
+        error("the declared scale of node $i was requested outside the nodes it was propagated to")
     return d.sigmas[i]
 end
 
@@ -801,9 +806,6 @@ DropGuarded{M}() where {M} = DropGuarded{M}(DroppedBlock{M}[])
 
 check_input_scales(w::DropGuarded, ninputs::Integer) = w
 
-# The parent nodes of each dropped block.
-dropped_pairs(drop::DropGuarded) = [b.parents for b in drop.blocks]
-
 # Whether a block that falls back on declared scales is dropped, recording its parents if so.
 drop_guarded(d1, d2) = false
 function drop_guarded(d1::DeferredScale{<:DeclaredScales{<:Any, <:DropGuarded}}, d2::DeferredScale)
@@ -831,7 +833,7 @@ function note_dropped!(sc::SplitScales{<:Any, <:Any, <:DeclaredScales{<:Any, <:D
 end
 
 """
-    sensitivity_scales(w, t::Tape) -> sigma
+    sensitivity_scales(w, t::Tape, cone=nothing) -> sigma
 
 One [`abs_forward`](@ref) sweep seeded with the declared input scales `w`, so
 `sigma_j >= sum_a w[a] * abs(∂v_j/∂x_a)` with equality when no path cancellation occurs.
@@ -849,16 +851,16 @@ finite whenever the recorded partials are. Where the plain sweep in `magtype(T)`
 the normal range, it rounds to the same values.
 
 Cost: one `O(L)` forward sweep, paid once per cover and only by a program that reaches the
-fallback.
+fallback. A `cone` restricts the sweep, and the scales, to its nodes (see [`abs_forward`](@ref)).
 """
-function sensitivity_scales(w, t::Tape{T}) where {T}
+function sensitivity_scales(w, t::Tape{T}, cone = nothing) where {T}
     theta = zeros(ExpScaled{magtype(T)}, nnodes(t))
     if w === nothing
         fill!(view(theta, 1:t.ninputs), 1)
     else
         copyto!(view(theta, 1:t.ninputs), check_input_scales(w, t.ninputs))
     end
-    return abs_forward(t, theta)
+    return abs_forward(t, theta, cone)
 end
 
 """

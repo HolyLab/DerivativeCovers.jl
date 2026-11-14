@@ -196,7 +196,7 @@ include("maxpath.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :sensitivities, :intermediate_gradients, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channel!, :cover_only_sweep!, :check_unanchored, :DropGuarded, :DroppedBlock, :GuardedRedo,
+            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channel!, :cover_only_sweep!, :check_unanchored, :DropGuarded, :DroppedBlock, :GuardedRedo, :ancestor_cone,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :QuadMerge, :MaxMerge, :squared_surrogate, :quadrature_surrogate,
