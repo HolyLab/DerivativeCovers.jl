@@ -118,6 +118,16 @@ tobound(::Type{T}, x) where {T} = _tobound(boundtype(T), x)
 _tobound(::Type{U}, x) where {U <: Upward} = convert(U, x)
 _tobound(::Type, x) = x
 
+# An upper bound on `a - b`, for floats `a >= b >= 0`, in the type a sweep over a `Tape{T}`
+# accumulates bounds in. Where that rounds upward, the difference rounded to nearest steps to
+# `nextfloat` unless it is exact, as it is for `a <= 2b` (Sterbenz) or `b == 0`.
+boundsub(::Type{T}, a, b) where {T} = _boundsub(boundtype(T), a, b)
+function _boundsub(::Type{U}, a, b) where {U <: Upward}
+    d = a - b
+    return U(iszero(b) || a <= 2b ? d : nextfloat(d))
+end
+_boundsub(::Type, a, b) = a - b
+
 # An array of bounds from a sweep over a `Tape{T}`, in `magtype(T)`. The conversion is exact, so
 # its entries are the bounds the sweep computed.
 tomag(::Type{T}, A::AbstractArray) where {T} = convert(AbstractArray{magtype(T)}, A)

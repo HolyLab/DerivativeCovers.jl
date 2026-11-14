@@ -129,12 +129,12 @@ end
         H = ForwardDiff.hessian(f, x0)
         hc = cover_hessian(f, x0)
         fc = forward_cover(f, x0)
-        @test max_coverage_ratio(hc.h_sum, H) <= GATE
+        @test max_coverage_ratio(hc.h, H) <= GATE
         @test max_coverage_ratio(fc.h_quad, H) <= GATE
         # Covariant under a dyadic rescaling of the inputs, with the declared scales alongside.
         D = [2.0^-3, 2.0^5, 2.0^7][eachindex(x0)]
         fD = y -> f(y .* D)
-        @test cover_hessian(fD, x0 ./ D; scales = 1 ./ D).h_sum == hc.h_sum .* D
+        @test cover_hessian(fD, x0 ./ D; scales = 1 ./ D).h == hc.h .* D
         @test forward_cover(fD, x0 ./ D; scales = 1 ./ D).h_quad == fc.h_quad .* D
     end
 
@@ -142,8 +142,8 @@ end
     # cover, and `h1*h2` reaches the off-diagonal entry `1e400`, which is `Inf` in `Float64`.
     fover = x -> (x[1] * 1.0e200 * 1.0e200) * x[2]
     hc = cover_hessian(fover, [0.0, 1.0])
-    @test all(isfinite, hc.h_sum)
-    @test big(hc.h_sum[1]) * big(hc.h_sum[2]) >= big(1.0e200)^2 * (1 - 1.0e-12)
+    @test all(isfinite, hc.h)
+    @test big(hc.h[1]) * big(hc.h[2]) >= big(1.0e200)^2 * (1 - 1.0e-12)
     @test forward_cover(fover, [0.0, 1.0]).h_quad isa Vector{Float64}
 
     # A long product whose values underflow: the late multiplication blocks aim at an `eta` far
@@ -154,9 +154,9 @@ end
     hc = cover_hessian(fprod, x0)
     fc = forward_cover(fprod, x0)
     @test hc.nguarded > 0 && fc.nguarded > 0
-    @test hc.h_sum == Float64.(cover_hessian(fprod, big.(x0)).h_sum)
+    @test hc.h == Float64.(cover_hessian(fprod, big.(x0)).h)
     @test fc.h_quad == Float64.(forward_cover(fprod, big.(x0)).h_quad)
     H = ForwardDiff.hessian(fprod, x0)
-    @test max_coverage_ratio(hc.h_sum, H) <= GATE
+    @test max_coverage_ratio(hc.h, H) <= GATE
     @test max_coverage_ratio(fc.h_quad, H) <= GATE
 end

@@ -32,7 +32,7 @@ julia> using DerivativeCovers
 
 julia> f(x) = DerivativeCovers.value(x[1]) > 0 ? x[1]^2 * x[2] : -x[1] * x[2];
 
-julia> round.(cover_hessian(f, [1.0, 2.0]).h_sum; digits=4)
+julia> round.(cover_hessian(f, [1.0, 2.0]).h; digits=4)
 2-element Vector{Float64}:
  4.8284
  0.7071
@@ -77,7 +77,7 @@ julia> function Base.log1p(x::DerivativeCovers.CoverVar)
 
 julia> g(x) = log1p(x[1] * x[2]);
 
-julia> round.(cover_hessian(g, [0.5, 2.0]).h_sum; digits=4)
+julia> round.(cover_hessian(g, [0.5, 2.0]).h; digits=4)
 2-element Vector{Float64}:
  2.4142
  0.6036
@@ -114,7 +114,7 @@ julia> function outer(x)
 
 julia> x0 = [0.3, 0.2, -0.4];
 
-julia> round.(cover_hessian(outer, x0).h_sum; digits=4)
+julia> round.(cover_hessian(outer, x0).h; digits=4)
 3-element Vector{Float64}:
  3.2057
  3.2057

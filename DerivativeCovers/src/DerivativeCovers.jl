@@ -33,6 +33,7 @@ export Tape, TVar, tape_function
 export FVar, forward_cover, ForwardCover
 export cover_hessian, cover_jacobian, cover_nls
 export CoverOnly, WithDiagnostics, CurvatureScales
+export SumMerge, SignAveragedMerge
 export HessianCover, HessianDiagnostics
 export JacobianCover, JacobianDiagnostics
 export NLSCover, NLSDiagnostics
@@ -61,6 +62,8 @@ export hvp, hvp!, jvp, jvp!, vjp, vjp!
             :CoverSite, :TapeSite, :site_label, :site_values
         )
     )
+    # The supertype of the merge rules that the result types carry as a parameter.
+    eval(Expr(:public, :MergeRule))
     # Norms and rescalings of a matrix normalized by its cover.
     eval(Expr(:public, :scaled_spectral_radius, :scaled_singular_value, :cover_normalize))
     # Covers that merge in groups, interpolating between the sum and quadrature merges.
@@ -81,6 +84,7 @@ include("rounding.jl")
 include("curvature.jl")
 include("tape.jl")
 include("overloads.jl")
+include("mergerules.jl")
 include("covers.jl")
 include("curvaturescales.jl")
 include("forward.jl")

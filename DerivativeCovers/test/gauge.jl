@@ -54,7 +54,7 @@
     # gauge does not reorder.
     function pipeline(t, outidx)
         res = cover_hessian(WithDiagnostics(), t, outidx)
-        vc = cover_hessian(t, outidx)
+        vc = both_covers(t, outidx)
         return (;
             res.grad, res.B, res.h_sum, res.h_quad, res.h_sum_rev, vc.h_var, severity = severity(vc),
             h_hyb = cover_hybrid(t, outidx, 4),
@@ -179,7 +179,7 @@
         tg = gauge_tape(t, lam)
         @test pipeline(tg, outidx) == pipeline(t, outidx)
         for ratio in (nothing, 0.0)
-            @test cover_hessian(tg, outidx; ratio).h_sum == cover_hessian(t, outidx; ratio).h_sum
+            @test cover_hessian(tg, outidx; ratio).h == cover_hessian(t, outidx; ratio).h
         end
         # Away from the degeneracy the same gauge is equally inert.
         t2, outidx2 = tape_function(f, [1.3, 2.0])
@@ -223,12 +223,12 @@
         for z1 in 4.0 .^ (0:-1:-8)
             f = x -> (x[1] - (1.0 - z1)) * x[2]
             @test ForwardDiff.hessian(f, x0) == H
-            h = cover_hessian(f, x0).h_sum
+            h = cover_hessian(f, x0).h
             @test h[1] ≈ sqrt(2 / z1) rtol = 1.0e-12
             @test max_coverage_ratio(h, H) <= GATE
             push!(h1, h[1])
         end
-        h0 = cover_hessian(x -> (x[1] - 1.0) * x[2], x0).h_sum
+        h0 = cover_hessian(x -> (x[1] - 1.0) * x[2], x0).h
         @test all(isfinite, h0)
         @test h0[1] < last(h1)
         @test max_coverage_ratio(h0, H) <= GATE
@@ -256,7 +256,7 @@
             x0 = randn(rng, 2)
             t, outidx = tape_function(fzero, x0)
             @test reads_declared_scales(t, outidx)
-            h = cover_hessian(t, outidx).h_sum
+            h = cover_hessian(t, outidx).h
             @test all(isfinite, h) && all(>=(0), h)
             @test iszero(ForwardDiff.hessian(fzero, x0))
         end
@@ -288,10 +288,10 @@
             # A cover reporting no fallback reads no declared scale, so `scales` is inert there,
             # bit for bit.
             if ng == 0
-                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h_sum == cover_hessian(fmul, x).h_sum
+                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h == cover_hessian(fmul, x).h
                 @test forward_cover(fmul, x; scales = [3.0, 0.25]).h_quad == forward_cover(fmul, x).h_quad
             else
-                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h_sum != cover_hessian(fmul, x).h_sum
+                @test cover_hessian(fmul, x; scales = [3.0, 0.25]).h != cover_hessian(fmul, x).h
             end
         end
 
@@ -326,7 +326,7 @@
             @test cover_hessian(WithDiagnostics(), f, x0).nguarded == c.nguarded
             @test forward_cover(f, x0).nguarded == c.nguarded
             if c.nguarded == 0
-                @test cover_hessian(f, x0; scales = fill(3.0, length(x0))).h_sum == c.h_sum
+                @test cover_hessian(f, x0; scales = fill(3.0, length(x0))).h == c.h
             end
         end
     end

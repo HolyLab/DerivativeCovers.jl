@@ -109,8 +109,8 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
 
         # The fallback channel is typed too, whether or not it is seeded with declared scales,
         # and the threshold resolves against the tape rather than to a `Float64` constant.
-        @test cover_hessian(t, outidx; scales = ones(Float32, 2)).h_sum isa Vector{Float32}
-        @test cover_hessian(t, outidx; ratio = 0.5).h_sum isa Vector{Float32}
+        @test cover_hessian(t, outidx; scales = ones(Float32, 2)).h isa Vector{Float32}
+        @test cover_hessian(t, outidx; ratio = 0.5).h isa Vector{Float32}
         @test DerivativeCovers.split_ratio(nothing, eltype(t)) === sqrt(eps(Float32))
         @test eltype(DerivativeCovers.sensitivity_scales(nothing, t)) ===
             DerivativeCovers.ExpScaled{Float32}
@@ -170,7 +170,7 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         ys = submap(x -> [x[1] * x[2], x[1] + x[2]], xs)
         @test ys isa Vector{TVar{Float32}}
         @test any(C -> C isa DerivativeCovers.DeclaredCurvature{Float32}, ts.Cs)
-        @test cover_hessian(ts, ys[1].idx).h_sum isa Vector{Float32}
+        @test cover_hessian(ts, ys[1].idx).h isa Vector{Float32}
     end
 
     @testset "an inner-product node records in the element type" begin
@@ -178,12 +178,12 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
         t, outidx = tape_function(v -> dot(v[1:3], v[4:6]), Float32[0.9, -0.4, 1.3, 0.4, -1.1, 0.7])
         @test t isa Tape{Float32}
         @test any(C -> C isa DerivativeCovers.PairedCurvature, t.Cs)
-        @test cover_hessian(t, outidx).h_sum isa Vector{Float32}
+        @test cover_hessian(t, outidx).h isa Vector{Float32}
         @test cover_hybrid(t, outidx, 2) isa Vector{Float32}
         W32 = Float32[1 2 0.5; 0.5 1 2; 1 0 1]
         tm, om = tape_function(x -> sum(v^2 for v in W32 * x), Float32[0.7, -1.3, 0.4])
         @test tm isa Tape{Float32}
-        @test cover_hessian(tm, om).h_sum isa Vector{Float32}
+        @test cover_hessian(tm, om).h isa Vector{Float32}
     end
 
     @testset "caller-supplied weights join the tape's type" begin
@@ -222,10 +222,11 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
 
     @testset "a result type named by the element type alone fills in the cover type" begin
         v = Float32[1, 2]
-        @test NLSCover{Float32}(v, v, v, v, v, 2, 0) isa NLSCover{Float32, Float32}
-        @test NLSDiagnostics{Float32}(v, v, v, v, v, Float32[1 2; 3 4], 2, 0) isa
-            NLSDiagnostics{Float32, Float32}
-        @test HessianCover{Float32}(v, v, v, 0) isa HessianCover{Float32, Float32}
+        @test NLSCover{Float32}(SumMerge(), v, v, v, 2, 0) isa NLSCover{Float32, Float32, SumMerge}
+        @test NLSDiagnostics{Float32}(SignAveragedMerge(), v, v, v, Float32[1 2; 3 4], 2, 0) isa
+            NLSDiagnostics{Float32, Float32, SignAveragedMerge}
+        @test HessianCover{Float32}(SignAveragedMerge(), v, v, 0) isa
+            HessianCover{Float32, Float32, SignAveragedMerge}
         fc = ForwardCover{Float32}([1.0, 2.0], [1.0, 2.0], 0)
         @test fc isa ForwardCover{Float32, Float32, Vector{Float32}, Vector{Float32}}
         @test ForwardCover(v, [1.0, 2.0], 0) isa ForwardCover{Float32, Float32}
@@ -241,8 +242,8 @@ fieldeltypes(r) = unique(eltype(getfield(r, f)) for f in fieldnames(typeof(r)) i
             @test eltype(t) === T
             c = cover_hessian(t, outidx)
             @test c isa HessianCover{T}
-            @test eltype(c.h_sum) === T
-            @test all(>=(0), c.h_sum)
+            @test eltype(c.h) === T
+            @test all(>=(0), c.h)
         end
     end
 

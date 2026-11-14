@@ -74,11 +74,11 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         c = cover_hessian(f, X)
         d = cover_hessian(WithDiagnostics(), f, X)
         @test c isa HessianCover{Interval{Float64}, Float64}
-        @test c.h_sum isa Vector{Float64}
+        @test c.h isa Vector{Float64}
         @test c.grad isa Vector{Interval{Float64}}
         @test d isa HessianDiagnostics{Interval{Float64}}
         @test d.B isa Matrix{Float64}
-        @test c.h_sum ≈ d.h_sum rtol = 1.0e-12
+        @test c.h ≈ d.h_sum rtol = 1.0e-12
 
         fref = get(reference, name, f)
         rng = Xoshiro(17)
@@ -88,7 +88,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             H = ForwardDiff.hessian(fref, x)
             g = ForwardDiff.gradient(fref, x)
             ok_grad &= all(in_interval.(g, c.grad)) && all(in_interval.(g, d.grad))
-            ok_cover &= covers(H, c.h_sum)
+            ok_cover &= covers(H, c.h)
             ok_diag &= covers(H, d.h_sum) && covers(H, d.h_quad) &&
                 all(abs.(H) .<= d.B .* tol)
         end
@@ -104,10 +104,13 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         X = interval.(lo, hi)
         vc = cover_hessian(f, X)
         @test vc isa HessianCover{Interval{Float64}, Float64}
+        vv = cover_hessian(f, X; merge = SignAveragedMerge())
+        @test vv isa HessianCover{Interval{Float64}, Float64, SignAveragedMerge}
+        @test all(isequal_interval.(vv.grad, vc.grad))
         t, outidx = tape_function(f, X)
         h_sum, h_var = staged_channels(t, outidx)
-        @test vc.h_sum ≈ h_sum rtol = 1.0e-12
-        @test vc.h_var ≈ h_var rtol = 1.0e-12
+        @test vc.h ≈ h_sum rtol = 1.0e-12
+        @test vv.h ≈ h_var rtol = 1.0e-12
         hy = cover_hybrid(f, X, 2)
         hn = cover_hybrid(f, X, cyclic_partition(tape_function(f, X)[1], 3))
         @test hy isa Vector{Float64}
@@ -121,7 +124,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             H = ForwardDiff.hessian(fref, x)
             g = ForwardDiff.gradient(fref, x)
             ok_grad &= all(in_interval.(g, vc.grad))
-            ok_cover &= covers(H, vc.h_sum) && covers(H, hy) && covers(H, hn)
+            ok_cover &= covers(H, vc.h) && covers(H, hy) && covers(H, hn)
             if fc !== nothing
                 ok_grad &= all(in_interval.(g, fc.grad))
                 ok_cover &= covers(H, fc.h_quad)
@@ -203,8 +206,9 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         @test DerivativeCovers.gramvariance!(zeros(t.ninputs), t, outidxs, w) == hv
         @test all(hv .<= gramcover(t, outidxs, w) .* tol)
         nc = cover_nls(r, X)
-        @test nc.h_var_gn isa Vector{Float64}
-        @test all(nc.h_var_gn .<= nc.h_gn .* tol)
+        nv = cover_nls(r, X; merge = SignAveragedMerge())
+        @test nv.h_gn isa Vector{Float64}
+        @test all(nv.h_gn .<= nc.h_gn .* tol)
         ok = true
         for x in samples(Xoshiro(43), lo, hi)
             tx, ox = tape_function(r, x)
@@ -316,13 +320,36 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         H = ForwardDiff.hessian(x -> f(x, R), R.(x0))
         c = cover_hessian(fi, X)
         d = cover_hessian(WithDiagnostics(), fi, X)
-        @test covers_exactly(H, c.h_sum)
+        @test covers_exactly(H, c.h)
         @test all(abs.(H) .<= R.(d.B))
         @test covers_exactly(H, d.h_sum)
         @test covers_exactly(H, d.h_quad)
         @test covers_exactly(H, d.h_sum_rev)
         @test covers_exactly(H, cover_hybrid(fi, X, 2))
         @test covers_exactly(H, forward_cover(fi, X).h_quad)
+    end
+
+    @testset "derived scales over a box hold exactly" begin
+        # The zero-zero product is a guarded block, so each round re-splits it and raises the drop
+        # pass's cover by the change, which must round upward too.
+        f = (x, c) -> c(0.1) * (x[1] - 1) * (x[2] - 2) + c(1.1) * x[1]^2 * x[2] + c(0.3) * x[2]^4
+        x0 = [1.0, 2.0]
+        X = interval.(x0)
+        fi = x -> f(x, identity)
+        H = ForwardDiff.hessian(x -> f(x, R), R.(x0))
+        t, outidx = tape_function(fi, X)
+        vbar = adjoints(t, outidx)
+        r = DerivativeCovers.split_ratio(nothing, Interval{Float64})
+        for cs in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            c = cover_hessian(t, outidx; scales = cs)
+            @test c.nguarded == 1
+            @test covers_exactly(H, c.h)
+            for merge in (SumMerge(), SignAveragedMerge())
+                w = DerivativeCovers.resolve_scales(cs, t, vbar, r, true, merge)
+                @test cover_hessian(t, outidx; scales = cs, merge).h ≈
+                    cover_hessian(t, outidx; scales = w, merge).h rtol = 1.0e-13
+            end
+        end
     end
 
     @testset "Jacobian and least-squares covers over a box hold exactly" begin
@@ -370,18 +397,19 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
 
     @testset "the sweep from adjoints matches the full sweep — $name" for (name, f, lo, hi) in box_programs
         t, outidx = tape_function(f, interval.(lo, hi))
-        c = cover_hessian(CoverOnly(), t, DerivativeCovers.adjoints(t, outidx))
-        pr = cover_hessian(CoverOnly(), t, outidx)
-        @test c isa HessianCover{Interval{Float64}, Float64}
-        @test all(isequal_interval.(c.grad, pr.grad))
-        @test c.h_sum == pr.h_sum
-        @test c.h_var == pr.h_var
+        for merge in (SumMerge(), SignAveragedMerge())
+            c = cover_hessian(CoverOnly(), t, DerivativeCovers.adjoints(t, outidx); merge)
+            pr = cover_hessian(CoverOnly(), t, outidx; merge)
+            @test c isa HessianCover{Interval{Float64}, Float64, typeof(merge)}
+            @test all(isequal_interval.(c.grad, pr.grad))
+            @test c.h == pr.h
+        end
     end
 
     @testset "a thin box reproduces the point cover — $name" for (name, f, lo, _) in box_programs
         c64 = cover_hessian(f, lo)
         c = cover_hessian(f, interval.(lo))
-        @test c.h_sum ≈ c64.h_sum rtol = 1.0e-12
+        @test c.h ≈ c64.h rtol = 1.0e-12
         @test mid.(c.grad) ≈ c64.grad rtol = 1.0e-12
         @test all(in_interval.(c64.grad, c.grad))
     end
@@ -417,7 +445,7 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
             ok_cover = ok_grad = true
             for x in samples(rng, inf.(X), sup.(X))
                 ok_grad &= all(in_interval.(ForwardDiff.gradient(fref, x), c.grad))
-                ok_cover &= covers(ForwardDiff.hessian(fref, x), c.h_sum)
+                ok_cover &= covers(ForwardDiff.hessian(fref, x), c.h)
             end
             @test ok_grad
             @test ok_cover

@@ -28,6 +28,14 @@ WithDiagnostics
 CurvatureScales
 ```
 
+## Merge rules
+
+```@docs
+MergeRule
+SumMerge
+SignAveragedMerge
+```
+
 ## Least-squares objectives
 
 ```@docs

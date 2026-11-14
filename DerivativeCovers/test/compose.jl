@@ -107,7 +107,7 @@
         @test nnodes(t) < nnodes(ttr)               # the call is recorded compressed
 
         # The squared channel runs through the declared node and shares the hard channel.
-        vres = cover_hessian(t, o)
+        vres = both_covers(t, o)
         @test vres.h_sum ≈ res.h_sum rtol = 1.0e-12
         @test all(severity(vres) .>= 1 - 1.0e-12)
 

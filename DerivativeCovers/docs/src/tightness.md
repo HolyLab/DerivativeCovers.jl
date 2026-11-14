@@ -59,7 +59,7 @@ julia> using DerivativeCovers, DerivativeCoverProblems, MatrixCovers
 julia> function ratios(form)
            p = quadratic(6; rank=2, form)
            H = exact_hessian(p)
-           hsum = cover_hessian(p.f, p.x0).h_sum
+           hsum = cover_hessian(p.f, p.x0).h
            hquad = cover_hessian(WithDiagnostics(), p.f, p.x0).h_quad
            return round.((max_coverage_ratio(hsum, H), max_coverage_ratio(hquad, H)); digits=3)
        end;
@@ -79,8 +79,9 @@ product, and all of them reconverge on the inputs. The factored form has only
 `rank` nonlinear operations, which do not overlap. The quadrature merge
 recovers part of the difference.
 
-Without the Hessian, the ratio `h_sum ./ h_var` of the two vectors in a
-[`HessianCover`](@ref) estimates how much the contributions to each coordinate
+Without the Hessian, the ratio of the sum cover to the sign-averaged cover,
+the covers [`cover_hessian`](@ref) returns for `merge = SumMerge()` and
+`merge = SignAveragedMerge()`, estimates how much the contributions to each coordinate
 overlap: it is 1 when each coordinate receives a single contribution and grows
 with the number of overlapping contributions.
 
@@ -118,7 +119,7 @@ julia> c = cover_hessian(p.f, p.x0);
 
 julia> H = exact_hessian(p);
 
-julia> all(abs.(H) .<= c.h_sum .* c.h_sum')
+julia> all(abs.(H) .<= c.h .* c.h')
 true
 ```
 

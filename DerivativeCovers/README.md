@@ -32,7 +32,7 @@ julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
 
 julia> c = cover_hessian(f, [0.5, 2.0]);
 
-julia> c.h_sum                      # abs(H[i,j]) <= h[i] * h[j]
+julia> c.h                      # abs(H[i,j]) <= h[i] * h[j]
 2-element Vector{Float64}:
  4.112452541433932
  2.414213562373095
@@ -44,7 +44,7 @@ julia> c.grad
 
 julia> H = [exp(0.5) 4.0; 4.0 1.0];  # the exact Hessian, for comparison
 
-julia> all(abs.(H) .<= c.h_sum .* c.h_sum')
+julia> all(abs.(H) .<= c.h .* c.h')
 true
 ```
 
@@ -53,7 +53,7 @@ Rescaling the inputs rescales the cover:
 ```julia
 julia> D = [10.0, 0.1];
 
-julia> cover_hessian(y -> f(y ./ D), D .* [0.5, 2.0]).h_sum ≈ c.h_sum ./ D
+julia> cover_hessian(y -> f(y ./ D), D .* [0.5, 2.0]).h ≈ c.h ./ D
 true
 ```
 

@@ -15,7 +15,7 @@ julia> x0 = [0.5, -1.2, 0.3, 0.8];
 
 julia> t, out = tape_function(f, x0);
 
-julia> h = cover_hessian(t, out).h_sum;
+julia> h = cover_hessian(t, out).h;
 
 julia> H = reduce(hcat, [hvp(t, out, e) for e in eachcol(Matrix(1.0I, 4, 4))]);   # for comparison
 ```

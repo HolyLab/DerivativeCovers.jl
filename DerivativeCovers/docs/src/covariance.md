@@ -31,10 +31,10 @@ julia> D = [10.0, 0.1];
 
 julia> g(y) = f(y ./ D);
 
-julia> cover_hessian(g, D .* x0).h_sum ≈ cover_hessian(f, x0).h_sum ./ D
+julia> cover_hessian(g, D .* x0).h ≈ cover_hessian(f, x0).h ./ D
 true
 
-julia> cover_hessian(x -> 9 * f(x), x0).h_sum ≈ 3 * cover_hessian(f, x0).h_sum
+julia> cover_hessian(x -> 9 * f(x), x0).h ≈ 3 * cover_hessian(f, x0).h
 true
 ```
 
@@ -59,7 +59,7 @@ transform correctly under any rescaling of `x` and `y`. In the example above,
 adds `sqrt(exp(0.5)) ≈ 1.284` for the `exp` term:
 
 ```jldoctest cov
-julia> cover_hessian(f, x0).h_sum
+julia> cover_hessian(f, x0).h
 2-element Vector{Float64}:
  0.5
  3.2840254166877414
@@ -89,12 +89,12 @@ julia> cover_hessian(f, x0).nguarded
 julia> cover_hessian(f, x1).nguarded
 1
 
-julia> cover_hessian(f, x1).h_sum
+julia> cover_hessian(f, x1).h
 2-element Vector{Float64}:
  1.0
  2.0
 
-julia> cover_hessian(f, x1; scales=[1.0, 100.0]).h_sum
+julia> cover_hessian(f, x1; scales=[1.0, 100.0]).h
 2-element Vector{Float64}:
  10.0
   1.1
@@ -105,7 +105,7 @@ When the inputs are rescaled, a cover that depends on declared scales is
 covariant only if the scales are rescaled along with them, `scales → D*scales`:
 
 ```jldoctest cov
-julia> cover_hessian(g, D .* x1; scales=D).h_sum .* D
+julia> cover_hessian(g, D .* x1; scales=D).h .* D
 2-element Vector{Float64}:
  1.0
  2.0
@@ -160,12 +160,12 @@ julia> g2(y) = f2(y ./ D);
 julia> cover_hessian(f2, x1).nguarded
 1
 
-julia> cover_hessian(g2, D .* x1).h_sum .* D ≈ cover_hessian(f2, x1).h_sum
+julia> cover_hessian(g2, D .* x1).h .* D ≈ cover_hessian(f2, x1).h
 false
 
-julia> h = cover_hessian(f2, x1; scales=CurvatureScales()).h_sum;
+julia> h = cover_hessian(f2, x1; scales=CurvatureScales()).h;
 
-julia> cover_hessian(g2, D .* x1; scales=CurvatureScales()).h_sum .* D ≈ h
+julia> cover_hessian(g2, D .* x1; scales=CurvatureScales()).h .* D ≈ h
 true
 ```
 

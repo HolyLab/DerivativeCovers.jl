@@ -32,9 +32,22 @@ include("programs.jl")
 # roundoff can push a measured ratio a hair above 1.
 const GATE = 1 + 1.0e-10
 
-# Per-coordinate ratio of a cover's sum and squared channels: 1 where a single contribution
-# reaches a coordinate, growing with the overlap of the contributions it sums. Both channels vanish
-# together, and such a coordinate gets 1.
+# The sum and sign-averaged covers of one program, from the two `cover_hessian` sweeps, as
+# `(; grad, h_sum, h_var, nguarded)`. The two sweeps carry the same adjoints and consult the same
+# blocks, so their gradients and guarded-block counts must agree exactly.
+function both_covers(args...; kwargs...)
+    s = cover_hessian(args...; kwargs...)
+    v = cover_hessian(args...; merge = SignAveragedMerge(), kwargs...)
+    s isa HessianCover{<:Any, <:Any, SumMerge} && v isa HessianCover{<:Any, <:Any, SignAveragedMerge} ||
+        error("the merge keyword did not select the covers: got $(typeof(s)) and $(typeof(v))")
+    s.grad == v.grad && s.nguarded == v.nguarded ||
+        error("the sum and sign-averaged sweeps disagree on the gradient or the guarded blocks")
+    return (; s.grad, h_sum = s.h, h_var = v.h, s.nguarded)
+end
+
+# Per-coordinate ratio of the sum and sign-averaged covers from `both_covers`: 1 where a single
+# contribution reaches a coordinate, growing with the overlap of the contributions it sums. Both
+# covers vanish together, and such a coordinate gets 1.
 severity(c) = map((s, v) -> (r = float(s) / float(v); isnan(r) ? one(r) : r), c.h_sum, c.h_var)
 
 # The quadrature cover a forward propagation reaches, assembled from a tape: the atoms are split
@@ -147,6 +160,7 @@ include("maxpath.jl")
                 :FVar, :forward_cover, :ForwardCover,
                 :cover_hessian, :cover_jacobian, :cover_nls,
                 :CoverOnly, :WithDiagnostics, :CurvatureScales,
+                :SumMerge, :SignAveragedMerge,
                 :HessianCover, :HessianDiagnostics,
                 :JacobianCover, :JacobianDiagnostics, :NLSCover, :NLSDiagnostics,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
@@ -168,6 +182,7 @@ include("maxpath.jl")
             :cover_hybrid, :cover_jacobian_hybrid,
             :compose_hessian_cover, :compose_jacobian_cover, :gn_ab, :nls_loss_tape,
             :declare_submap, :submap, :gramvariance, :gramvariance!,
+            :MergeRule,
         )
         for sym in internals
             @test isdefined(DerivativeCovers, sym)
@@ -181,11 +196,10 @@ include("maxpath.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :sensitivities, :intermediate_gradients, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channels!, :check_unanchored, :DropGuarded,
+            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channel!, :cover_only_sweep!, :check_unanchored, :DropGuarded, :DroppedBlock, :GuardedRedo, :ancestor_cone,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
-            :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :SignAveragedMerge, :squared_surrogate,
-            :quadrature_surrogate,
+            :QuadMerge, :MaxMerge, :squared_surrogate, :quadrature_surrogate,
             :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
         )
         for sym in private
@@ -293,11 +307,12 @@ include("maxpath.jl")
         t, outidx = tape_function(f, x0)
         oi = Int32(outidx)
         @test adjoints(t, oi) == adjoints(t, outidx)
-        @test cover_hessian(t, oi).h_sum == cover_hessian(t, outidx).h_sum
-        @test cover_hessian(t, oi).h_var == cover_hessian(t, outidx).h_var
+        @test cover_hessian(t, oi).h == cover_hessian(t, outidx).h
+        sa = SignAveragedMerge()
+        @test cover_hessian(t, oi; merge = sa).h == cover_hessian(t, outidx; merge = sa).h
         @test cover_hybrid(t, oi, 2) == cover_hybrid(t, outidx, 2)
         @test hvp(t, oi, [1.0, 0.0, 0.0]) == hvp(t, outidx, [1.0, 0.0, 0.0])
-        h = cover_hessian(t, outidx).h_sum
+        h = cover_hessian(t, outidx).h
         @test scaled_spectral_radius(t, oi, h; maxiter = Int32(50)) ≈
             scaled_spectral_radius(t, outidx, h; maxiter = 50)
         # `av` is a magnitude, so an integer-valued one is as admissible as a Float64.
@@ -446,7 +461,7 @@ include("maxpath.jl")
             @test [hvp(t, outidx, e) for e in ([1.0, 0.0], [0.0, 1.0])] ≈ [H[:, 1], H[:, 2]]
             c = cover_hessian(f, x0)
             @test c.grad ≈ [0.5, 0.5]
-            @test all(abs.(H) .<= c.h_sum * c.h_sum' .* (1 + 1.0e-12))
+            @test all(abs.(H) .<= c.h * c.h' .* (1 + 1.0e-12))
             fc = forward_cover(f, x0)
             @test fc.grad ≈ [0.5, 0.5]
             @test all(abs.(H) .<= fc.h_quad * fc.h_quad' .* (1 + 1.0e-12))
@@ -515,7 +530,7 @@ include("maxpath.jl")
         res = cover_hessian(WithDiagnostics(), f, x0)
         @test all(isfinite, res.h_sum)
         @test max_coverage_ratio(res.h_sum, ForwardDiff.hessian(f, x0)) <= GATE
-        @test all(isfinite, cover_hessian(f, x0).h_sum)
+        @test all(isfinite, cover_hessian(f, x0).h)
 
         # Deeper still, where the adjoints themselves approach the subnormal range.
         f2 = x -> prod(x)^2
@@ -827,9 +842,9 @@ include("maxpath.jl")
         # covers. Nothing in a `Float64` battery can catch that.
         fdeg = x -> x[1] * x[2]
         x32 = Float32[1.0e-5, 1.0]
-        @test cover_hessian(fdeg, x32).h_sum == Float32[1.0, 1.0]
-        @test cover_hessian(fdeg, x32; ratio = 1.0e-8).h_sum ≈ Float32[sqrt(1.0f5), sqrt(1.0f-5)]
-        @test cover_hessian(fdeg, Float64.(x32)).h_sum ≈ [sqrt(1.0e5), sqrt(1.0e-5)]
+        @test cover_hessian(fdeg, x32).h == Float32[1.0, 1.0]
+        @test cover_hessian(fdeg, x32; ratio = 1.0e-8).h ≈ Float32[sqrt(1.0f5), sqrt(1.0f-5)]
+        @test cover_hessian(fdeg, Float64.(x32)).h ≈ [sqrt(1.0e5), sqrt(1.0e-5)]
 
         # At a zero-zero product no value ratio exists, so the declared scales replace it and the
         # cover stops tracking a quantity that carries none. Perturbing the vanishing operand does
@@ -842,7 +857,7 @@ include("maxpath.jl")
         end
         # Reading the values there instead sends the cover to `1e10` and moves it by `sqrt(3)`
         # between the two points above.
-        @test cover_hessian(fdeg, [1.0e-20, 1.0]; ratio = 0.0).h_sum ≈ [1.0e10, 1.0e-10]
+        @test cover_hessian(fdeg, [1.0e-20, 1.0]; ratio = 0.0).h ≈ [1.0e10, 1.0e-10]
 
         # The guard belongs to a block, not to a program: it fires at the zero-zero product and
         # not at a perturbed point whose values are tiny but in a ratio of 4, which is a scale
@@ -877,9 +892,9 @@ include("maxpath.jl")
         # exact zero hands over to the declared scales.
         fquo = x -> (x[1] - 1) / x[2]
         for d in (2.0^-10, 2.0^-20, 2.0^-30)
-            @test cover_hessian(fquo, [1 + d, 2.0]).h_sum ≈ [1 / sqrt(4d), sqrt(4d) / 4]
+            @test cover_hessian(fquo, [1 + d, 2.0]).h ≈ [1 / sqrt(4d), sqrt(4d) / 4]
         end
-        @test cover_hessian(fquo, [1.0, 2.0]).h_sum ≈ [0.5, 0.5]
+        @test cover_hessian(fquo, [1.0, 2.0]).h ≈ [0.5, 0.5]
 
         # Scale references whose ratio no product of them can hold: the split is theirs all the
         # same, and the cover is the exact one for `H = [0 1; 1 0]`.
@@ -1048,10 +1063,10 @@ include("maxpath.jl")
 
         # Every entry point that splits threads both keywords. `ratio = 0.5` condemns `xp`'s value
         # pair, which the default keeps, so each of these separates.
-        vc = cover_hessian(fmul, xp; ratio = 0.5)
+        vc = both_covers(fmul, xp; ratio = 0.5)
         @test vc.h_sum == [1.0, 1.0]
         @test all(>=(1 - 1.0e-12), severity(vc))
-        @test cover_hessian(fmul, xp).h_sum == [2.0, 0.5]
+        @test cover_hessian(fmul, xp).h == [2.0, 0.5]
 
         Fsub = x -> [(x[1] - 1) * (x[2] - 1)]
         @test declare_submap(Fsub, xp; ratio = 0.5).S == [1.0 1.0]
@@ -1106,35 +1121,53 @@ include("maxpath.jl")
         cs = CurvatureScales()
         res = cover_hessian(fpb, xpb; scales = cs)
         @test res.nguarded == 1
-        @test max_coverage_ratio(res.h_sum, Hpb) <= GATE
+        @test max_coverage_ratio(res.h, Hpb) <= GATE
         # Unit declared scales split the product as though `x[1]` and `x[2]` had the same units,
         # which the curvature of the exponential term says they do not.
-        @test res.h_sum[1] / res.h_sum[2] > 100 * cover_hessian(fpb, xpb).h_sum[1] / cover_hessian(fpb, xpb).h_sum[2]
+        @test res.h[1] / res.h[2] > 100 * cover_hessian(fpb, xpb).h[1] / cover_hessian(fpb, xpb).h[2]
 
         # No declared scale enters, so the cover is covariant in the input units and in the
         # objective's, guarded block included. Dyadic factors keep every value on the tape exact.
         dpb = [2.0^5, 2.0^-7]
         for c in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
-            h = cover_hessian(fpb, xpb; scales = c).h_sum
-            @test cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb; scales = c).h_sum ≈ h ./ dpb rtol = 1.0e-12
-            @test cover_hessian(x -> 4 * fpb(x), xpb; scales = c).h_sum ≈ 2 * h rtol = 1.0e-12
+            h = cover_hessian(fpb, xpb; scales = c).h
+            @test cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb; scales = c).h ≈ h ./ dpb rtol = 1.0e-12
+            @test cover_hessian(x -> 4 * fpb(x), xpb; scales = c).h ≈ 2 * h rtol = 1.0e-12
         end
-        hu = cover_hessian(fpb, xpb).h_sum
-        @test !(cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb).h_sum ≈ hu ./ dpb)
+        hu = cover_hessian(fpb, xpb).h
+        @test !(cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb).h ≈ hu ./ dpb)
+
+        # The sign-averaged cover derives its scales from sign-averaged covers, which transform as
+        # the sum cover does, so it is covariant at the guarded block as well.
+        sa = SignAveragedMerge()
+        for c in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            h = cover_hessian(fpb, xpb; scales = c, merge = sa).h
+            @test cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb; scales = c, merge = sa).h ≈ h ./ dpb rtol = 1.0e-12
+            @test cover_hessian(x -> 4 * fpb(x), xpb; scales = c, merge = sa).h ≈ 2 * h rtol = 1.0e-12
+        end
+        let (t, outidx) = tape_function(fpb, xpb), vbar = adjoints(t, outidx), r = DerivativeCovers.split_ratio(nothing, Float64)
+            v = cover_hessian(fpb, xpb; scales = cs, merge = sa)
+            @test v.nguarded == 1
+            wsa = DerivativeCovers.resolve_scales(cs, t, vbar, r, true, sa)
+            wsum = DerivativeCovers.resolve_scales(cs, t, vbar, r, true)
+            @test cover_hessian(fpb, xpb; scales = wsa, merge = sa).h ≈ v.h rtol = 1.0e-13
+            @test cover_hessian(fpb, xpb; scales = wsum, merge = sa).h != v.h
+            @test cover_hessian(fpb, xpb; scales = wsum).h ≈ cover_hessian(fpb, xpb; scales = cs).h rtol = 1.0e-13
+        end
 
         # Every tape-based entry point resolves the scales the same way.
         t, outidx = tape_function(fpb, xpb)
         vbar = adjoints(t, outidx)
         dg = cover_hessian(WithDiagnostics(), t, outidx; scales = cs)
-        @test dg.h_sum ≈ res.h_sum rtol = 1.0e-12
+        @test dg.h_sum ≈ res.h rtol = 1.0e-12
         @test dg.nguarded == res.nguarded
         @test max_coverage_ratio(dg.h_quad, Hpb) <= GATE
-        @test cover_hessian(CoverOnly(), t, vbar; scales = cs).h_sum == res.h_sum
-        @test cover_hybrid(t, outidx, 1; scales = cs) ≈ res.h_sum rtol = 1.0e-12
-        @test vec(declare_submap(x -> [fpb(x)], xpb; scales = cs).S) ≈ res.h_sum rtol = 1.0e-12
-        @test DerivativeCovers.maxpath_rowcorrelation(t, outidx, res.h_sum; scales = cs) ==
+        @test cover_hessian(CoverOnly(), t, vbar; scales = cs).h == res.h
+        @test cover_hybrid(t, outidx, 1; scales = cs) ≈ res.h rtol = 1.0e-12
+        @test vec(declare_submap(x -> [fpb(x)], xpb; scales = cs).S) ≈ res.h rtol = 1.0e-12
+        @test DerivativeCovers.maxpath_rowcorrelation(t, outidx, res.h; scales = cs) ==
             DerivativeCovers.maxpath_rowcorrelation(
-            t, outidx, res.h_sum; scales = DerivativeCovers.resolve_scales(
+            t, outidx, res.h; scales = DerivativeCovers.resolve_scales(
                 cs, t, vbar, DerivativeCovers.split_ratio(nothing, Float64), true
             )
         )
@@ -1143,14 +1176,23 @@ include("maxpath.jl")
         @test nres.nguarded == 1
         @test max_coverage_ratio(nres.h, Hpb) <= GATE
         @test cover_nls(xt -> rpb(xt ./ dpb), dpb .* xpb; scales = cs).h ≈ nres.h ./ dpb rtol = 1.0e-12
+        # The sign-averaged least-squares cover derives its scales as cover_hessian's does on the
+        # loss tape, of which it is the sign-averaged cover.
+        nv = cover_nls(rpb, xpb; scales = cs, merge = SignAveragedMerge())
+        @test nv.nguarded == 1
+        tl, ol, _, _ = nls_loss_tape(rpb, xpb)
+        @test nv.h ≈ cover_hessian(tl, ol; scales = cs, merge = SignAveragedMerge()).h rtol = 1.0e-12
+        @test cover_nls(xt -> rpb(xt ./ dpb), dpb .* xpb; scales = cs, merge = SignAveragedMerge()).h ≈
+            nv.h ./ dpb rtol = 1.0e-12
 
         # The drop pass leaves the guarded block's cross term uncovered and records its parents.
-        drop = DerivativeCovers.DropGuarded()
-        abar, _ = DerivativeCovers.cover_only_sweep!(
-            Val(false), vbar, t, DerivativeCovers.split_ratio(nothing, Float64),
+        drop = DerivativeCovers.DropGuarded{Float64}()
+        abar = DerivativeCovers.cover_only_sweep!(
+            Val(false), SumMerge(), vbar, t, DerivativeCovers.split_ratio(nothing, Float64),
             DerivativeCovers.split_scales(drop, t), true
         )
-        @test length(drop.pairs) == 1
+        @test length(drop.blocks) == 1
+        @test only(drop.blocks).node > 0
         @test all(>(0), abar[1:2])
         @test max_coverage_ratio(abar[1:2], Hpb) > GATE
         # A program with no guarded block reads no scale and needs no derivation.
@@ -1160,7 +1202,7 @@ include("maxpath.jl")
         ) === nothing
         @testset "off the guard the derivation is inert — $name" for (name, f, x0) in PROBLEMS
             DerivativeCovers.guards_any_block(first(tape_function(f, x0))) && continue
-            @test cover_hessian(f, x0; scales = cs).h_sum == cover_hessian(f, x0).h_sum
+            @test cover_hessian(f, x0; scales = cs).h == cover_hessian(f, x0).h
         end
         # The drop pass is the cover sweep itself, so a program with no guarded block pays for one
         # sweep: the cost claim stated as a property rather than as a timing. The one extra
@@ -1185,7 +1227,7 @@ include("maxpath.jl")
         fone = x -> x[1] * (x[1] - 1)
         rone = cover_hessian(fone, [1.0]; scales = cs)
         @test rone.nguarded == 1
-        @test rone.h_sum == cover_hessian(fone, [1.0]).h_sum
+        @test rone.h == cover_hessian(fone, [1.0]).h
         fbeale = x -> sum(
             abs2, [1.5 - x[1] * (1 - x[2]), 2.25 - x[1] * (1 - x[2]^2), 2.625 - x[1] * (1 - x[2]^3)]
         ) / 2
@@ -1210,11 +1252,26 @@ include("maxpath.jl")
         @test_throws "did not converge in 2 rounds" cover_hessian(
             fslow, xslow; scales = CurvatureScales(maxiter = 2, rtol = 1.0e-15)
         )
-        hconv = cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = nothing)).h_sum
-        h1 = cover_hessian(fslow, xslow; scales = cs).h_sum
+        hconv = cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = nothing)).h
+        h1 = cover_hessian(fslow, xslow; scales = cs).h
         @test !(h1 ≈ hconv)
-        @test cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = 40)).h_sum ≈ hconv rtol = 1.0e-9
+        @test cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = 40)).h ≈ hconv rtol = 1.0e-9
         @test max_coverage_ratio(hconv, ForwardDiff.hessian(fslow, xslow)) <= GATE
+
+        # Each round recomputes the guarded blocks alone and adds their change to the drop pass's
+        # cover, which is the cover a full sweep under the same scales gives. `fone` reaches the
+        # unanchored input, whose check supplies the first round's propagated scales.
+        for (f, x0) in ((fpb, xpb), (fone, [1.0]), (fslow, xslow)), merge in (SumMerge(), SignAveragedMerge()),
+                c in (cs, CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            t, outidx = tape_function(f, x0)
+            w = DerivativeCovers.resolve_scales(
+                c, t, adjoints(t, outidx), DerivativeCovers.split_ratio(nothing, Float64), true, merge
+            )
+            full = cover_hessian(t, outidx; scales = w, merge)
+            inc = cover_hessian(t, outidx; scales = c, merge)
+            @test inc.h ≈ full.h rtol = 1.0e-13
+            @test inc.nguarded == full.nguarded
+        end
 
         # A propagation records no tape to sweep.
         @test_throws "recorded tape" forward_cover(fpb, xpb; scales = cs)
@@ -1334,7 +1391,7 @@ include("maxpath.jl")
     @testset "squared channel — $name" for (name, f, x0) in PROBLEMS
         t, outidx = tape_function(f, x0)
         res = cover_hessian(WithDiagnostics(), t, outidx)
-        vc = cover_hessian(t, outidx)
+        vc = both_covers(t, outidx)
 
         @test vc.grad ≈ res.grad
         @test vc.h_sum ≈ res.h_sum rtol = 1.0e-12             # the hard channel is the sum merge
@@ -1358,20 +1415,20 @@ include("maxpath.jl")
         # Each input reaches each node along a single path, and no node has two parents sharing an
         # input, so there is no covariance to drop: the estimate attains the quadrature merge.
         for (f, x0) in ((tree_program, TREE_X), (quad_factored(WQ), XQ))
-            @test cover_hessian(f, x0).h_var ≈
+            @test cover_hessian(f, x0; merge = SignAveragedMerge()).h ≈
                 cover_hessian(WithDiagnostics(), f, x0).h_quad rtol = 1.0e-12
         end
         # One nonlinear node carries the whole Hessian of the factored quadratic, so the estimate
         # lands on the exact minimal cover.
-        @test cover_hessian(quad_factored(WQ), XQ).h_var ≈ abs.(WQ)
+        @test cover_hessian(quad_factored(WQ), XQ; merge = SignAveragedMerge()).h ≈ abs.(WQ)
     end
 
     @testset "squared channel underestimates where paths reconverge" begin
         # The entrywise quadratic routes each input through n nonlinear nodes whose contributions
         # overlap — exactly the covariances the independence assumption drops.
         f, x0 = quad_entrywise(AQ), XQ
-        @test all(cover_hessian(f, x0).h_var .< cover_hessian(WithDiagnostics(), f, x0).h_quad)
-        @test maximum(severity(cover_hessian(f, x0))) > 1.5
+        @test all(cover_hessian(f, x0; merge = SignAveragedMerge()).h .< cover_hessian(WithDiagnostics(), f, x0).h_quad)
+        @test maximum(severity(both_covers(f, x0))) > 1.5
 
         # The estimate is not a cover. The diamond makes that concrete: its quadrature merge
         # attains the minimal cover [3, 1], so any undershoot loses the guarantee. x₁ reaches the
@@ -1379,27 +1436,26 @@ include("maxpath.jl")
         # in quadrature as sqrt(5) instead of summing to 3.
         H = ForwardDiff.hessian(reconvergent_diamond, [0.4, -0.9])
         res = cover_hessian(WithDiagnostics(), reconvergent_diamond, [0.4, -0.9])
-        vc = cover_hessian(reconvergent_diamond, [0.4, -0.9])
+        vc = cover_hessian(reconvergent_diamond, [0.4, -0.9]; merge = SignAveragedMerge())
         @test H ≈ [9.0 -3.0; -3.0 1.0]
         @test res.h_quad ≈ [3.0, 1.0]
         @test max_coverage_ratio(res.h_quad, H) ≈ 1
-        @test vc.h_var ≈ [sqrt(5.0), 1.0]
-        @test max_coverage_ratio(vc.h_var, H) ≈ 9 / 5     # the (1,1) entry is no longer covered
+        @test vc.h ≈ [sqrt(5.0), 1.0]
+        @test max_coverage_ratio(vc.h, H) ≈ 9 / 5     # the (1,1) entry is no longer covered
     end
 
     @testset "squared channel counts each parent slot as its own path" begin
         # `x*x` seeds two slots that share a sign in the program; the channel squares them apart.
-        vc = cover_hessian(x -> x[1] * x[1], [3.0])
+        vc = both_covers(x -> x[1] * x[1], [3.0])
         @test vc.h_sum ≈ [2.0]
         @test vc.h_var ≈ [sqrt(2.0)]
         # The unary square has a single slot, so its two channels agree.
-        vu = cover_hessian(x -> x[1]^2, [3.0])
+        vu = both_covers(x -> x[1]^2, [3.0])
         @test vu.h_sum ≈ vu.h_var ≈ [sqrt(2.0)]
         # The cube reconverges on x through three slots and falls below sqrt(abs(f'')) = sqrt(18).
-        vcube = cover_hessian(x -> x[1] * x[1] * x[1], [3.0])
-        @test vcube.h_var ≈ [sqrt(15.0)]
-        @test vcube.h_var[1] < sqrt(18.0)
-        @test cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var == vcube.h_var
+        vcube = cover_hessian(x -> x[1] * x[1] * x[1], [3.0]; merge = SignAveragedMerge())
+        @test vcube.h ≈ [sqrt(15.0)]
+        @test vcube.h[1] < sqrt(18.0)
     end
 
     @testset "sign-averaged cover covariance" begin
@@ -1413,17 +1469,17 @@ include("maxpath.jl")
             ),
         ]
         @testset "$name" for (name, f, x0, d) in cases
-            vc = cover_hessian(f, x0)
+            vc = both_covers(f, x0)
 
             # Rescaling the inputs puts a factor 1/d[a] on each input edge, whose square the
             # squared channel picks up; the severity, a ratio of the two channels, is invariant.
-            vcd = cover_hessian(xt -> f(xt ./ d), d .* x0)
+            vcd = both_covers(xt -> f(xt ./ d), d .* x0)
             @test vcd.h_var ≈ vc.h_var ./ d rtol = 1.0e-12
             @test severity(vcd) ≈ severity(vc) rtol = 1.0e-12
 
             # f -> c*f scales every eta by sqrt(c), hence every squared seed by c.
             c = 7.3
-            vcc = cover_hessian(x -> c * f(x), x0)
+            vcc = both_covers(x -> c * f(x), x0)
             @test vcc.h_var ≈ sqrt(c) .* vc.h_var rtol = 1.0e-12
             @test severity(vcc) ≈ severity(vc) rtol = 1.0e-12
         end
@@ -1452,15 +1508,17 @@ include("maxpath.jl")
         # `1e-200`: their product is 1, while their squares overflow and underflow.
         f = x -> (x[1] * 1.0e-200) * (x[2] * 1.0e200)
         x0 = [1.0, 1.0]
-        vc = cover_hessian(f, x0)
+        vc = both_covers(f, x0)
         @test all(isfinite, vc.h_var)
         @test vc.h_var ≈ vc.h_sum rtol = 1.0e-12     # one contribution per coordinate
         t, outidx = tape_function(f, x0)
         @test staged_channels(t, outidx)[2] ≈ vc.h_var rtol = 1.0e-12
 
-        nc = cover_nls(x -> [(x[1] * 1.0e-200) * (x[2] * 1.0e200), x[2]], x0)
-        @test all(isfinite, nc.h_var) && all(isfinite, nc.h_var_gn)
-        @test all(nc.h_var_gn .<= nc.h_var .* GATE) && all(nc.h_var .<= nc.h .* GATE)
+        rq = x -> [(x[1] * 1.0e-200) * (x[2] * 1.0e200), x[2]]
+        nc = cover_nls(rq, x0)
+        nv = cover_nls(rq, x0; merge = SignAveragedMerge())
+        @test all(isfinite, nv.h) && all(isfinite, nv.h_gn)
+        @test all(nv.h_gn .<= nv.h .* GATE) && all(nv.h .<= nc.h .* GATE)
 
         # A weight whose root is moderate, with partials whose squares leave the range.
         tg, og = tape_function(x -> [x[1] * 1.0e-200 * 1.0e200, x[2]], x0)
@@ -1567,9 +1625,9 @@ include("maxpath.jl")
         end
     end
 
-    # The fused sweep injects each slot's squared seed where the sum channel injects the seed, so
-    # it squares every path contribution before any summation, exactly as the staged form does;
-    # only the order of the additions differs.
+    # The sign-averaged sweep injects each slot's squared seed where the sum sweep injects the
+    # seed, so it squares every path contribution before any summation, exactly as the staged form
+    # does; only the order of the additions differs.
     FUSED_CORPUS = vcat(
         [(name, f, x0) for (name, f, x0) in PROBLEMS],
         [("$(p.name) sigma=$sigma", p.f, p.x0) for (sigma, p) in GENERATED],
@@ -1578,13 +1636,13 @@ include("maxpath.jl")
     )
     @testset "fused squared channel matches the staged form — $name" for (name, f, x0) in FUSED_CORPUS
         t, outidx = tape_function(f, x0)
-        c = cover_hessian(t, outidx)
+        c = both_covers(t, outidx)
         h_sum, h_var = staged_channels(t, outidx)
         @test c.h_sum ≈ h_sum rtol = 1.0e-12
         @test c.h_var ≈ h_var rtol = 1.0e-12
         @test all(c.h_var .<= c.h_sum .* GATE)
-        vc = cover_hessian(t, outidx)
-        @test vc.grad == c.grad && vc.h_sum == c.h_sum && vc.h_var == c.h_var
+        vc = both_covers(t, outidx)
+        @test vc == c
     end
 
     @testset "quadratic forms share a Hessian and differ as programs" begin
@@ -1610,13 +1668,13 @@ include("maxpath.jl")
         # every node along a single path. The sign-averaged cover `h_var` drops covariances between
         # reconverging paths, so it attains the quadrature merge exactly iff there are none.
         tree = random_dag(8; nops = 40, sharing = 0.0, rng = MersenneTwister(11))
-        @test cover_hessian(tree.f, tree.x0).h_var ≈
+        @test cover_hessian(tree.f, tree.x0; merge = SignAveragedMerge()).h ≈
             cover_hessian(WithDiagnostics(), tree.f, tree.x0).h_quad rtol = 1.0e-10
 
         # With reuse, paths reconverge; the sign-averaged cover drops exactly those covariances and
         # so falls strictly below the quadrature merge on the coordinates that reconverge.
         shared = random_dag(8; nops = 40, sharing = 0.6, rng = MersenneTwister(11))
-        hv = cover_hessian(shared.f, shared.x0).h_var
+        hv = cover_hessian(shared.f, shared.x0; merge = SignAveragedMerge()).h
         hq = cover_hessian(WithDiagnostics(), shared.f, shared.x0).h_quad
         @test all(hv .<= hq .* GATE)
         @test count(hv .< hq .* (1 - 1.0e-8)) >= 2
