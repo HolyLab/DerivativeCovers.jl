@@ -11,7 +11,8 @@ work for a tape of length `L`. The result is deterministic and certified.
 A cover is covariant under rescaling: if `x -> D*x`, then `h -> inv(D)*h`; if `f -> c*f`, then
 `h -> sqrt(c)*h`. That holds exactly on any program whose blocks all split on parent values
 carrying a scale of their own. Where one does not, the split falls back on declared input scales
-and stays covariant when those are rescaled alongside, `scales -> D*scales`. Every cover reports,
+and stays covariant when those are rescaled alongside, `scales -> D*scales`, or when they are
+derived from the program's own curvature, `scales = CurvatureScales()`. Every cover reports,
 in its `nguarded` field, how many blocks fell back at the point it was computed;
 [`guards_any_block`](@ref) predicts from a recorded program alone whether any might.
 
@@ -31,7 +32,7 @@ import MatrixCovers: support_components, gramcover, gramcover!
 export Tape, TVar, tape_function
 export FVar, forward_cover, ForwardCover
 export cover_hessian, cover_jacobian, cover_nls
-export CoverOnly, WithDiagnostics
+export CoverOnly, WithDiagnostics, CurvatureScales
 export HessianCover, HessianDiagnostics
 export JacobianCover, JacobianDiagnostics
 export NLSCover, NLSDiagnostics
@@ -81,6 +82,7 @@ include("curvature.jl")
 include("tape.jl")
 include("overloads.jl")
 include("covers.jl")
+include("curvaturescales.jl")
 include("forward.jl")
 include("merges.jl")
 include("squared.jl")

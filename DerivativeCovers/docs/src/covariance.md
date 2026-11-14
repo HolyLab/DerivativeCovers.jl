@@ -143,6 +143,52 @@ Near such points the cover can be discontinuous. For a quotient `x / y`, as
 `x` approaches zero the local cover remains covariant but grows without bound;
 at `x = 0` it drops to the finite cover given by the declared scales.
 
+## Scales from the program's curvature
+
+Passing `scales = CurvatureScales()` derives the declared scales from the
+program instead. A first sweep covers the program without the operations that
+would read declared scales, and each input whose cover entry `h[i]` from that
+sweep is positive receives the scale `1 / h[i]`. A cover transforms as
+`h → inv(D) * h`, so these scales transform as the inputs do, and the
+resulting cover is covariant without any scales from the caller:
+
+```jldoctest cov
+julia> f2(x) = f(x) + x[1]^2;
+
+julia> g2(y) = f2(y ./ D);
+
+julia> cover_hessian(f2, x1).nguarded
+1
+
+julia> cover_hessian(g2, D .* x1).h_sum .* D ≈ cover_hessian(f2, x1).h_sum
+false
+
+julia> h = cover_hessian(f2, x1; scales=CurvatureScales()).h_sum;
+
+julia> cover_hessian(g2, D .* x1; scales=CurvatureScales()).h_sum .* D ≈ h
+true
+```
+
+An input that receives curvature only through those operations has no scale
+the program determines. `f` itself is an example: at `x1`, the only curvature
+of `x[1]` is in the product `x[1] * x[2]`, whose second argument vanishes.
+Where such an input's scale would change the result, `CurvatureScales` throws
+an error naming it, and the scales must be declared explicitly:
+
+```jldoctest cov
+julia> cover_hessian(f, x1; scales=CurvatureScales())
+ERROR: ArgumentError: CurvatureScales: input(s) [1] receive curvature only through blocks whose split falls back on declared scales (parent nodes [1, 2]), so the program does not determine their scales relative to the other inputs. Pass declared scales explicitly, `scales = w`, for this computation.
+[...]
+```
+
+The first sweep is the cover's own sweep, so on a program with
+`nguarded == 0` the derivation costs nothing; otherwise it adds one more cover
+sweep, roughly doubling the cost. By default the derivation runs one round. Further rounds re-derive the scales
+from the cover the previous round produced; they change the result only where
+an operation's argument depends on several inputs, and converge quickly. See
+[`CurvatureScales`](@ref) for the keywords that control them. The derivation
+needs a recorded program, so [`forward_cover`](@ref) does not accept it.
+
 ## Jacobian covers
 
 The default `start=:logscale` of [`cover_jacobian`](@ref) produces products
