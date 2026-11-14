@@ -110,7 +110,7 @@ function maxpath_rowcorrelation(
     M = magtype(T)
     F = maxpath_forward(t, d)
     r = split_ratio(ratio, T)
-    sc = split_scales(scales, t)
+    sc = split_scales(resolve_scales(scales, t, outidx, r, check), t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
     R = TopTwo{M}(N)

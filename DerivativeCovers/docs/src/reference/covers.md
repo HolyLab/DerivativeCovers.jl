@@ -25,6 +25,7 @@ cover_hybrid
 forward_cover
 CoverOnly
 WithDiagnostics
+CurvatureScales
 ```
 
 ## Least-squares objectives

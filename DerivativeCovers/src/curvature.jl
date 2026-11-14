@@ -299,16 +299,20 @@ function cover_slots!(eta::Vector, C::PairedCurvature, ratio, site, av, sl; chec
         # A pair is a pure cross term, so one dead slot empties it: the pair's Hessian
         # contribution is exactly zero and neither slot carries weight.
         dead = dead_slot(s1) || dead_slot(s2)
-        a, b = dead ? (zero(c), zero(c)) : split_block(ratio, zero(c), c, zero(c), s1, s2)
+        split = dead ? nothing : split_block(ratio, zero(c), c, zero(c), s1, s2)
+        # A live pair without a split is dropped (see `DropGuarded`): its cross term stays
+        # uncovered.
+        exempt = dead || split === nothing
+        a, b = split === nothing ? (zero(c), zero(c)) : split
         # With `a` fixed, `b >= c/a` rounded upward makes `a*b >= c` exactly.
-        if roundsup(eltype(site)) && !dead
+        if roundsup(eltype(site)) && !exempt
             b = max(oftype(c, b), c / a)
         end
         if check
             check_finite_partials(site, av, (c,))
             # Allow for roundoff accumulated across the program, not just this comparison.
             rtol = sqrt(eps(magtype(eltype(site))))
-            dead || a * b >= c * (1 - rtol) || error(
+            exempt || a * b >= c * (1 - rtol) || error(
                 "local cover invariant violated at $(site_label(site)), pair $j: eta=($a,$b), c=$c"
             )
         end
@@ -341,18 +345,18 @@ function cover_slots!(eta::Vector, C::BinaryCurvature, ratio, site, av, sl; chec
     # diagonal cover serves anyway never asks for it.
     offdiag = offdiag_active(c11, c12, c22)
     dead = offdiag && (dead_slot(s1) || dead_slot(s2))
-    if offdiag && !dead
-        eta1, eta2 = split_block(ratio, c11, c12, c22, s1, s2)
-    else
-        eta1, eta2 = sqrt(c11), sqrt(c22)
-    end
-    roundsup(eltype(site)) && ((eta1, eta2) = certify_block(c11, c12, c22, eta1, eta2, dead))
+    split = offdiag && !dead ? split_block(ratio, c11, c12, c22, s1, s2) : nothing
+    # An active block without a split is dropped (see `DropGuarded`): its cross term stays
+    # uncovered.
+    exempt = dead || (offdiag && split === nothing)
+    eta1, eta2 = split === nothing ? (sqrt(c11), sqrt(c22)) : split
+    roundsup(eltype(site)) && ((eta1, eta2) = certify_block(c11, c12, c22, eta1, eta2, exempt))
     if check
         check_finite_partials(site, av, (c11, c12, c22))
         rtol = sqrt(eps(M))
         (
             eta1 >= sqrt(c11) * (1 - rtol) && eta2 >= sqrt(c22) * (1 - rtol) &&
-                (dead || eta1 * eta2 >= c12 * (1 - rtol))
+                (exempt || eta1 * eta2 >= c12 * (1 - rtol))
         ) ||
             error(
             "local cover invariant violated at $(site_label(site)): " *

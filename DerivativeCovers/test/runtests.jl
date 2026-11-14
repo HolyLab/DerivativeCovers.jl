@@ -146,7 +146,7 @@ include("maxpath.jl")
                 :Tape, :TVar, :tape_function,
                 :FVar, :forward_cover, :ForwardCover,
                 :cover_hessian, :cover_jacobian, :cover_nls,
-                :CoverOnly, :WithDiagnostics,
+                :CoverOnly, :WithDiagnostics, :CurvatureScales,
                 :HessianCover, :HessianDiagnostics,
                 :JacobianCover, :JacobianDiagnostics, :NLSCover, :NLSDiagnostics,
                 :hvp, :hvp!, :jvp, :jvp!, :vjp, :vjp!,
@@ -181,7 +181,7 @@ include("maxpath.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :sensitivities, :intermediate_gradients, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :split_fallback,
+            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channels!, :check_unanchored, :DropGuarded,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :MergeRule, :SumMerge, :QuadMerge, :MaxMerge, :SignAveragedMerge, :squared_surrogate,
@@ -1095,6 +1095,128 @@ include("maxpath.jl")
             @test cover_hybrid(f, x0, 1; ratio = 1.0e-4, scales = fill(2.0, length(x0))) ≈
                 res.h_sum rtol = 1.0e-12
         end
+    end
+
+    @testset "curvature scales" begin
+        # `10000 * x[1] * x[2]` vanishes with `x[1]` at the starting point, so its split falls
+        # back on declared scales; the exponential term gives both inputs curvature of their own.
+        fpb = x -> ((10000 * x[1] * x[2] - 1)^2 + (exp(-x[1]) + exp(-x[2]) - 1.0001)^2) / 2
+        xpb = [0.0, 1.0]
+        Hpb = ForwardDiff.hessian(fpb, xpb)
+        cs = CurvatureScales()
+        res = cover_hessian(fpb, xpb; scales = cs)
+        @test res.nguarded == 1
+        @test max_coverage_ratio(res.h_sum, Hpb) <= GATE
+        # Unit declared scales split the product as though `x[1]` and `x[2]` had the same units,
+        # which the curvature of the exponential term says they do not.
+        @test res.h_sum[1] / res.h_sum[2] > 100 * cover_hessian(fpb, xpb).h_sum[1] / cover_hessian(fpb, xpb).h_sum[2]
+
+        # No declared scale enters, so the cover is covariant in the input units and in the
+        # objective's, guarded block included. Dyadic factors keep every value on the tape exact.
+        dpb = [2.0^5, 2.0^-7]
+        for c in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            h = cover_hessian(fpb, xpb; scales = c).h_sum
+            @test cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb; scales = c).h_sum ≈ h ./ dpb rtol = 1.0e-12
+            @test cover_hessian(x -> 4 * fpb(x), xpb; scales = c).h_sum ≈ 2 * h rtol = 1.0e-12
+        end
+        hu = cover_hessian(fpb, xpb).h_sum
+        @test !(cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb).h_sum ≈ hu ./ dpb)
+
+        # Every tape-based entry point resolves the scales the same way.
+        t, outidx = tape_function(fpb, xpb)
+        vbar = adjoints(t, outidx)
+        dg = cover_hessian(WithDiagnostics(), t, outidx; scales = cs)
+        @test dg.h_sum ≈ res.h_sum rtol = 1.0e-12
+        @test dg.nguarded == res.nguarded
+        @test max_coverage_ratio(dg.h_quad, Hpb) <= GATE
+        @test cover_hessian(CoverOnly(), t, vbar; scales = cs).h_sum == res.h_sum
+        @test cover_hybrid(t, outidx, 1; scales = cs) ≈ res.h_sum rtol = 1.0e-12
+        @test vec(declare_submap(x -> [fpb(x)], xpb; scales = cs).S) ≈ res.h_sum rtol = 1.0e-12
+        @test DerivativeCovers.maxpath_rowcorrelation(t, outidx, res.h_sum; scales = cs) ==
+            DerivativeCovers.maxpath_rowcorrelation(
+            t, outidx, res.h_sum; scales = DerivativeCovers.resolve_scales(
+                cs, t, vbar, DerivativeCovers.split_ratio(nothing, Float64), true
+            )
+        )
+        rpb = x -> [10000 * x[1] * x[2] - 1, exp(-x[1]) + exp(-x[2]) - 1.0001]
+        nres = cover_nls(rpb, xpb; scales = cs)
+        @test nres.nguarded == 1
+        @test max_coverage_ratio(nres.h, Hpb) <= GATE
+        @test cover_nls(xt -> rpb(xt ./ dpb), dpb .* xpb; scales = cs).h ≈ nres.h ./ dpb rtol = 1.0e-12
+
+        # The drop pass leaves the guarded block's cross term uncovered and records its parents.
+        drop = DerivativeCovers.DropGuarded()
+        abar, _ = DerivativeCovers.cover_only_sweep!(
+            Val(false), vbar, t, DerivativeCovers.split_ratio(nothing, Float64),
+            DerivativeCovers.split_scales(drop, t), true
+        )
+        @test length(drop.pairs) == 1
+        @test all(>(0), abar[1:2])
+        @test max_coverage_ratio(abar[1:2], Hpb) > GATE
+        # A program with no guarded block reads no scale and needs no derivation.
+        @test DerivativeCovers.resolve_scales(
+            cs, first(tape_function(x -> x[1] * x[2], [1.0, 2.0])), [0.0, 0.0, 1.0],
+            sqrt(eps()), true
+        ) === nothing
+        @testset "off the guard the derivation is inert — $name" for (name, f, x0) in PROBLEMS
+            DerivativeCovers.guards_any_block(first(tape_function(f, x0))) && continue
+            @test cover_hessian(f, x0; scales = cs).h_sum == cover_hessian(f, x0).h_sum
+        end
+        # The drop pass is the cover sweep itself, so a program with no guarded block pays for one
+        # sweep: the cost claim stated as a property rather than as a timing. The one extra
+        # allocation is the empty record of dropped blocks.
+        let (tclean, oc) = tape_function(x -> x[1] * x[2] + exp(x[2]), [2.0, 0.5])
+            cover_hessian(CoverOnly(), tclean, oc)
+            cover_hessian(CoverOnly(), tclean, oc; scales = cs)
+            @test cover_hessian(CoverOnly(), tclean, oc; scales = cs).nguarded == 0
+            @test @allocations(cover_hessian(CoverOnly(), tclean, oc; scales = cs)) <=
+                @allocations(cover_hessian(CoverOnly(), tclean, oc)) + 1
+            vc = adjoints(tclean, oc)
+            DerivativeCovers.local_covers(tclean, vc)
+            DerivativeCovers.local_covers(tclean, vc; scales = cs)
+            @test @allocations(DerivativeCovers.local_covers(tclean, vc; scales = cs)) <=
+                @allocations(DerivativeCovers.local_covers(tclean, vc)) + 1
+        end
+
+        # An input whose only curvature passes through guarded blocks has no scale the program
+        # determines. Where its scale cancels from every split it reaches — both parents depend on
+        # it alone — the derivation proceeds; otherwise it names the input.
+        fone = x -> x[1] * (x[1] - 1)
+        rone = cover_hessian(fone, [1.0]; scales = cs)
+        @test rone.nguarded == 1
+        @test rone.h_sum == cover_hessian(fone, [1.0]).h_sum
+        fbeale = x -> sum(
+            abs2, [1.5 - x[1] * (1 - x[2]), 2.25 - x[1] * (1 - x[2]^2), 2.625 - x[1] * (1 - x[2]^3)]
+        ) / 2
+        @test_throws "input(s) [1] receive curvature only through" cover_hessian(fbeale, [1.0, 1.0]; scales = cs)
+        @test_throws "scales = w" cover_hessian(fbeale, [1.0, 1.0]; scales = cs)
+        @test cover_hessian(fbeale, [1.0, 1.0]; scales = [1.0, 2.0]).nguarded == 3
+
+        # The budget keywords follow `cover_jacobian`: a fixed count of rounds, or a run to
+        # convergence that throws when it does not get there.
+        @test CurvatureScales().rounds == 1
+        @test CurvatureScales(rtol = 1.0e-6).rounds === nothing
+        @test CurvatureScales(maxiter = 5).maxiter == 5
+        @test_throws "cannot be combined" CurvatureScales(rounds = 2, maxiter = 5)
+        @test_throws "cannot be combined" CurvatureScales(rounds = 2, rtol = 1.0e-6)
+        @test_throws "rounds must be at least 1" CurvatureScales(rounds = 0)
+        @test_throws "maxiter must be at least 2" CurvatureScales(maxiter = 1)
+        @test_throws "rtol must be positive" CurvatureScales(rtol = 0.0)
+        # A guarded parent that mixes two inputs reads both of their scales, so re-deriving them
+        # moves the split, and the rounds converge rather than stopping at the first.
+        fslow = x -> ((x[1] + 10x[2]) * x[3] - 1)^2 / 2 + x[1]^2 / 2 + 3x[2]^2 + exp(x[3])
+        xslow = [1.0, 1.0, 0.0]
+        @test_throws "did not converge in 2 rounds" cover_hessian(
+            fslow, xslow; scales = CurvatureScales(maxiter = 2, rtol = 1.0e-15)
+        )
+        hconv = cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = nothing)).h_sum
+        h1 = cover_hessian(fslow, xslow; scales = cs).h_sum
+        @test !(h1 ≈ hconv)
+        @test cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = 40)).h_sum ≈ hconv rtol = 1.0e-9
+        @test max_coverage_ratio(hconv, ForwardDiff.hessian(fslow, xslow)) <= GATE
+
+        # A propagation records no tape to sweep.
+        @test_throws "recorded tape" forward_cover(fpb, xpb; scales = cs)
     end
 
     @testset "node levels and partitions" begin

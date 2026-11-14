@@ -768,6 +768,28 @@ split_scales(w, t::Tape) =
     SplitScales(AbsValues(t.vals), DeclaredScales(check_input_scales(w, t.ninputs), t))
 
 """
+    DropGuarded()
+
+The declared "scales" of the drop pass of [`CurvatureScales`](@ref): at a block whose split falls
+back on declared scales, [`split_block`](@ref) returns `nothing` instead of a pair, and the parent
+nodes of the block are recorded in `pairs`. [`cover_slots!`](@ref) then covers only the block's
+diagonal, so a sweep run with these references does not cover the Hessian.
+"""
+struct DropGuarded
+    pairs::Vector{Tuple{Int, Int}}
+end
+DropGuarded() = DropGuarded(Tuple{Int, Int}[])
+
+check_input_scales(w::DropGuarded, ninputs::Integer) = w
+
+# Whether a block that falls back on declared scales is dropped, recording its parents if so.
+drop_guarded(d1, d2) = false
+function drop_guarded(d1::DeferredScale{<:DeclaredScales{<:Any, DropGuarded}}, d2::DeferredScale)
+    push!(d1.store.w.pairs, (d1.index, d2.index))
+    return true
+end
+
+"""
     sensitivity_scales(w, t::Tape) -> sigma
 
 One [`abs_forward`](@ref) sweep seeded with the declared input scales `w`, so
@@ -871,6 +893,10 @@ without running a cover.
 
 Each fallback is counted through [`note_guarded`](@ref), and the covers report the total as
 `nguarded`.
+
+The one exception to returning a pair is the drop pass of [`CurvatureScales`](@ref), whose scale
+references come from `split_scales(DropGuarded(), t)`: there a block that falls back returns
+`nothing`, and [`cover_slots!`](@ref) leaves its cross term uncovered.
 """
 function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
     # The split only picks a member of the family; an upward-rounded bound need not reach it, and
@@ -880,6 +906,7 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
     value_bounds_split(c11, c12, c22, zeta1, zeta2, plainvalue(ratio)) &&
         return balanced_split(c11, c12, c22, zeta1, zeta2)
     note_guarded(s1)
+    drop_guarded(s1.declared, s2.declared) && return nothing
     return balanced_split(
         c11, c12, c22, plainvalue(declared_scale(s1)), plainvalue(declared_scale(s2))
     )
@@ -906,12 +933,13 @@ nodes — validity is conditional on the declaration.
 does so; see [`split_block`](@ref) and [`split_ratio`](@ref). `check` verifies the covering
 invariant at every recorded node.
 """
-function local_covers(
-        t::Tape{T}, vbar::AbstractVector; check::Bool = true,
-        scales = nothing, ratio = nothing
-    ) where {T}
+local_covers(
+    t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing
+) where {T} = local_covers(t, vbar, split_ratio(ratio, T), scales, check)
+
+# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method.
+function local_covers(t::Tape{T}, vbar::AbstractVector, r, scales, check::Bool) where {T}
     N = nnodes(t)
-    r = split_ratio(ratio, T)
     sc = split_scales(scales, t)
     etas = [magtype(T)[] for _ in 1:N]
     theta = zeros(boundtype(T), N)
@@ -1083,7 +1111,9 @@ explicit elementwise bound and a tighter quadrature cover.
 
 The `scales` keyword declares the input scales the split falls back on where a block's parent
 values carry none, and `ratio` the threshold at which it does so; see [`split_block`](@ref) and
-[`split_ratio`](@ref). Neither affects validity, only which of the valid covers is chosen. The
+[`split_ratio`](@ref). `scales = `[`CurvatureScales`](@ref)`()` derives those scales from the
+program's own curvature, which keeps the cover covariant without scales from the caller. Neither
+keyword affects validity, only which of the valid covers is chosen. The
 result's `nguarded` field counts the blocks at which this cover consulted `scales`;
 [`guards_any_block`](@ref) predicts from the tape alone whether a program might. `check=true`
 verifies the local covering conditions.
@@ -1175,6 +1205,7 @@ function cover_hessian(
     vbar = adjoints(t, outidx)
     u = sensitivities(t)
     B = tomag(T, hessian_bound(t, vbar, u))
+    scales = resolve_scales(scales, t, vbar, split_ratio(ratio, T), check)
     etas, theta, nguarded = local_covers(t, vbar; check, scales, ratio)
 
     h_sum, h_quad = tomag.(T, merge_atoms(t, etas, u))
@@ -1212,9 +1243,8 @@ function cover_hessian(
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    sc = split_scales(scales, t)
-    abar, rbar = cover_only_sweep!(Val(true), vbar, t, split_ratio(ratio, T), sc, check)
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], sc.store.nguarded)
+    abar, rbar, nguarded = cover_only_channels!(Val(true), vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], nguarded)
 end
 
 function cover_hessian(
@@ -1225,9 +1255,16 @@ function cover_hessian(
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
+    abar, rbar, nguarded = cover_only_channels!(Val(false), vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], nguarded)
+end
+
+# The `CoverOnly` sweep under the declared scales `scales`, returning `(abar, rbar, nguarded)`;
+# `CurvatureScales` adds a method. `r` is the resolved threshold.
+function cover_only_channels!(p::Val, vbar, t::Tape, r, scales, check::Bool)
     sc = split_scales(scales, t)
-    abar, rbar = cover_only_sweep!(Val(false), vbar, t, split_ratio(ratio, T), sc, check)
-    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], sc.store.nguarded)
+    abar, rbar = cover_only_sweep!(p, vbar, t, r, sc, check)
+    return abar, rbar, sc.store.nguarded
 end
 
 # The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, rbar)`.

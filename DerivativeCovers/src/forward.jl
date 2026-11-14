@@ -515,7 +515,8 @@ is a property of the program.
 `scales` and `ratio` govern the split exactly as in [`cover_hessian`](@ref): the propagation
 carries both of the references [`split_block`](@ref) reads, so it splits by the same rule a tape
 does and its cover is comparable with the tape's coordinate by coordinate. See
-[`forward_scale`](@ref). `check=true` verifies every local cover.
+[`forward_scale`](@ref). [`CurvatureScales`](@ref) derives its scales from reverse sweeps over a
+tape, so it is not accepted here. `check=true` verifies every local cover.
 
 # Examples
 
