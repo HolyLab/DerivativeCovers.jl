@@ -20,8 +20,8 @@
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-        vp = cover_hessian(p.f, p.x0)
-        vs = cover_hessian(p.twin, p.x0)
+        vp = both_covers(p.f, p.x0)
+        vs = both_covers(p.twin, p.x0)
         @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
         @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
         @test severity(vp) ≈ severity(vs) rtol = 1.0e-12

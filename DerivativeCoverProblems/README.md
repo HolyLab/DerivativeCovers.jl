@@ -27,8 +27,8 @@ p = quadratic(6; rank=2, form=:factored)
 c = cover_hessian(p.f, p.x0)
 H = exact_hessian(p)
 
-all(abs.(H) .<= c.h_sum * c.h_sum')             # true: the cover is guaranteed
-max_coverage_ratio(c.h_sum, H)                  # 0.879: and it is nearly tight
+all(abs.(H) .<= c.h * c.h')             # true: the cover is guaranteed
+max_coverage_ratio(c.h, H)                  # 0.879: and it is nearly tight
 ```
 
 The ratio approaches `1` as the cover approaches the tightest cover that the Hessian admits.

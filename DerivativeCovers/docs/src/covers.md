@@ -52,7 +52,7 @@ julia> x0 = [0.5, 2.0];
 
 julia> c = cover_hessian(f, x0);
 
-julia> round.(c.h_sum; digits=4)
+julia> round.(c.h; digits=4)
 2-element Vector{Float64}:
  4.1125
  2.4142
@@ -84,13 +84,26 @@ julia> round.(d.B; digits=4)
 
 Here `B` equals `abs.(H)`, because no cancellation occurs in this program.
 
-The default result also includes the sign-averaged cover `h_var`, the
-root-sum-square of the same contributions that `h_sum` adds. It is the
-root-mean-square size of the sum if each contribution carried an independent
-random sign. **`h_var` does not cover the Hessian**: it can fall below the true
-scale where several contributions share a sign. It costs nothing extra, and the
-ratio `h_sum ./ h_var` indicates how much the contributions to each coordinate
-overlap.
+Passing `merge = SignAveragedMerge()` returns the sign-averaged cover in place
+of the sum cover, from a sweep of the same cost. It is the root-sum-square of
+the same contributions that the sum cover adds: the root-mean-square size of the sum
+if each contribution carried an independent random sign. **The sign-averaged
+cover does not cover the Hessian**: it can fall below the true scale where
+several contributions share a sign. The type of the result records which cover
+it holds:
+
+```jldoctest hess
+julia> v = cover_hessian(f, x0; merge = SignAveragedMerge());
+
+julia> v isa HessianCover{Float64, Float64, SignAveragedMerge}
+true
+
+julia> all(v.h .<= c.h)
+true
+```
+
+The ratio `c.h ./ v.h` of the two covers indicates how much the contributions
+to each coordinate overlap.
 
 ### Between the two merges
 
@@ -143,9 +156,9 @@ By default the residuals share one channel in the reverse sweep, for a cost of
 cost to ``O(GL)``; `ngroups=nothing` gives each of the `m` residuals its own
 channel, the tightest covers available. Summing residuals into one channel
 loosens `h_gn[j]` by at most ``\sqrt{n_j}``, where ``n_j`` is the number of
-residuals input `j` reaches. The
-sign-averaged covers `h_var` and `h_var_gn` are the analogs of `h_var` for
-[`cover_hessian`](@ref).
+residuals input `j` reaches. With `merge = SignAveragedMerge()`, `h` and
+`h_gn` are instead the sign-averaged covers of the two matrices, the analogs of
+the sign-averaged cover of [`cover_hessian`](@ref).
 
 ## Jacobian covers
 

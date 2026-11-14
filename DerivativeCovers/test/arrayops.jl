@@ -138,8 +138,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
         @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
         @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-        vp = cover_hessian(sum_prim, x0)
-        vs = cover_hessian(sum_scalar, x0)
+        vp = both_covers(sum_prim, x0)
+        vs = both_covers(sum_scalar, x0)
         @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
         @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
         @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
@@ -187,8 +187,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
             @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-            vp = cover_hessian(f, x0)
-            vs = cover_hessian(fs, x0)
+            vp = both_covers(f, x0)
+            vs = both_covers(fs, x0)
             @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
             @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
             @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
@@ -251,8 +251,8 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
             @test rp.h_sum_rev ≈ rs.h_sum_rev rtol = 1.0e-12
             @test rp.h_quad ≈ rs.h_quad rtol = 1.0e-12
 
-            vp = cover_hessian(f, x0)
-            vs = cover_hessian(fs, x0)
+            vp = both_covers(f, x0)
+            vs = both_covers(fs, x0)
             @test vp.h_sum ≈ vs.h_sum rtol = 1.0e-12
             @test vp.h_var ≈ vs.h_var rtol = 1.0e-12
             @test severity(vp) ≈ severity(vs) rtol = 1.0e-12
@@ -578,7 +578,7 @@ const C0_5 = [0.7, -1.3, 0.4, 2.1, -0.6]
                 return sum(abs2, y)
             end
             @test cover_hessian(fmul, x0).grad ≈ ForwardDiff.gradient(fref, x0)
-            @test max_coverage_ratio(cover_hessian(fmul, x0).h_sum, ForwardDiff.hessian(fref, x0)) <=
+            @test max_coverage_ratio(cover_hessian(fmul, x0).h, ForwardDiff.hessian(fref, x0)) <=
                 GATE
 
             # A destination laid out over other axes than the product's is a mismatch, not a

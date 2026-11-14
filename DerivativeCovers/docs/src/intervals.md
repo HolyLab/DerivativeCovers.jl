@@ -19,14 +19,14 @@ julia> X = interval.([0.4, 1.0], [0.6, 1.5]);    # 0.4 ≤ x[1] ≤ 0.6, 1.0 ≤
 
 julia> c = cover_hessian(f, X);
 
-julia> round.(c.h_sum; digits=4)
+julia> round.(c.h; digits=4)
 2-element Vector{Float64}:
  3.2864
  2.6446
 
 julia> H(x) = [exp(x[1]) 2x[2]; 2x[2] 2x[1]];    # the exact Hessian, for comparison
 
-julia> all(all(abs.(H([x1, x2])) .<= c.h_sum .* c.h_sum') for x1 in 0.4:0.05:0.6, x2 in 1.0:0.1:1.5)
+julia> all(all(abs.(H([x1, x2])) .<= c.h .* c.h') for x1 in 0.4:0.05:0.6, x2 in 1.0:0.1:1.5)
 true
 ```
 

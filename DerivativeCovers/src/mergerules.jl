@@ -3,29 +3,34 @@
 """
     MergeRule
 
-How [`balance_cover`](@ref)'s b-step combines a column of the scaled surrogate into one input
-weight: given the entries `Ũ_kj/a_k` over the outputs `k`, it returns `b_j`. Every rule that
-dominates each of its terms yields a valid cover, so the choice trades tightness, never validity.
+How a construction combines the contributions that reach one weight of a cover. The rules are
+types rather than names so that the loops that apply them specialize on the choice; none carries
+parameters, so a result type that records its rule as a type parameter identifies it completely.
 
 [`SumMerge`](@ref), [`QuadMerge`](@ref) and [`MaxMerge`](@ref) are the `p = 1, 2, ∞` members of
-one family, so a parameterized member (a `p`-norm merge) is reachable through the same b-step
-without an API break. They are types rather than names so that the b-step's doubly-nested loop
-specializes on the choice, and so that the non-convergence hint can dispatch per rule.
+one family, so a parameterized member (a `p`-norm merge) is reachable without an API break. Every
+member that dominates each of its terms yields a valid cover, so the choice trades tightness,
+never validity. [`SignAveragedMerge`](@ref) is the exception: it combines the contributions in
+quadrature *along each path* as well as across them, and its result does not cover the matrix.
 
-[`SignAveragedMerge`](@ref) is the exception: it runs the whole alternation, not only the final
-b-step, in quadrature on `R`, and the pair it returns is a sign-averaged cover, which does not
-cover `J`.
-
-`arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
-see that function's docstring.
+- [`cover_hessian`](@ref) and [`cover_nls`](@ref) take `merge = SumMerge()` (the default) or
+  `SignAveragedMerge()`, the two rules a single `O(L)` sweep can carry, and return the chosen
+  cover as the result's field `h`.
+- [`balance_cover`](@ref) applies the rule in its b-step, which combines a column of the scaled
+  surrogate, the entries `Ũ_kj/a_k` over the outputs `k`, into the input weight `b_j`; there
+  `SignAveragedMerge` runs the whole alternation, not only the final b-step, in quadrature on `R`.
+  `arule`, the other strategy axis of `balance_cover`, is a `Symbol` instead, because it is closed:
+  see that function's docstring.
 """
 abstract type MergeRule end
 
 """
     SumMerge <: MergeRule
 
-`b_j = ∑_k Ũ_kj/a_k`, the loosest merge and, with [`SignAveragedMerge`](@ref), the only one the tape
-form can run as `O(L)` sweeps.
+Add the contributions. In [`balance_cover`](@ref)'s b-step, `b_j = ∑_k Ũ_kj/a_k`. In a Hessian
+cover, `h_i` adds the contribution of every pair of a seeded parent slot and a path from that slot
+to input `i`, which is valid because the cross terms of `h*h'` are nonnegative. It is the loosest
+merge and, with [`SignAveragedMerge`](@ref), the only one a tape can run as `O(L)` sweeps.
 """
 struct SumMerge <: MergeRule end
 
@@ -48,7 +53,12 @@ struct MaxMerge <: MergeRule end
 """
     SignAveragedMerge <: MergeRule
 
-The sign-averaged pair: [`balance_cover`](@ref)'s marginal iteration run in quadrature on
+Combine the contributions that [`SumMerge`](@ref) adds in quadrature instead: the result is the
+root-mean-square of their sum when each parent slot's local partial carries an independent,
+equiprobable sign. It covers that ensemble's mean magnitudes, **not the matrix**. For
+a Hessian, see [`HessianCover`](@ref); for a least-squares loss, [`NLSCover`](@ref).
+
+For a Jacobian, it gives the sign-averaged pair: [`balance_cover`](@ref)'s marginal iteration run in quadrature on
 `R` ([`quadrature_surrogate`](@ref)),
 
     a_k ← sqrt((1/r_k) ∑_j R_kj² / b_j²),    b_j ← sqrt((1/c_j) ∑_k R_kj² / a_k²),

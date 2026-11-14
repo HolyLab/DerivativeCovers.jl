@@ -155,8 +155,8 @@
 
         @test hvp(x -> sum(Wrows * x), x0, v) == hvp(x -> sum(W * x), x0, v)
         @test hvp(x -> dot(Wrows * x, Wrows * x), x0, v) == hvp(x -> dot(W * x, W * x), x0, v)
-        @test cover_hessian(x -> sum(Wrows * x), x0).h_sum ==
-            cover_hessian(x -> sum(W * x), x0).h_sum
+        @test cover_hessian(x -> sum(Wrows * x), x0).h ==
+            cover_hessian(x -> sum(W * x), x0).h
 
         # The column axis indexes the tape's inputs, which are 1-based, so a mismatch there is a
         # dimension error rather than something to carry through.

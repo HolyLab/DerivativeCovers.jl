@@ -38,8 +38,13 @@ Base.show(io::IO, ::MIME"text/plain", c::ForwardCover) =
 
 Base.show(io::IO, c::HessianCover) = print(io, "HessianCover(", length(c.grad), " inputs)")
 
-Base.show(io::IO, ::MIME"text/plain", c::HessianCover) =
-    print(io, "HessianCover: ", length(c.grad), " inputs; grad, h_sum, h_var, nguarded")
+# How a result type's merge rule reads in its display.
+merge_label(::Type{SumMerge}) = "sum"
+merge_label(::Type{SignAveragedMerge}) = "sign-averaged"
+
+Base.show(io::IO, ::MIME"text/plain", c::HessianCover{T, M, R}) where {T, M, R} = print(
+    io, "HessianCover (", merge_label(R), "): ", length(c.grad), " inputs; grad, h, nguarded"
+)
 
 Base.show(io::IO, c::HessianDiagnostics) =
     print(io, "HessianDiagnostics(", length(c.grad), " inputs)")
@@ -66,15 +71,15 @@ Base.show(io::IO, ::MIME"text/plain", c::JacobianDiagnostics) = print(
 Base.show(io::IO, c::NLSCover) =
     print(io, "NLSCover(", c.m, " residuals, ", length(c.grad), " inputs)")
 
-Base.show(io::IO, ::MIME"text/plain", c::NLSCover) = print(
-    io, "NLSCover: ", c.m, " residuals, ", length(c.grad), " inputs; grad, h, h_gn, h_var, h_var_gn"
+Base.show(io::IO, ::MIME"text/plain", c::NLSCover{T, M, R}) where {T, M, R} = print(
+    io, "NLSCover (", merge_label(R), "): ", c.m, " residuals, ", length(c.grad),
+    " inputs; grad, h, h_gn, nguarded"
 )
 
 Base.show(io::IO, c::NLSDiagnostics) =
     print(io, "NLSDiagnostics(", c.m, " residuals, ", length(c.grad), " inputs)")
 
-Base.show(io::IO, ::MIME"text/plain", c::NLSDiagnostics) =
-    print(
-    io, "NLSDiagnostics: ", c.m, " residuals, ", length(c.grad),
-    " inputs; grad, h, h_gn, h_var, h_var_gn, Utilde, nguarded"
+Base.show(io::IO, ::MIME"text/plain", c::NLSDiagnostics{T, M, R}) where {T, M, R} = print(
+    io, "NLSDiagnostics (", merge_label(R), "): ", c.m, " residuals, ", length(c.grad),
+    " inputs; grad, h, h_gn, Utilde, nguarded"
 )

@@ -13,60 +13,60 @@
 # second partials and contributes no atoms.
 
 """
-    HessianCover{T, M}
+    HessianCover{T, M, R<:MergeRule}
 
 The standard result returned by [`cover_hessian`](@ref). `T` is the element type of the
-[`Tape`](@ref) it was computed from, and `M =` [`magtype`](@ref)`(T)` the type of the cover.
-`HessianCover{T}` stands for `HessianCover{T, magtype(T)}`.
+[`Tape`](@ref) it was computed from, `M =` [`magtype`](@ref)`(T)` the type of the cover, and `R`
+the merge rule that produced it: [`SumMerge`](@ref) or [`SignAveragedMerge`](@ref).
 
 - `grad::Vector{T}`: gradient of the scalar function at the evaluation point.
-- `h_sum::Vector{M}`: certified Hessian cover computed with the sum merge.
-- `h_var::Vector{M}`: the sign-averaged cover, the root-sum-square of the path contributions that
-  `h_sum` adds. It covers the mean magnitude of the sign ensemble described below, **not the
-  Hessian**.
+- `h::Vector{M}`: for `R = SumMerge`, the *sum cover*, a certified Hessian cover. For
+  `R = SignAveragedMerge`, the *sign-averaged cover*, the root-sum-square of the path
+  contributions that the sum cover adds. It covers the mean magnitude of the sign ensemble
+  described below, **not the Hessian**.
 - `nguarded::Int`: the number of blocks at which the split fell back on the declared input
   scales; see [`split_block`](@ref). Zero means the `scales` keyword played no part in this
   cover.
 
-`h_sum[i]` adds one contribution per pair of a seeded parent slot and a path from that slot to
-input `i`: the slot's seed times the product of the absolute first partials along the path.
-`h_var[i]^2` sums the squares of the same contributions. That is the expected square of their sum
-when each parent slot carries an independent, equiprobable sign, on its first partial and on its
-seed: the *sign ensemble*, the model [`gramvariance`](@ref) uses. The estimates satisfy
-`h_var <= h_quad <= h_sum` coordinatewise, with `h_quad` the quadrature merge of
-[`HessianDiagnostics`](@ref). A coordinate reached by a single contribution has `h_sum == h_var`;
-one built by summing many overlapping contributions has `h_sum` grow like their sum and `h_var`
-like their root-sum-square, so the ratio `h_sum ./ h_var` grows with the effective overlap.
+At input `i`, the sum cover adds one contribution per pair of a seeded parent slot and a path from
+that slot to `i`: the slot's seed times the product of the absolute first partials along the path.
+The square of the sign-averaged cover sums the squares of the same contributions. That is the
+expected square of their sum when each parent slot carries an independent, equiprobable sign, on
+its first partial and on its seed: the *sign ensemble*, the model [`gramvariance`](@ref) uses.
+Under the same declared scales, the sign-averaged cover is at most `h_quad`, the quadrature merge
+of [`HessianDiagnostics`](@ref), which is at most the sum cover, coordinatewise. A coordinate
+reached by a single contribution has equal sum and sign-averaged covers; one built by summing many
+overlapping contributions has the sum cover grow like their sum and the sign-averaged cover like
+their root-sum-square, so their ratio grows with the effective overlap.
 
 A variable that enters one elemental through two slots is two paths whose contributions combine
 in quadrature, although in the program they share a sign: `x[1] * x[1]` seeds each of its two
-slots with `1`, so `h_sum = 2` adds them and `h_var = √2`, while `x[1]^2`, a unary elemental with a
-single slot, gives `√2` for both. Where such paths reconverge further along, `h_var` falls below
-the exact scale: for `x[1] * x[1] * x[1]` at `x = 3`, `h_var = √15` against
-`sqrt(abs(f''(3))) = √18`.
+slots with `1`, so the sum cover is `2` and the sign-averaged cover `√2`, while `x[1]^2`, a unary
+elemental with a single slot, gives `√2` for both. Where such paths reconverge further along, the
+sign-averaged cover falls below the exact scale: for `x[1] * x[1] * x[1]` at `x = 3`, it is `√15`
+against `sqrt(abs(f''(3))) = √18`.
 
 # Examples
 
 ```jldoctest
-julia> cover_hessian(x -> x[1] * x[1], [3.0]).h_sum   # two slots, two paths
+julia> cover_hessian(x -> x[1] * x[1], [3.0]).h   # two slots, two paths
 1-element Vector{Float64}:
  2.0
 
-julia> cover_hessian(x -> x[1] * x[1], [3.0]).h_var ≈ [sqrt(2)]
+julia> cover_hessian(x -> x[1] * x[1], [3.0]; merge = SignAveragedMerge()).h ≈ [sqrt(2)]
 true
 
-julia> cover_hessian(x -> x[1] * x[1] * x[1], [3.0]).h_var ≈ [sqrt(15)]   # |f''| = 18
+julia> cover_hessian(x -> x[1] * x[1] * x[1], [3.0]; merge = SignAveragedMerge()).h ≈ [sqrt(15)]   # |f''| = 18
 true
 ```
 """
-struct HessianCover{T, M}
+struct HessianCover{T, M, R <: MergeRule}
     grad::Vector{T}
-    h_sum::Vector{M}
-    h_var::Vector{M}
+    h::Vector{M}
     nguarded::Int
 end
-HessianCover{T}(grad, h_sum, h_var, nguarded) where {T} =
-    HessianCover{T, magtype(T)}(grad, h_sum, h_var, nguarded)
+HessianCover{T}(::R, grad, h, nguarded) where {T, R <: MergeRule} =
+    HessianCover{T, magtype(T), R}(grad, h, nguarded)
 
 """
     HessianDiagnostics{T, M}
@@ -1077,10 +1077,10 @@ _absslot(d, k, i, p) = magnitude(d)
 """
     CoverOnly()
 
-Return only the covers a sweep-tier computation yields: the gradient, sum-merge cover, and
-sign-averaged cover from [`cover_hessian`](@ref) at `O(L)`, or the gradient, two covers, and two
-scales from [`cover_nls`](@ref) at `O(G * L)` for `G` residual channels, `O(L)` by default. This is
-the default mode of both.
+Return only the covers a sweep-tier computation yields: the gradient and one cover from
+[`cover_hessian`](@ref) at `O(L)`, or the gradient and two covers from [`cover_nls`](@ref) at
+`O(G * L)` for `G` residual channels, `O(L)` by default. The `merge` keyword of either selects
+which covers. This is the default mode of both.
 """
 struct CoverOnly end
 
@@ -1098,16 +1098,19 @@ struct WithDiagnostics end
 const CoverMode = Union{CoverOnly, WithDiagnostics}
 
 """
-    cover_hessian([mode], t::Tape, outidx::Integer; check=true, scales=nothing, ratio=nothing)
-    cover_hessian([mode], f, x0::AbstractVector; check=true, scales=nothing, ratio=nothing)
-    cover_hessian(CoverOnly(), t::Tape, vbar::AbstractVector; check=true, scales=nothing, ratio=nothing)
+    cover_hessian([mode], t::Tape, outidx::Integer; merge=SumMerge(), check=true, scales=nothing, ratio=nothing)
+    cover_hessian([mode], f, x0::AbstractVector; merge=SumMerge(), check=true, scales=nothing, ratio=nothing)
+    cover_hessian(CoverOnly(), t::Tape, vbar::AbstractVector; merge=SumMerge(), check=true, scales=nothing, ratio=nothing)
 
 Compute a certified rank-1 cover of a scalar function's Hessian.
 
 Pass either a tape and scalar output node, or a function and evaluation point. The default
-[`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient, the
-sum-merge cover, and the sign-averaged cover. [`WithDiagnostics`](@ref) additionally computes an
-explicit elementwise bound and a tighter quadrature cover.
+[`CoverOnly`](@ref) mode returns a [`HessianCover`](@ref) containing the gradient and the cover
+`h` that `merge` selects: the certified sum cover for [`SumMerge`](@ref)`()`, the default, or the
+sign-averaged cover for [`SignAveragedMerge`](@ref)`()`, which does not cover the Hessian. The
+choice is recorded in the result's type. [`WithDiagnostics`](@ref) accepts only the default
+`merge`; it returns the sum cover together with an explicit elementwise bound and a tighter
+quadrature cover.
 
 The `scales` keyword declares the input scales the split falls back on where a block's parent
 values carry none, and `ratio` the threshold at which it does so; see [`split_block`](@ref) and
@@ -1144,12 +1147,11 @@ intervals, raises an error, as does an elemental evaluated outside its domain so
 # `CoverOnly()`
 
 This mode takes one forward pass and one reverse sweep, or `O(L)` time and memory. The reverse
-sweep carries the ordinary adjoint, the absolute cover channel, and the squared channel
-together:
+sweep carries the ordinary adjoint together with one cover channel, the one `merge` selects:
 
     vbar[p_i] += d_i * vbar[k]                                    # signed channel: reverse-mode AD
-    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]              # absolute channel: the cover
-    rbar[p_i] = hypot(rbar[p_i], magnitude(d_i) * rbar[k], eta_k[i])   # squared channel: h_var
+    abar[p_i] += magnitude(d_i) * abar[k] + eta_k[i]              # SumMerge: the sum cover
+    rbar[p_i] = hypot(rbar[p_i], magnitude(d_i) * rbar[k], eta_k[i])   # SignAveragedMerge
 
 with `eta_k` from [`local_cover_slots`](@ref). Every channel of node `k` is final when the
 sweep reaches it: adjoint flow and `theta` seeds come only from `k`'s consumers, which follow it
@@ -1160,8 +1162,8 @@ roundoff.
 `abar` sums, over every path from a parent slot of a node to an input, the slot's seed times the
 product of the absolute first partials along the path. `rbar` is the root of the sum of the
 squares of the same path contributions, accumulated with `hypot` so that no square is formed, and
-`h_var = rbar[1:ninputs]` is the sign-averaged cover of [`HessianCover`](@ref), which does not
-cover the Hessian.
+`rbar[1:ninputs]` is the sign-averaged cover of [`HessianCover`](@ref), which does not cover the
+Hessian. Each sweep carries one channel, so a caller that wants both covers runs two.
 
 A program that reaches the declared-scale fallback requires one additional forward sweep.
 
@@ -1172,7 +1174,7 @@ pass. It returns the same [`HessianCover`](@ref) bit for bit, with `grad = vbar[
 # `WithDiagnostics()`
 
 This mode returns a [`HessianDiagnostics`](@ref) and costs `O(n * L)` time and `O(n^2)` memory.
-With `check=true`, it also verifies that the diagnostic and fused computations agree.
+With `check=true`, it also verifies that its sum cover agrees with the `CoverOnly()` sweep's.
 
 # Examples
 
@@ -1181,7 +1183,7 @@ julia> f(x) = exp(x[1]) + x[1] * x[2]^2;
 
 julia> c = cover_hessian(f, [0.5, 2.0]);
 
-julia> round.(c.h_sum; digits=4)
+julia> round.(c.h; digits=4)
 2-element Vector{Float64}:
  4.1125
  2.4142
@@ -1193,14 +1195,20 @@ julia> round.(c.grad; digits=4)
 
 julia> H = [exp(0.5) 4.0; 4.0 1.0];   # the Hessian of f at [0.5, 2.0]
 
-julia> all(abs.(H) .<= c.h_sum * c.h_sum')
+julia> all(abs.(H) .<= c.h * c.h')
 true
 ```
 """
 function cover_hessian(
-        ::WithDiagnostics, t::Tape{T}, outidx::Integer; check::Bool = true,
-        scales = nothing, ratio = nothing
+        ::WithDiagnostics, t::Tape{T}, outidx::Integer; merge::MergeRule = SumMerge(),
+        check::Bool = true, scales = nothing, ratio = nothing
     ) where {T}
+    merge isa SumMerge || throw(
+        ArgumentError(
+            "WithDiagnostics() returns the sum cover and its diagnostics; merge = " *
+                "$(nameof(typeof(merge)))() is available only with CoverOnly()"
+        )
+    )
     n = t.ninputs
     vbar = adjoints(t, outidx)
     u = sensitivities(t)
@@ -1222,13 +1230,13 @@ function cover_hessian(
         s > 1 &&
             error("reverse-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) reverse=$(h_sum_rev[q])")
         # local_covers already checked the node invariants.
-        pr = cover_hessian(CoverOnly(), t, outidx; check = false, scales, ratio)
+        pr = cover_hessian(CoverOnly(), t, outidx; merge = SumMerge(), check = false, scales, ratio)
         s, q = worst_severity(disagreement(view(vbar, 1:n), pr.grad))
         s > 1 &&
             error("paired-sweep gradient mismatch at input $q: adjoint=$(vbar[q]) paired=$(pr.grad[q])")
-        s, q = worst_severity(mismatch(h_sum, pr.h_sum))
+        s, q = worst_severity(mismatch(h_sum, pr.h))
         s > 1 &&
-            error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h_sum[q])")
+            error("paired-sweep h_sum mismatch at input $q: forward=$(h_sum[q]) paired=$(pr.h[q])")
         pr.nguarded == nguarded ||
             error("paired-sweep guarded-block count mismatch: forward=$nguarded paired=$(pr.nguarded)")
     end
@@ -1237,90 +1245,115 @@ function cover_hessian(
 end
 
 function cover_hessian(
-        ::CoverOnly, t::Tape{T}, outidx::Integer; check::Bool = true,
-        scales = nothing, ratio = nothing
+        ::CoverOnly, t::Tape{T}, outidx::Integer; merge::MergeRule = SumMerge(),
+        check::Bool = true, scales = nothing, ratio = nothing
     ) where {T}
+    check_sweep_merge(merge)
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    abar, rbar, nguarded = cover_only_channels!(Val(true), vbar, t, split_ratio(ratio, T), scales, check)
-    return HessianCover(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], nguarded)
+    h, nguarded = cover_only_channel!(Val(true), merge, vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover{T}(merge, vbar[1:n], tomag(T, h[1:n]), nguarded)
 end
 
 function cover_hessian(
-        ::CoverOnly, t::Tape{T}, vbar::AbstractVector; check::Bool = true,
-        scales = nothing, ratio = nothing
+        ::CoverOnly, t::Tape{T}, vbar::AbstractVector; merge::MergeRule = SumMerge(),
+        check::Bool = true, scales = nothing, ratio = nothing
     ) where {T}
+    check_sweep_merge(merge)
     n, N = t.ninputs, nnodes(t)
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
-    abar, rbar, nguarded = cover_only_channels!(Val(false), vbar, t, split_ratio(ratio, T), scales, check)
-    return HessianCover{T}(vbar[1:n], tomag(T, abar[1:n]), rbar[1:n], nguarded)
+    h, nguarded = cover_only_channel!(Val(false), merge, vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover{T}(merge, vbar[1:n], tomag(T, h[1:n]), nguarded)
 end
 
-# The `CoverOnly` sweep under the declared scales `scales`, returning `(abar, rbar, nguarded)`;
-# `CurvatureScales` adds a method. `r` is the resolved threshold.
-function cover_only_channels!(p::Val, vbar, t::Tape, r, scales, check::Bool)
+# The merge rules a single reverse sweep can carry.
+const SweepMerge = Union{SumMerge, SignAveragedMerge}
+
+check_sweep_merge(::SweepMerge) = nothing
+check_sweep_merge(merge::MergeRule) = throw(
+    ArgumentError(
+        "merge = $(nameof(typeof(merge)))() cannot be computed by a reverse sweep; pass " *
+            "SumMerge() or SignAveragedMerge()"
+    )
+)
+
+# The `CoverOnly` sweep under the declared scales `scales`, returning the channel `merge` selects
+# and the number of guarded blocks; `CurvatureScales` adds a method. `r` is the resolved threshold.
+function cover_only_channel!(p::Val, merge::SweepMerge, vbar, t::Tape, r, scales, check::Bool)
     sc = split_scales(scales, t)
-    abar, rbar = cover_only_sweep!(p, vbar, t, r, sc, check)
-    return abar, rbar, sc.store.nguarded
+    h = cover_only_sweep!(p, merge, vbar, t, r, sc, check)
+    return h, sc.store.nguarded
 end
 
-# The reverse sweep of `CoverOnly`, returning the absolute and squared channels `(abar, rbar)`.
-# With `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the
-# adjoints into it alongside the two channels. With `Val(false)`, `vbar` holds finished adjoints
-# and is only read. Both forms perform the same channel operations in the same order, so they
-# return identical channels whenever the adjoints agree.
-function cover_only_sweep!(::Val{propagate}, vbar, t::Tape{T}, r, sc, check::Bool) where {propagate, T}
+# The element type of a channel: the sum cover is a bound and rounds as the tape asks, while the
+# sign-averaged cover bounds nothing.
+channeltype(::SumMerge, ::Type{T}) where {T} = boundtype(T)
+channeltype(::SignAveragedMerge, ::Type{T}) where {T} = magtype(T)
+
+# The reverse sweep of `CoverOnly`, returning the channel `merge` selects over all nodes. With
+# `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the adjoints
+# into it alongside the channel. With `Val(false)`, `vbar` holds finished adjoints and is only
+# read. Both forms perform the same channel operations in the same order, so they return identical
+# channels whenever the adjoints agree.
+function cover_only_sweep!(
+        ::Val{propagate}, merge::SweepMerge, vbar, t::Tape{T}, r, sc, check::Bool
+    ) where {propagate, T}
     N = nnodes(t)
-    abar = zeros(boundtype(T), N)
-    rbar = zeros(magtype(T), N)
+    c = zeros(channeltype(merge, T), N)
     for k in N:-1:1
-        vk, ak, rk = vbar[k], abar[k], rbar[k]
+        vk, ck = vbar[k], c[k]
         ps = t.parents[k]
-        avk = magnitude(vk)
-        eta = local_cover_slots(r, t, k, avk, sc; check)
-        if eta !== nothing
+        eta = node_cover(r, t, k, vk, sc, check)
+        if merge isa SumMerge && eta !== nothing
             for (i, p) in enumerate(ps)
-                abar[p] += eta[i]
+                c[p] += eta[i]
             end
         end
-        # Without adjoint propagation, a node whose channels are both zero has nothing to send.
-        sends = !((!propagate || iszero(avk)) && ak == 0 && rk == 0)
-        (sends || eta !== nothing) || continue
+        vsends = propagate && !iszero(magnitude(vk))
+        czero = iszero(ck)
+        (vsends || !czero || eta !== nothing) || continue
+        # A zero partial transmits nothing, and must not carry an infinite channel into its parent
+        # as `0 * Inf`. A finite channel crosses it unchanged, so only an infinite one tests slots.
+        cfinite = czero || isfinite(ck)
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
-            x, transmits = zero(eltype(rbar)), false
-            if sends
-                propagate && (vbar[p] += ds[i] * vk)
-                d = magnitude(ds[i])
-                # A slot that transmits nothing is skipped, which keeps an infinite channel out of it.
-                if !iszero(d)
-                    abar[p] += d * ak
-                    iszero(rk) || ((x, transmits) = (d * rk, true))
-                end
-            end
-            # A slot's cover term and the term it transmits enter `rbar` in one `hypot`.
-            if eta === nothing
-                transmits && (rbar[p] = hypot(rbar[p], x))
-            else
-                rbar[p] = transmits ? hypot(rbar[p], eta[i], x) : hypot(rbar[p], eta[i])
-            end
+            vsends && (vbar[p] += ds[i] * vk)
+            transmits = !czero && (cfinite || !iszero(magnitude(ds[i])))
+            c[p] = channel_step(merge, c[p], eta, i, ds[i], ck, transmits)
         end
     end
-    return abar, rbar
+    return c
 end
 
-function cover_hessian(
-        mode::CoverMode, f, x0::AbstractVector; check::Bool = true,
-        scales = nothing, ratio = nothing
-    )
-    t, outidx = tape_function(f, x0)
-    return cover_hessian(mode, t, outidx; check, scales, ratio)
+# The slot-aligned cover of node `k`, or `nothing` where it contributes no second-order term. The
+# absolute adjoint is formed only for a node that has second partials to weight.
+function node_cover(r, t::Tape, k::Integer, vk, sc, check::Bool)
+    t.Cs[k] isa NoCurvature && return nothing
+    avk = magnitude(vk)
+    return local_cover_slots(r, t, k, avk, sc; check)
 end
 
-cover_hessian(t::Tape, outidx::Integer; check::Bool = true, scales = nothing, ratio = nothing) =
-    cover_hessian(CoverOnly(), t, outidx; check, scales, ratio)
-cover_hessian(f, x0::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing) =
-    cover_hessian(CoverOnly(), f, x0; check, scales, ratio)
+# One slot's update of the channel at its parent `cp`, given the node's channel `ck` and first
+# partial `d`. The sum cover's seeds are deposited before any slot transmits.
+channel_step(::SumMerge, cp, eta, i, d, ck, transmits::Bool) = transmits ? cp + magnitude(d) * ck : cp
+function channel_step(::SignAveragedMerge, cp, eta, i, d, ck, transmits::Bool)
+    # A slot's cover term and the term it transmits enter in one `hypot`.
+    if eta === nothing
+        return transmits ? hypot(cp, unsigned_factor(d) * ck) : cp
+    end
+    return transmits ? hypot(cp, eta[i], unsigned_factor(d) * ck) : hypot(cp, eta[i])
+end
+
+# A first partial as a factor of a term that `hypot` squares, whose sign is then irrelevant: the
+# partial itself where it already has the cover's type, and its magnitude where it does not, as for
+# an interval.
+unsigned_factor(d::D) where {D} = magtype(D) === D ? d : magnitude(d)
+
+cover_hessian(mode::CoverMode, f, x0::AbstractVector; kwargs...) =
+    cover_hessian(mode, tape_function(f, x0)...; kwargs...)
+
+cover_hessian(t::Tape, outidx::Integer; kwargs...) = cover_hessian(CoverOnly(), t, outidx; kwargs...)
+cover_hessian(f, x0::AbstractVector; kwargs...) = cover_hessian(CoverOnly(), f, x0; kwargs...)

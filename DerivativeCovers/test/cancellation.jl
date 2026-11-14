@@ -38,9 +38,9 @@
         @test rc.h_sum == ra.h_sum
         @test rc.h_quad == ra.h_quad
 
-        vc = cover_hessian(tc, oc)
-        va = cover_hessian(ta, oa)
-        @test vc.h_var == va.h_var
+        vc = cover_hessian(tc, oc; merge = SignAveragedMerge())
+        va = cover_hessian(ta, oa; merge = SignAveragedMerge())
+        @test vc.h == va.h
     end
 
     @testset "validity" for aligned in (false, true)
@@ -58,10 +58,10 @@
         pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
         res = cover_hessian(WithDiagnostics(), pc.f, pc.x0)
-        vc = cover_hessian(pc.f, pc.x0)
+        vc = cover_hessian(pc.f, pc.x0; merge = SignAveragedMerge())
 
         @test res.h_quad ≈ sqrt.(diag(Ha)) rtol = 1.0e-8
-        @test vc.h_var ≈ res.h_quad rtol = 1.0e-10
+        @test vc.h ≈ res.h_quad rtol = 1.0e-10
 
         hstar = sqrt.(diag(Hc))
         @test all(abs(Hc[i, j]) <= hstar[i] * hstar[j] * GATE for i in 1:n, j in 1:n)
@@ -150,8 +150,8 @@
         # sqrt(xi) on the support.
         hstar = sqrt.(diag(Hc))
         sqrtxi = sqrt.(diag(Ha) ./ diag(Hc))
-        vc = cover_hessian(tc, oc)
-        for h in (rc.h_sum, rc.h_quad, cover_hybrid(tc, oc, 4), vc.h_var)
+        vc = cover_hessian(tc, oc; merge = SignAveragedMerge())
+        for h in (rc.h_sum, rc.h_quad, cover_hybrid(tc, oc, 4), vc.h)
             @test all(h[support] .>= sqrtxi[support] .* hstar[support] .* (1 - 1.0e-8))
         end
 
@@ -171,8 +171,8 @@
         pc = Problems.cancellation(n; m, delta, aligned = false, rng = MersenneTwister(7))
         pa = Problems.cancellation(n; m, delta, aligned = true, rng = MersenneTwister(7))
         Hc, Ha = exact_hessian(pc), exact_hessian(pa)
-        hc = cover_hessian(pc.f, pc.x0).h_sum
-        ha = cover_hessian(pa.f, pa.x0).h_sum
+        hc = cover_hessian(pc.f, pc.x0).h
+        ha = cover_hessian(pa.f, pa.x0).h
         @test hc == ha
         # On the canceling variant the scaled Hessian is far from saturated, so rescaling by its
         # norm separates covers that the sum merge returns identically.
@@ -193,8 +193,8 @@
         A = permutedims(eigen(Symmetric(Hc)).vectors)
         Ainv = inv(A)
         g = ys -> pc.f([DerivativeCovers.linearnode(Ainv[a, :], ys) for a in 1:n])
-        hx = cover_hessian(pc.f, pc.x0).h_sum
-        hy = cover_hessian(g, A * pc.x0).h_sum
+        hx = cover_hessian(pc.f, pc.x0).h
+        hy = cover_hessian(g, A * pc.x0).h
         @test hy ≈ abs.(permutedims(Ainv)) * hx rtol = 1.0e-13
         @test max_coverage_ratio(hy, permutedims(Ainv) * Hc * Ainv) <= GATE
     end

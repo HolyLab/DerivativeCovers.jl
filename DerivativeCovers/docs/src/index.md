@@ -55,7 +55,7 @@ julia> p0 = [1800.0, 0.0035];
 
 julia> c = cover_hessian(loss, p0);
 
-julia> round.(c.h_sum; sigdigits=4)
+julia> round.(c.h; sigdigits=4)
 2-element Vector{Float64}:
  3.118
  1.123e6
@@ -67,7 +67,7 @@ julia> round.(c.grad; sigdigits=4)
 ```
 
 [`cover_hessian`](@ref) returns the gradient `c.grad` along with the cover
-`c.h_sum`. The two entries of each have different units: the first entry of
+`c.h`. The two entries of each have different units: the first entry of
 the gradient is in units of the loss per unit of amplitude, and the second in
 units of the loss per second. Expressing the time constant in milliseconds
 instead of seconds changes the second entry of both the gradient and the cover
@@ -80,7 +80,7 @@ julia> q0 = [1800.0, 3.5];
 
 julia> cms = cover_hessian(loss_ms, q0);
 
-julia> round.(cms.h_sum ./ c.h_sum; sigdigits=4)
+julia> round.(cms.h ./ c.h; sigdigits=4)
 2-element Vector{Float64}:
  1.0
  0.001
@@ -95,7 +95,7 @@ The cover changed exactly as the units did, so the gradient measured relative
 to the cover, `g ./ h`, did not change at all:
 
 ```jldoctest decay
-julia> c.grad ./ c.h_sum ≈ cms.grad ./ cms.h_sum
+julia> c.grad ./ c.h ≈ cms.grad ./ cms.h
 true
 ```
 
@@ -113,7 +113,7 @@ julia> E = eachcol(Matrix(1.0I, 2, 2));
 
 julia> H = reduce(hcat, [hvp(loss, p0, e) for e in E]);
 
-julia> all(abs.(H) .<= c.h_sum .* c.h_sum')
+julia> all(abs.(H) .<= c.h .* c.h')
 true
 ```
 
@@ -121,7 +121,7 @@ The same reasoning applies to the Hessian. Dividing it by the cover gives a
 matrix `Hhat` whose entries lie in `[-1, 1]` and do not depend on the units:
 
 ```jldoctest decay
-julia> Hhat = H ./ (c.h_sum .* c.h_sum');
+julia> Hhat = H ./ (c.h .* c.h');
 
 julia> round.(Hhat; digits=3)
 2×2 Matrix{Float64}:
@@ -130,7 +130,7 @@ julia> round.(Hhat; digits=3)
 
 julia> Hms = reduce(hcat, [hvp(loss_ms, q0, e) for e in E]);
 
-julia> Hms ./ (cms.h_sum .* cms.h_sum') ≈ Hhat
+julia> Hms ./ (cms.h .* cms.h') ≈ Hhat
 true
 ```
 
@@ -140,16 +140,16 @@ true
 
 | Function | Bounds | Cost | Certified |
 |---|---|---|---|
-| [`cover_hessian`](@ref) | Hessian of a scalar function | ``O(L)`` | `h_sum` yes; `h_var` no |
+| [`cover_hessian`](@ref) | Hessian of a scalar function | ``O(L)`` | with [`SumMerge`](@ref), yes; with [`SignAveragedMerge`](@ref), no |
 | [`cover_hessian`](@ref)`(WithDiagnostics(), …)` | adds a tighter cover `h_quad` and an elementwise bound | ``O(nL)`` time, ``O(n^2)`` memory | yes |
 | [`DerivativeCovers.cover_hybrid`](@ref cover_hybrid) | Hessian, between `h_sum` and `h_quad` | ``O(GL)`` for `G` groups | yes |
 | [`forward_cover`](@ref) | Hessian, without recording the program | ``O(nL)`` time, ``O(n)`` memory per live variable | yes |
-| [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(L)``; ``O(GL)`` with `G` residual channels | `h`, `h_gn` yes; `h_var`, `h_var_gn` no |
+| [`cover_nls`](@ref) | Hessian and Gauss–Newton matrix of ``\tfrac12\lVert r(x)\rVert^2`` | ``O(L)``; ``O(GL)`` with `G` residual channels | with [`SumMerge`](@ref), yes; with [`SignAveragedMerge`](@ref), no |
 | [`cover_jacobian`](@ref) | Jacobian of a vector-valued function | a few ``O(L)`` sweeps | yes |
 | [`DerivativeCovers.cover_jacobian_hybrid`](@ref cover_jacobian_hybrid) | Jacobian, tighter than the default | ``O(GL)`` for `G` groups | yes |
 
 For most uses, [`cover_hessian`](@ref) and [`cover_jacobian`](@ref) are the
-place to start. The ``O(L)`` cover `h_sum` can be loose when many paths through
+place to start. The ``O(L)`` sum cover can be loose when many paths through
 the program reconverge; [Computing covers](@ref) describes the options that
 trade cost for tightness, and [Tightness](@ref) describes how to measure it.
 

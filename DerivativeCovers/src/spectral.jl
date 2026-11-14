@@ -37,7 +37,7 @@ julia> round.(hvp(f, x0, v); digits=4)
  1.6487
  4.0
 
-julia> h = cover_hessian(f, x0).h_sum;   # the cover bounds the product
+julia> h = cover_hessian(f, x0).h;   # the cover bounds the product
 
 julia> all(abs.(hvp(f, x0, v)) .<= h .* (h' * abs.(v)))
 true

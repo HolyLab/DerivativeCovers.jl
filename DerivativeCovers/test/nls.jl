@@ -136,60 +136,72 @@ nls_loss(rmap) = x -> 0.5 * sum(abs2, rmap(x))
 
     @testset "sign-averaged cover of the full Hessian" begin
         rtol = 1.0e-13
+        sa = SignAveragedMerge()
         # Single paths and no residual curvature: all four channels agree.
-        lin = cover_nls(
-            WithDiagnostics(), x -> [x[1] + 2 * x[2], 3 * x[2] - 1], [0.7, -0.4]; ngroups = nothing
-        )
-        @test lin.h_var ≈ lin.h_var_gn ≈ lin.h_gn ≈ lin.h
+        rlin = x -> [x[1] + 2 * x[2], 3 * x[2] - 1]
+        lin = cover_nls(WithDiagnostics(), rlin, [0.7, -0.4]; ngroups = nothing)
+        linv = cover_nls(WithDiagnostics(), rlin, [0.7, -0.4]; merge = sa)
+        @test linv isa NLSDiagnostics{Float64, Float64, SignAveragedMerge}
+        @test linv.h ≈ linv.h_gn ≈ lin.h_gn ≈ lin.h
         # Curvature with no Jacobian at the point: r = x² - 1 at x = 0.
         z = cover_nls(x -> [x[1]^2 - 1], [0.0])
-        @test z.h_gn == z.h_var_gn == [0.0]
-        @test z.h_var ≈ [sqrt(2)]
-        @test z.h_var[1] > 0
+        zv = cover_nls(x -> [x[1]^2 - 1], [0.0]; merge = sa)
+        @test z.h_gn == zv.h_gn == [0.0]
+        @test zv.h ≈ [sqrt(2)]
+        @test zv.h[1] > 0
 
         rng = MersenneTwister(7)
         n, m = 4, 6
         W = randn(rng, m, n)
         tk = randn(rng, m)
         x0 = 0.4 .* randn(rng, n)
-        # Products of the inputs reconverge in the curvature subgraph, so h_var falls below h.
+        # Products of the inputs reconverge in the curvature subgraph, so the sign-averaged `h`
+        # falls below the sum cover's.
         rmap(x) = [sin(sum(W[k, j] * x[j] for j in 1:n)) * x[1 + k % n] - tk[k] for k in 1:m]
         for kw in ((;), (; scales = nothing, ratio = nothing), (; ratio = 0.5), (; scales = [1.0, 3.0, 0.2, 5.0]))
             nc = cover_nls(rmap, x0; kw...)
-            @test all(nc.h_var_gn .<= nc.h_var)
-            @test all(nc.h_var .<= nc.h .* GATE)
-            @test any(nc.h_var .< nc.h .* (1 - 1.0e-3))
-            # It is cover_hessian's h_var of the loss tape; that sweep's h_sum is looser than h.
+            nv = cover_nls(rmap, x0; merge = sa, kw...)
+            @test nv isa NLSCover{Float64, Float64, SignAveragedMerge}
+            @test nv.grad == nc.grad && nv.nguarded == nc.nguarded
+            @test all(nv.h_gn .<= nv.h)
+            @test all(nv.h .<= nc.h .* GATE)
+            @test any(nv.h .< nc.h .* (1 - 1.0e-3))
+            # It is cover_hessian's sign-averaged cover of the loss tape; that tape's sum cover is
+            # looser than the grouped `h`.
             t, outidx, _, _ = nls_loss_tape(rmap, x0)
-            vc = cover_hessian(t, outidx; kw...)
-            @test isapprox(nc.h_var, vc.h_var; rtol)
-            @test all(nc.h .<= vc.h_sum .* GATE)
-            # The residual channel is gramvariance; neither scale depends on ngroups.
-            @test nc.h_var_gn == cover_nls(rmap, x0).h_var_gn
-            for ngroups in (1, 2, 5)
-                ng = cover_nls(rmap, x0; ngroups, kw...)
-                @test ng.h_var == nc.h_var
-                @test ng.h_var_gn == nc.h_var_gn
-                @test all(ng.h_var .<= ng.h .* GATE)
+            @test isapprox(nv.h, cover_hessian(t, outidx; merge = sa, kw...).h; rtol)
+            @test all(nc.h .<= cover_hessian(t, outidx; kw...).h .* GATE)
+            # The residual channel is gramvariance, and neither cover depends on ngroups, which
+            # the sign-averaged covers therefore refuse.
+            @test nv.h_gn == cover_nls(rmap, x0; merge = sa).h_gn
+            @test cover_nls(rmap, x0; merge = sa, ngroups = 1, kw...).h == nv.h
+            for ngroups in (2, 5, nothing)
+                @test_throws "cannot be combined with merge = SignAveragedMerge()" cover_nls(
+                    rmap, x0; merge = sa, ngroups, kw...
+                )
+                @test all(nv.h .<= cover_nls(rmap, x0; ngroups, kw...).h .* GATE)
             end
         end
         # The split reaches the curvature channel only.
-        a = cover_nls(rmap, x0; ratio = 0.5)
-        b = cover_nls(rmap, x0; ratio = 1.0e-3)
-        @test a.h_var != b.h_var
-        @test a.h_var_gn == b.h_var_gn
-        # WithDiagnostics carries the same scales.
-        nd = cover_nls(WithDiagnostics(), rmap, x0)
-        nc = cover_nls(rmap, x0)
-        @test nd.h_var == nc.h_var && nd.h_var_gn == nc.h_var_gn
+        a = cover_nls(rmap, x0; merge = sa, ratio = 0.5)
+        b = cover_nls(rmap, x0; merge = sa, ratio = 1.0e-3)
+        @test a.h != b.h
+        @test a.h_gn == b.h_gn
+        # WithDiagnostics carries the same covers.
+        nd = cover_nls(WithDiagnostics(), rmap, x0; merge = sa)
+        nv = cover_nls(rmap, x0; merge = sa)
+        @test nd.h == nv.h && nd.h_gn == nv.h_gn
+        @test sprint(show, MIME"text/plain"(), nv) ==
+            "NLSCover (sign-averaged): $m residuals, $n inputs; grad, h, h_gn, nguarded"
+        @test_throws "cannot be computed by a reverse sweep" cover_nls(rmap, x0; merge = QuadMerge())
 
         # Rescaling the inputs, x = y ./ d, maps every channel h -> h ./ d.
         d = [2.0, 0.1, 5.0, 0.3]
         rd = y -> rmap(y ./ d)
-        for kw in ((;), (; scales = nothing, ratio = nothing))
-            c0 = cover_nls(rmap, x0; kw...)
-            cd = cover_nls(rd, d .* x0; kw...)
-            for f in (:h, :h_gn, :h_var, :h_var_gn)
+        for kw in ((;), (; scales = nothing, ratio = nothing)), merge in (SumMerge(), sa)
+            c0 = cover_nls(rmap, x0; merge, kw...)
+            cd = cover_nls(rd, d .* x0; merge, kw...)
+            for f in (:h, :h_gn)
                 @test isapprox(getfield(cd, f), getfield(c0, f) ./ d; rtol = 1.0e-12)
             end
         end

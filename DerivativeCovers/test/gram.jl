@@ -204,7 +204,7 @@ end
         @test isapprox(gramvariance(t1, o1), sqrt.(vec(sum(abs2, J1; dims = 1))); rtol)
         @test isapprox(gramvariance(t1, o1, w1), sqrt.(vec(sum(abs2, sqrt.(w1) .* J1; dims = 1))); rtol)
         nls = cover_nls(r1, y0; ngroups = nothing)
-        @test isapprox(nls.h_var_gn, nls.h_gn; rtol)
+        @test isapprox(cover_nls(r1, y0; merge = SignAveragedMerge()).h_gn, nls.h_gn; rtol)
     end
 
     @testset "cover_nls carries it for the residuals" begin
@@ -212,13 +212,13 @@ end
         z0 = [0.5, 2.0, 0.3]
         tr, or = tape_function(rn, z0)
         nc = cover_nls(rn, z0; ngroups = nothing)
-        nd = cover_nls(WithDiagnostics(), rn, z0)
-        @test isapprox(nc.h_var_gn, gramvariance(tr, or); rtol)
-        @test nd.h_var_gn == nc.h_var_gn
-        @test all(nc.h_var_gn .<= nc.h_gn .* GATE)
-        @test nc.h_var_gn[3] < nc.h_gn[3] * (1 - 1.0e-3)
-        # Coarser residual channels loosen h_gn but leave the scale alone.
-        @test cover_nls(rn, z0; ngroups = 1).h_var_gn == nc.h_var_gn
+        nv = cover_nls(rn, z0; merge = SignAveragedMerge())
+        nd = cover_nls(WithDiagnostics(), rn, z0; merge = SignAveragedMerge())
+        @test isapprox(nv.h_gn, gramvariance(tr, or); rtol)
+        @test nd.h_gn == nv.h_gn
+        # Even the tightest sum cover of JᵀJ, one residual per channel, bounds it.
+        @test all(nv.h_gn .<= nc.h_gn .* GATE)
+        @test nv.h_gn[3] < nc.h_gn[3] * (1 - 1.0e-3)
     end
 
     @testset "input covariance" begin
