@@ -770,25 +770,64 @@ split_scales(w, t::Tape) =
     SplitScales(AbsValues(t.vals), DeclaredScales(check_input_scales(w, t.ninputs), t))
 
 """
-    DropGuarded()
+    DroppedBlock{M}(parents, node, eta)
+
+A block the drop pass of [`CurvatureScales`](@ref) dropped: its two parent nodes, and, once the
+sweep has covered the node it belongs to, that `node` and the slot covers `eta` the pass gave it,
+in `M`. Until then `node == 0` and `eta === nothing`.
+"""
+struct DroppedBlock{M}
+    parents::Tuple{Int, Int}
+    node::Int
+    eta::Union{Nothing, Vector{M}}
+
+    # Construct with `M` given: `eta === nothing` does not determine it.
+    DroppedBlock{M}(parents, node, eta) where {M} = new{M}(parents, node, eta)
+end
+
+"""
+    DropGuarded{M}()
 
 The declared "scales" of the drop pass of [`CurvatureScales`](@ref): at a block whose split falls
-back on declared scales, [`split_block`](@ref) returns `nothing` instead of a pair, and the parent
-nodes of the block are recorded in `pairs`. [`cover_slots!`](@ref) then covers only the block's
-diagonal, so a sweep run with these references does not cover the Hessian.
+back on declared scales, [`split_block`](@ref) returns `nothing` instead of a pair, and the block
+is recorded in `blocks` (see [`DroppedBlock`](@ref)). [`cover_slots!`](@ref) then covers only the
+block's diagonal, so a sweep run with these references does not cover the Hessian. `M` is the
+[`magtype`](@ref) of the tape.
 """
-struct DropGuarded
-    pairs::Vector{Tuple{Int, Int}}
+struct DropGuarded{M}
+    blocks::Vector{DroppedBlock{M}}
 end
-DropGuarded() = DropGuarded(Tuple{Int, Int}[])
+DropGuarded{M}() where {M} = DropGuarded{M}(DroppedBlock{M}[])
 
 check_input_scales(w::DropGuarded, ninputs::Integer) = w
 
+# The parent nodes of each dropped block.
+dropped_pairs(drop::DropGuarded) = [b.parents for b in drop.blocks]
+
 # Whether a block that falls back on declared scales is dropped, recording its parents if so.
 drop_guarded(d1, d2) = false
-function drop_guarded(d1::DeferredScale{<:DeclaredScales{<:Any, DropGuarded}}, d2::DeferredScale)
-    push!(d1.store.w.pairs, (d1.index, d2.index))
+function drop_guarded(d1::DeferredScale{<:DeclaredScales{<:Any, <:DropGuarded}}, d2::DeferredScale)
+    blocks = d1.store.w.blocks
+    push!(blocks, eltype(blocks)((d1.index, d2.index), 0, nothing))
     return true
+end
+
+"""
+    note_dropped!(sc, k, eta)
+
+Complete the blocks the sweep just dropped while covering node `k`, those still without a node, with
+`k` and the node's slot covers `eta`. Scale references other than a drop pass's
+([`DropGuarded`](@ref)) record nothing.
+"""
+note_dropped!(sc, k, eta) = nothing
+function note_dropped!(sc::SplitScales{<:Any, <:Any, <:DeclaredScales{<:Any, <:DropGuarded}}, k, eta)
+    blocks = sc.store.w.blocks
+    i = lastindex(blocks)
+    while i >= firstindex(blocks) && blocks[i].node == 0
+        blocks[i] = eltype(blocks)(blocks[i].parents, k, eta)
+        i -= 1
+    end
+    return nothing
 end
 
 """
@@ -897,7 +936,7 @@ Each fallback is counted through [`note_guarded`](@ref), and the covers report t
 `nguarded`.
 
 The one exception to returning a pair is the drop pass of [`CurvatureScales`](@ref), whose scale
-references come from `split_scales(DropGuarded(), t)`: there a block that falls back returns
+references come from `split_scales(DropGuarded{M}(), t)`: there a block that falls back returns
 `nothing`, and [`cover_slots!`](@ref) leaves its cross term uncovered.
 """
 function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
@@ -943,20 +982,34 @@ local_covers(
 
 # The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method, which
 # derives the scales for the cover that `merge` selects. Other scales do not depend on it.
-function local_covers(t::Tape{T}, vbar::AbstractVector, r, scales, check::Bool, merge::MergeRule = SumMerge()) where {T}
+local_covers(t::Tape, vbar::AbstractVector, r, scales, check::Bool, merge::MergeRule = SumMerge()) =
+    local_covers!(t, vbar, r, split_scales(scales, t), check)
+
+# `local_covers` under the scale references `sc`.
+function local_covers!(t::Tape{T}, vbar::AbstractVector, r, sc, check::Bool) where {T}
     N = nnodes(t)
-    sc = split_scales(scales, t)
     etas = [magtype(T)[] for _ in 1:N]
-    theta = zeros(boundtype(T), N)
     for k in (t.ninputs + 1):N
         eta = local_cover_slots(r, t, k, magnitude(vbar[k]), sc; check)
+        note_dropped!(sc, k, eta)
         eta === nothing && continue
         etas[k] = eta
+    end
+    return etas, seeds_from(t, etas), sc.store.nguarded
+end
+
+# `theta[j] = sum_k etas[k][i]` over the slots `i` of the nodes `k` that have `j` as a parent,
+# summed in node order.
+function seeds_from(t::Tape{T}, etas) where {T}
+    theta = zeros(boundtype(T), nnodes(t))
+    for k in (t.ninputs + 1):nnodes(t)
+        eta = etas[k]
+        isempty(eta) && continue
         for (i, p) in enumerate(t.parents[k])
             theta[p] += eta[i]
         end
     end
-    return etas, theta, sc.store.nguarded
+    return theta
 end
 
 """
@@ -1302,7 +1355,7 @@ channeltype(::SignAveragedMerge, ::Type{T}) where {T} = magtype(T)
 # `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the adjoints
 # into it alongside the channel. With `Val(false)`, `vbar` holds finished adjoints and is only
 # read. Both forms perform the same channel operations in the same order, so they return identical
-# channels whenever the adjoints agree.
+# channels whenever the adjoints agree. A drop pass completes its record of dropped blocks.
 function cover_only_sweep!(
         ::Val{propagate}, merge::SweepMerge, vbar, t::Tape{T}, r, sc, check::Bool
     ) where {propagate, T}
@@ -1312,6 +1365,7 @@ function cover_only_sweep!(
         vk, ck = vbar[k], c[k]
         ps = t.parents[k]
         eta = node_cover(r, t, k, vk, sc, check)
+        note_dropped!(sc, k, eta)
         if merge isa SumMerge && eta !== nothing
             for (i, p) in enumerate(ps)
                 c[p] += eta[i]

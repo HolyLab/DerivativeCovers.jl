@@ -40,11 +40,13 @@ stay fixed, since they would otherwise feed on the guarded blocks that are their
     type. Passing `maxiter` or `rtol` together with a `rounds` count is an error.
 
 Cost: the drop pass is the entry point's own cover sweep, so a program with no guarded block costs
-exactly what it costs without `CurvatureScales`, and its result has `nguarded == 0`. On a program
-with guarded blocks, `rounds = 1` adds one cover sweep, about doubling the cost of the cover; each
-further round adds another. Checking unanchored inputs, when there are any, takes one forward
-sweep plus one per such input. Otherwise `nguarded` counts the blocks whose split read the derived
-scales.
+exactly what it costs without `CurvatureScales`, and its result has `nguarded == 0`. Otherwise
+only the guarded blocks read the scales, so each round, the one that returns the cover included,
+splits those blocks alone and adds the change to the drop pass's cover in one reverse sweep (see
+[`GuardedRedo`](@ref)), after the forward sweep that propagates the scales. Checking unanchored
+inputs, when there are any, takes one forward sweep plus one per such input, which together also
+give the first round's propagated scales. `nguarded` counts the blocks whose split read the
+derived scales.
 
 [`forward_cover`](@ref) records no tape to sweep and does not accept `CurvatureScales`.
 """
@@ -111,38 +113,50 @@ resolve_scales(
     cs::CurvatureScales, t::Tape, outidx::Integer, ratio, check::Bool, merge::SweepMerge = SumMerge()
 ) = resolve_scales(cs, t, adjoints(t, outidx), ratio, check, merge)
 function resolve_scales(
-        cs::CurvatureScales, t::Tape, vbar::AbstractVector, ratio, check::Bool,
+        cs::CurvatureScales, t::Tape{T}, vbar::AbstractVector, ratio, check::Bool,
         merge::SweepMerge = SumMerge()
-    )
-    drop = DropGuarded()
-    hdrop = cover_only_sweep!(Val(false), merge, vbar, t, ratio, split_scales(drop, t), check)
-    isempty(drop.pairs) && return nothing
-    return derived_scales(cs, merge, t, vbar, hdrop, drop.pairs, ratio, check)
+    ) where {T}
+    drop = DropGuarded{magtype(T)}()
+    sc = split_scales(drop, t)
+    hdrop = cover_only_sweep!(Val(false), merge, vbar, t, ratio, sc, check)
+    isempty(drop.blocks) && return nothing
+    redo = GuardedRedo(merge, t, vbar, ratio, hdrop, drop, sc.store.lives, check)
+    return first(derived_scales(cs, t, hdrop, dropped_pairs(drop), redo))
 end
 
 # The drop pass is a sweep of the entry point's own kind, and where it guards no block it read no
 # declared scale, so its result is the cover under any scales: a program without guarded blocks
 # pays for one sweep, as it would without `CurvatureScales`.
-function cover_only_channel!(p::Val, merge::SweepMerge, vbar, t::Tape, r, cs::CurvatureScales, check::Bool)
-    drop = DropGuarded()
-    h, nguarded = cover_only_channel!(p, merge, vbar, t, r, drop, check)
-    isempty(drop.pairs) && return h, nguarded
+function cover_only_channel!(
+        p::Val, merge::SweepMerge, vbar, t::Tape{T}, r, cs::CurvatureScales, check::Bool
+    ) where {T}
+    drop = DropGuarded{magtype(T)}()
+    sc = split_scales(drop, t)
+    hdrop = cover_only_sweep!(p, merge, vbar, t, r, sc, check)
+    isempty(drop.blocks) && return hdrop, sc.store.nguarded
     # A propagating sweep has finished the adjoints in `vbar`, so the rest only reads them.
-    w = derived_scales(cs, merge, t, vbar, h, drop.pairs, r, check)
-    return cover_only_channel!(Val(false), merge, vbar, t, r, w, check)
+    redo = GuardedRedo(merge, t, vbar, r, hdrop, drop, sc.store.lives, check)
+    sigma, S = derived_scales(cs, t, hdrop, dropped_pairs(drop), redo)
+    etas, nguarded = guarded_covers(redo, sigma, S)
+    return raised_cover(redo, etas), nguarded
 end
 
 function local_covers(
-        t::Tape, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool,
+        t::Tape{T}, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool,
         merge::MergeRule = SumMerge()
-    )
+    ) where {T}
     check_sweep_merge(merge)
-    drop = DropGuarded()
-    etas, theta, nguarded = local_covers(t, vbar, r, drop, check)
-    isempty(drop.pairs) && return etas, theta, nguarded
-    hdrop = drop_cover(merge, t, etas, theta)
-    w = derived_scales(cs, merge, t, vbar, hdrop, drop.pairs, r, check)
-    return local_covers(t, vbar, r, w, check)
+    drop = DropGuarded{magtype(T)}()
+    sc = split_scales(drop, t)
+    etas, theta, nguarded = local_covers!(t, vbar, r, sc, check)
+    isempty(drop.blocks) && return etas, theta, nguarded
+    redo = GuardedRedo(merge, t, vbar, r, drop_cover(merge, t, etas, theta), drop, sc.store.lives, check)
+    sigma, S = derived_scales(cs, t, redo.hdrop, dropped_pairs(drop), redo)
+    guarded, nguarded = guarded_covers(redo, sigma, S)
+    for (j, k) in enumerate(redo.nodes)
+        etas[k] = guarded[j]
+    end
+    return etas, seeds_from(t, etas), nguarded
 end
 
 # The drop pass's cover of the kind `merge` selects, merged from its local covers.
@@ -151,43 +165,142 @@ drop_cover(::SignAveragedMerge, t::Tape, etas, theta) =
     _reverse_sweep(hypot, _absslot, t, quadrature_seeds(t, etas))
 
 """
-    derived_scales(cs::CurvatureScales, merge, t::Tape, vbar, hdrop, pairs, ratio, check) -> Vector
+    GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded, lives, check)
 
-The declared input scales [`CurvatureScales`](@ref) describes for the cover `merge` selects, in
-[`ExpScaled`](@ref)`{magtype(T)}`, from a completed drop pass over the program `t` with node
-adjoints `vbar`: `hdrop[1:t.ninputs]` is the drop pass's cover of that kind and `pairs` the parents
-of the blocks it dropped (see [`DropGuarded`](@ref)), of which there must be at least one. Later
-rounds sweep covers of the same kind.
+What a cover under derived scales shares with its drop pass: the drop pass's cover `hdrop` of the
+kind `merge` selects, over all nodes, and the `nodes` whose blocks it dropped, in tape order, with
+the slot covers `etas` it gave them (from `drop`). Only those nodes read the declared scales, so
+[`guarded_covers`](@ref) recomputes theirs alone, and [`raised_cover`](@ref) adds the change to
+`hdrop` in one reverse sweep. `lives` is the drop pass's [`live_nodes`](@ref), which does not
+depend on the scales.
 """
-function derived_scales(
-        cs::CurvatureScales, merge::SweepMerge, t::Tape{T}, vbar::AbstractVector,
-        hdrop::AbstractVector, pairs, ratio, check::Bool
-    ) where {T}
+struct GuardedRedo{R <: SweepMerge, TT <: Tape, V, Q, H, M}
+    merge::R
+    tape::TT
+    vbar::V
+    ratio::Q
+    hdrop::H
+    nodes::Vector{Int}
+    etas::Vector{Vector{M}}
+    lives::Vector{Bool}
+    check::Bool
+end
+function GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded{M}, lives, check) where {M}
+    nodes, etas = Int[], Vector{M}[]
+    # The blocks of one node, such as the pairs of an inner product, are recorded consecutively.
+    for b in drop.blocks
+        isempty(nodes) || last(nodes) != b.node || continue
+        b.eta === nothing && error("the drop pass recorded the block with parents $(b.parents) but not its node")
+        push!(nodes, b.node)
+        push!(etas, b.eta)
+    end
+    return GuardedRedo(merge, t, vbar, ratio, hdrop, nodes, etas, lives, check)
+end
+
+"""
+    guarded_covers(redo::GuardedRedo, sigma, S) -> (etas, nguarded)
+
+The slot covers of the nodes of `redo` under the declared input scales `sigma`, and the number of
+blocks that read them. `S`, when not `nothing`, is the [`sensitivity_scales`](@ref) of `sigma`,
+already computed.
+"""
+function guarded_covers(redo::GuardedRedo, sigma, S)
+    t = redo.tape
+    sc = split_scales(sigma, t)
+    isempty(redo.lives) || (sc.store.lives = redo.lives)
+    S === nothing || (sc.store.sigmas = S)
+    etas = map(redo.nodes) do k
+        eta = node_cover(redo.ratio, t, k, redo.vbar[k], sc, redo.check)
+        eta === nothing && error("node $k dropped a block in the drop pass but has no cover under declared scales")
+        eta
+    end
+    return etas, sc.store.nguarded
+end
+
+"""
+    raised_cover(redo::GuardedRedo, etas) -> h
+
+The cover at the inputs when the nodes of `redo` take the slot covers `etas` in place of the drop
+pass's. Each cover is linear in its seeds, the sum cover in the seeds themselves and the
+sign-averaged cover in their squares, so the change propagates from the recorded nodes' parents
+alone and adds to `hdrop`. A split weight is never below the drop pass's weight for the same slot
+(see [`balanced_split`](@ref)), so every change is nonnegative.
+"""
+function raised_cover(redo::GuardedRedo, etas)
+    t = redo.tape
+    T = eltype(t)
+    merge = redo.merge
+    rho = zeros(channeltype(merge, T), nnodes(t))
+    for (j, k) in enumerate(redo.nodes)
+        e0, e1 = redo.etas[j], etas[j]
+        for (i, p) in enumerate(t.parents[k])
+            rho[p] = raise_seed(merge, T, rho[p], e0[i], e1[i], k, redo.check)
+        end
+    end
+    delta = _reverse_sweep(channel_accumulator(merge), _absslot, t, rho)
+    return [combine_channels(merge, redo.hdrop[i], delta[i]) for i in 1:t.ninputs]
+end
+
+# A slot's seed increase from `e0` to `e1`. Rounding can leave a split weight a hair below the
+# diagonal weight it bounds; such a slot keeps its drop-pass weight, which covers it. `check`
+# verifies that no weight falls further.
+function raise_seed(merge::SweepMerge, ::Type{T}, acc, e0, e1, k, check::Bool) where {T}
+    check && (e1 >= e0 * (1 - sqrt(eps(typeof(e0)))) ||
+        error("node $k: a split weight $e1 under declared scales is below the drop pass's weight $e0"))
+    e1 > e0 || return acc
+    return raise_seed(merge, T, acc, e0, e1)
+end
+raise_seed(::SumMerge, ::Type{T}, acc, e0, e1) where {T} = acc + boundsub(T, e1, e0)
+# The root of `e1^2 - e0^2`, as the product of two roots, so no square is formed.
+raise_seed(::SignAveragedMerge, ::Type{T}, acc, e0, e1) where {T} = hypot(acc, sqrt(e1 - e0) * sqrt(e1 + e0))
+
+channel_accumulator(::SumMerge) = +
+channel_accumulator(::SignAveragedMerge) = hypot
+combine_channels(::SumMerge, h, d) = h + d
+combine_channels(::SignAveragedMerge, h, d) = hypot(h, d)
+
+# One round of the derivation: the cover at the inputs under the declared scales `sigma`.
+(redo::GuardedRedo)(sigma, S) =
+    tomag(eltype(redo.tape), raised_cover(redo, first(guarded_covers(redo, sigma, S))))
+
+"""
+    derived_scales(cs::CurvatureScales, t::Tape, hdrop, pairs, sweep) -> (sigma, S)
+
+The declared input scales [`CurvatureScales`](@ref) describes, in
+[`ExpScaled`](@ref)`{magtype(T)}`, from a completed drop pass over the program `t`:
+`hdrop[1:t.ninputs]` is its cover and `pairs` the parents of the blocks it dropped (see
+[`DropGuarded`](@ref)), of which there must be at least one. `sweep(sigma, S)` returns the cover
+at the inputs under the declared scales `sigma`, of the same kind as `hdrop`, and is called once
+per round after the first. `S` is the [`sensitivity_scales`](@ref) of the returned `sigma` where
+the check of unanchored inputs has already formed them, and `nothing` otherwise.
+"""
+function derived_scales(cs::CurvatureScales, t::Tape{T}, hdrop::AbstractVector, pairs, sweep) where {T}
     n = t.ninputs
     M = magtype(T)
     E = ExpScaled{M}
     anchored = [plainvalue(hdrop[i]) > 0 for i in 1:n]
     sigma = E[anchored[i] ? inv(E(plainvalue(hdrop[i]))) : one(E) for i in 1:n]
-    all(anchored) || check_unanchored(t, sigma, anchored, pairs)
-    sweep(sigma) = tomag(T, cover_only_sweep!(Val(false), merge, vbar, t, ratio, split_scales(sigma, t), check)[1:n])
+    # Rederiving changes `sigma`, after which these no longer belong to it.
+    S = all(anchored) ? nothing : check_unanchored(t, sigma, anchored, pairs)
     rederive!(sigma, h) = for i in 1:n
         anchored[i] && (sigma[i] = inv(E(h[i])))
     end
     if cs.rounds !== nothing
         for _ in 2:cs.rounds
-            rederive!(sigma, sweep(sigma))
+            rederive!(sigma, sweep(sigma, S))
+            S = nothing
         end
-        return sigma
+        return sigma, S
     end
     rtol = cs.rtol === nothing ? eps(M)^(2 // 3) : cs.rtol
-    hprev = sweep(sigma)
+    hprev = sweep(sigma, S)
     rederive!(sigma, hprev)
     delta = M(Inf)
     for _ in 2:cs.maxiter
-        h = sweep(sigma)
+        h = sweep(sigma, nothing)
         rederive!(sigma, h)
         delta = maximum(i -> anchored[i] ? abs(h[i] - hprev[i]) / h[i] : zero(M), 1:n)
-        delta <= rtol && return sigma
+        delta <= rtol && return sigma, nothing
         hprev = h
     end
     error(
@@ -197,10 +310,11 @@ function derived_scales(
 end
 
 """
-    check_unanchored(t::Tape, sigma, anchored, pairs)
+    check_unanchored(t::Tape, sigma, anchored, pairs) -> S
 
 Throw unless every guarded block, given by its parent nodes in `pairs`, splits the same way
-whatever scales the unanchored inputs (`anchored[i] == false`) are given.
+whatever scales the unanchored inputs (`anchored[i] == false`) are given. Otherwise return
+`S = a + sum_j b_j`, the [`sensitivity_scales`](@ref) of `sigma`, whose unanchored entries are one.
 
 A parent's propagated scale is linear in the input scales, `a_p + sum_j b_pj * sigma_j` over the
 unanchored inputs `j`, with `a_p` from the anchored scales in `sigma`. The split reads the ratio of
@@ -228,7 +342,7 @@ function check_unanchored(t::Tape{T}, sigma::AbstractVector{E}, anchored, pairs)
     for (p1, p2) in pairs
         proportional(coefficients(p1), coefficients(p2), tol) || push!(bad, (p1, p2))
     end
-    isempty(bad) && return nothing
+    isempty(bad) && return foldl((x, y) -> x .+ y, b; init = a)
     inputs = sort!([j for (k, j) in enumerate(U) if any(((p1, p2),) -> b[k][p1] > 0 || b[k][p2] > 0, bad)])
     nodes = sort!(unique!([p for pr in bad for p in pr]))
     throw(

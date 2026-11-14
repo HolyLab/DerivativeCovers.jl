@@ -329,6 +329,29 @@ using IntervalArithmetic: IntervalArithmetic, Interval, inf, interval, in_interv
         @test covers_exactly(H, forward_cover(fi, X).h_quad)
     end
 
+    @testset "derived scales over a box hold exactly" begin
+        # The zero-zero product is a guarded block, so each round re-splits it and raises the drop
+        # pass's cover by the change, which must round upward too.
+        f = (x, c) -> c(0.1) * (x[1] - 1) * (x[2] - 2) + c(1.1) * x[1]^2 * x[2] + c(0.3) * x[2]^4
+        x0 = [1.0, 2.0]
+        X = interval.(x0)
+        fi = x -> f(x, identity)
+        H = ForwardDiff.hessian(x -> f(x, R), R.(x0))
+        t, outidx = tape_function(fi, X)
+        vbar = adjoints(t, outidx)
+        r = DerivativeCovers.split_ratio(nothing, Interval{Float64})
+        for cs in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            c = cover_hessian(t, outidx; scales = cs)
+            @test c.nguarded == 1
+            @test covers_exactly(H, c.h)
+            for merge in (SumMerge(), SignAveragedMerge())
+                w = DerivativeCovers.resolve_scales(cs, t, vbar, r, true, merge)
+                @test cover_hessian(t, outidx; scales = cs, merge).h ≈
+                    cover_hessian(t, outidx; scales = w, merge).h rtol = 1.0e-13
+            end
+        end
+    end
+
     @testset "Jacobian and least-squares covers over a box hold exactly" begin
         r = (x, c) -> [
             c(0.1) * x[1] * x[2], c(1.1) * x[2]^2 + c(0.3) * x[3], c(0.7) * x[1] * x[3]^2,

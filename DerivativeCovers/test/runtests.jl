@@ -196,7 +196,7 @@ include("maxpath.jl")
             :cyclic_partition, :level_partition, :node_levels, :nls_partition,
             :group_seeds, :sensitivities, :intermediate_gradients, :abs_reverse, :abs_forward,
             :hessian_bound, :merge_atoms, :local_covers, :local_cover_slots, :balanced_split,
-            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channel!, :cover_only_sweep!, :check_unanchored, :DropGuarded,
+            :split_fallback, :derived_scales, :resolve_scales, :cover_only_channel!, :cover_only_sweep!, :check_unanchored, :DropGuarded, :DroppedBlock, :GuardedRedo,
             :value_bounds_split, :dispatchcurvature, :live_nodes,
             :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :QuadMerge, :MaxMerge, :squared_surrogate, :quadrature_surrogate,
@@ -1150,9 +1150,9 @@ include("maxpath.jl")
             @test v.nguarded == 1
             wsa = DerivativeCovers.resolve_scales(cs, t, vbar, r, true, sa)
             wsum = DerivativeCovers.resolve_scales(cs, t, vbar, r, true)
-            @test cover_hessian(fpb, xpb; scales = wsa, merge = sa).h == v.h
+            @test cover_hessian(fpb, xpb; scales = wsa, merge = sa).h ≈ v.h rtol = 1.0e-13
             @test cover_hessian(fpb, xpb; scales = wsum, merge = sa).h != v.h
-            @test cover_hessian(fpb, xpb; scales = wsum).h == cover_hessian(fpb, xpb; scales = cs).h
+            @test cover_hessian(fpb, xpb; scales = wsum).h ≈ cover_hessian(fpb, xpb; scales = cs).h rtol = 1.0e-13
         end
 
         # Every tape-based entry point resolves the scales the same way.
@@ -1186,12 +1186,13 @@ include("maxpath.jl")
             nv.h ./ dpb rtol = 1.0e-12
 
         # The drop pass leaves the guarded block's cross term uncovered and records its parents.
-        drop = DerivativeCovers.DropGuarded()
+        drop = DerivativeCovers.DropGuarded{Float64}()
         abar = DerivativeCovers.cover_only_sweep!(
             Val(false), SumMerge(), vbar, t, DerivativeCovers.split_ratio(nothing, Float64),
             DerivativeCovers.split_scales(drop, t), true
         )
-        @test length(drop.pairs) == 1
+        @test length(drop.blocks) == 1
+        @test only(drop.blocks).node > 0
         @test all(>(0), abar[1:2])
         @test max_coverage_ratio(abar[1:2], Hpb) > GATE
         # A program with no guarded block reads no scale and needs no derivation.
@@ -1256,6 +1257,21 @@ include("maxpath.jl")
         @test !(h1 ≈ hconv)
         @test cover_hessian(fslow, xslow; scales = CurvatureScales(rounds = 40)).h ≈ hconv rtol = 1.0e-9
         @test max_coverage_ratio(hconv, ForwardDiff.hessian(fslow, xslow)) <= GATE
+
+        # Each round recomputes the guarded blocks alone and adds their change to the drop pass's
+        # cover, which is the cover a full sweep under the same scales gives. `fone` reaches the
+        # unanchored input, whose check supplies the first round's propagated scales.
+        for (f, x0) in ((fpb, xpb), (fone, [1.0]), (fslow, xslow)), merge in (SumMerge(), SignAveragedMerge()),
+                c in (cs, CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            t, outidx = tape_function(f, x0)
+            w = DerivativeCovers.resolve_scales(
+                c, t, adjoints(t, outidx), DerivativeCovers.split_ratio(nothing, Float64), true, merge
+            )
+            full = cover_hessian(t, outidx; scales = w, merge)
+            inc = cover_hessian(t, outidx; scales = c, merge)
+            @test inc.h ≈ full.h rtol = 1.0e-13
+            @test inc.nguarded == full.nguarded
+        end
 
         # A propagation records no tape to sweep.
         @test_throws "recorded tape" forward_cover(fpb, xpb; scales = cs)
