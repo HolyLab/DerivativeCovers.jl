@@ -131,6 +131,36 @@ julia> round(σ; digits=3)
 julia> a, b = sqrt(1.1 * σ) .* jc.a, sqrt(1.1 * σ) .* jc.b_sum;
 ```
 
+## Estimating the diagonal
+
+Jacobi scaling gives variable `i` the scale `sqrt(abs(H[i,i]))`.
+[`becker_lecun`](@ref) estimates the diagonal of `H` in one reverse sweep,
+without forming `H`. With `exactness=true` it also reports, for each input,
+whether the estimate is exact:
+
+```jldoctest use
+julia> est = becker_lecun(t, out; exactness=true);
+
+julia> est.exact
+4-element BitVector:
+ 1
+ 1
+ 1
+ 1
+
+julia> est.diag
+4-element Vector{Float64}:
+ 1.6487212707001282
+ 0.0
+ 0.0
+ 0.0
+```
+
+An exact estimate is still only the diagonal. Here the curvature of `x[2]`,
+`x[3]` and `x[4]` lies entirely in their couplings, so the diagonal gives them
+no scale, whereas the cover `h` does. Where `exact[i]` is `false`, the estimate
+can be far from `H[i,i]`, with either sign.
+
 ## Matrix-free products
 
 The tape also supports exact products with the derivative matrices, each in

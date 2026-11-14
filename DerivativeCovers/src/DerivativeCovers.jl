@@ -32,6 +32,7 @@ import MatrixCovers: support_components, gramcover, gramcover!
 export Tape, TVar, tape_function
 export FVar, forward_cover, ForwardCover
 export cover_hessian, cover_jacobian, cover_nls
+export becker_lecun, BeckerLeCunEstimate
 export CoverOnly, WithDiagnostics, CurvatureScales
 export SumMerge, SignAveragedMerge
 export HessianCover, HessianDiagnostics
@@ -100,6 +101,7 @@ include("jacobian.jl")
 include("gram.jl")
 include("normalize.jl")
 include("compose.jl")
+include("beckerlecun.jl")
 include("show.jl")
 
 end
