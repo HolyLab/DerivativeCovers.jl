@@ -70,6 +70,40 @@ end
 (f::ReverseFlow)(d, k, i, p) =
     (f.li.live[k] && f.li.live[p] && !iszero(magnitude(d))) ? 1 / f.li.outdeg[p] : 0.0
 
+# Slot weight 1 on a live slot, so a sweep with it counts paths.
+struct LiveSlot
+    li::LiveInfo
+end
+(f::LiveSlot)(d, k, i, p) =
+    (f.li.live[k] && f.li.live[p] && !iszero(magnitude(d))) ? 1.0 : 0.0
+
+"""
+    PathFlow(steps = 0)
+
+Row and column targets for [`balance_cover`](@ref) on a tape that, unlike `:flow`, do not depend on
+how the recording associated a sum or product, e.g., `(a + b) + c` versus `a + (b + c)`.
+`PathFlow(0)` is also spelled `:pathflow`.
+
+The targets come from the matrix `N` of path counts, where `N[k, j]` counts the paths from input `j`
+to output position `k` along which every local derivative is nonzero. One copy of `N` is scaled to
+equal row sums and another to equal column sums, each with total 1; the targets are the row and
+column sums of the two copies added together.
+
+Each of the `steps` further steps rescales each copy on the side it was not scaled on last, as in
+Sinkhorn scaling. As `steps` grows, the targets approach equal row sums and equal column sums when
+the sparsity pattern admits them. For every `steps` they are realizable, because they remain the
+sums of a positive matrix on the support.
+
+Computing the targets takes `2 * steps + 4` sweeps, each `O(L)`.
+"""
+struct PathFlow
+    steps::Int
+    function PathFlow(steps::Integer = 0)
+        steps >= 0 || throw(ArgumentError("PathFlow needs steps >= 0; got $steps"))
+        return new(steps)
+    end
+end
+
 """
     _flow_targets(t::Tape, outidxs, li::LiveInfo) -> (r, c)
 
@@ -115,6 +149,76 @@ function _flow_targets(t::Tape, outidxs, li::LiveInfo)
     end
     return r, c
 end
+
+"""
+    _pathflow_targets(t::Tape, outidxs, li::LiveInfo, steps = 0) -> (r, c)
+
+The targets of [`PathFlow`](@ref)`(steps)`. With `N` the matrix of live path counts, one copy of
+`N` is first scaled to row sums `1/nrow` and the other to column sums `1/ncol`; each of the `steps`
+further scalings switches the side of both. The targets are the row and column sums of the two
+copies added together. At every stage one copy has row sums `1/nrow` and the other column sums
+`1/ncol`, so both totals are `2`, every live row target is at least `1/nrow`, and every live column
+target is at least `1/ncol`.
+
+`N` is never formed. Each product of `N` or `N'` with a vector is one path-counting sweep, run in
+[`ExpScaled`](@ref) because path counts can grow exponentially with depth; `2 * steps + 4` sweeps
+run in all.
+"""
+function _pathflow_targets(t::Tape, outidxs, li::LiveInfo, steps::Integer = 0)
+    m, nin = length(outidxs), t.ninputs
+    (li.nrow > 0 && li.ncol > 0) || return zeros(Float64, m), zeros(Float64, nin)
+    S = ExpScaled{Float64}
+    byrow(v) = _paths_from_inputs(t, outidxs, li, v)
+    bycol(u) = _paths_from_outputs(t, outidxs, li, u)
+    p = S[li.liverow[k] ? inv(li.nrow) : 0 for k in 1:m]
+    q = S[li.livecol[j] ? inv(li.ncol) : 0 for j in 1:nin]
+    r1, c1 = _scaled_marginals(byrow, bycol, p, q, steps)
+    c2, r2 = _scaled_marginals(bycol, byrow, q, p, steps)
+    r, c = Float64.(r1 .+ r2), Float64.(c1 .+ c2)
+    (all(isfinite, r) && all(isfinite, c)) ||
+        error("path-count targets are not finite: a live row or column has no live path")
+    return r, c
+end
+
+# `N * v`, indexed by output position, for `v` indexed by input and `N` the matrix of live path
+# counts.
+function _paths_from_inputs(t::Tape, outidxs, li::LiveInfo, v::AbstractVector{S}) where {S}
+    seed = zeros(S, nnodes(t))
+    for j in 1:t.ninputs
+        li.livecol[j] && (seed[j] = v[j])
+    end
+    s = _forward_sweep(LiveSlot(li), t, seed)
+    return S[li.liverow[k] ? s[o] : zero(S) for (k, o) in enumerate(outidxs)]
+end
+
+# `N' * u`, indexed by input, for `u` indexed by output position. A node that appears at several
+# output positions is seeded with the sum of their entries of `u`.
+function _paths_from_outputs(t::Tape, outidxs, li::LiveInfo, u::AbstractVector{S}) where {S}
+    seed = zeros(S, nnodes(t))
+    for (k, o) in enumerate(outidxs)
+        li.liverow[k] && (seed[o] += u[k])
+    end
+    s = _reverse_sweep(LiveSlot(li), t, seed)
+    return S[li.livecol[j] ? s[j] : zero(S) for j in 1:t.ninputs]
+end
+
+# Row and column sums of `diag(x) * A * diag(y)` after `steps + 1` scalings that alternately give
+# its rows the sums `p` and its columns the sums `q`, rows first. `A` and `At` apply the matrix and
+# its transpose; zeros of `p` and `q` mark the rows and columns left out.
+function _scaled_marginals(A, At, p, q, steps::Integer)
+    y = map(z -> iszero(z) ? z : one(z), q)
+    x = _target_ratio.(p, A(y))
+    for i in 1:steps
+        if isodd(i)
+            y = _target_ratio.(q, At(x))
+        else
+            x = _target_ratio.(p, A(y))
+        end
+    end
+    # The side scaled last has its sums exactly; one more product gives the other side's.
+    return isodd(steps) ? (x .* A(y), q) : (p, y .* At(x))
+end
+_target_ratio(target, sum) = iszero(target) ? target : target / sum
 
 """
     _support_counts(t::Tape, outidxs, li::LiveInfo) -> (r, c)
