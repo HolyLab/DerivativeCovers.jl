@@ -28,6 +28,17 @@ WithDiagnostics
 CurvatureScales
 ```
 
+## Diagonal estimates
+
+[`becker_lecun`](@ref) estimates the diagonal of the Hessian. It is not a cover in
+general, but where it is exact and the Hessian is positive semidefinite, it
+gives the minimal cover.
+
+```@docs
+becker_lecun
+BeckerLeCunEstimate
+```
+
 ## Merge rules
 
 ```@docs

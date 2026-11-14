@@ -115,6 +115,7 @@ include("rounding.jl")
 include("expscaled.jl")
 include("intervals.jl")
 include("maxpath.jl")
+include("beckerlecun.jl")
 
 @testset "DerivativeCovers.jl" begin
 
@@ -159,6 +160,7 @@ include("maxpath.jl")
                 :Tape, :TVar, :tape_function,
                 :FVar, :forward_cover, :ForwardCover,
                 :cover_hessian, :cover_jacobian, :cover_nls,
+                :becker_lecun, :BeckerLeCunEstimate,
                 :CoverOnly, :WithDiagnostics, :CurvatureScales,
                 :SumMerge, :SignAveragedMerge,
                 :HessianCover, :HessianDiagnostics,
@@ -201,6 +203,7 @@ include("maxpath.jl")
             :quadrature_seeds, :dependency_sweep, :jacobian_surrogate, :marginal_weights,
             :QuadMerge, :MaxMerge, :squared_surrogate, :quadrature_surrogate,
             :balance_cover, :tape_potentials, :maxpath_forward, :maxpath_rowcorrelation,
+            :becker_lecun_exact,
         )
         for sym in private
             @test isdefined(DerivativeCovers, sym)

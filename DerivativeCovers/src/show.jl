@@ -83,3 +83,12 @@ Base.show(io::IO, ::MIME"text/plain", c::NLSDiagnostics{T, M, R}) where {T, M, R
     io, "NLSDiagnostics (", merge_label(R), "): ", c.m, " residuals, ", length(c.grad),
     " inputs; grad, h, h_gn, Utilde, nguarded"
 )
+
+Base.show(io::IO, r::BeckerLeCunEstimate) =
+    print(io, "BeckerLeCunEstimate(", length(r.grad), " inputs)")
+
+function Base.show(io::IO, ::MIME"text/plain", r::BeckerLeCunEstimate)
+    print(io, "BeckerLeCunEstimate: ", length(r.grad), " inputs; grad, diag, exact")
+    r.exact === nothing && return print(io, " (not checked)")
+    return print(io, " (", count(r.exact), " of ", length(r.exact), " certified)")
+end
