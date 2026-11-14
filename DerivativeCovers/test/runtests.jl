@@ -1164,18 +1164,19 @@ include("maxpath.jl")
         end
         # The drop pass is the cover sweep itself, so a program with no guarded block pays for one
         # sweep: the cost claim stated as a property rather than as a timing. The one extra
-        # allocation is the empty record of dropped blocks.
+        # allocation is the empty record of dropped blocks. Each count is taken inside a function
+        # of the scales, so that it measures the cover and not a dynamic call from the test scope.
         let (tclean, oc) = tape_function(x -> x[1] * x[2] + exp(x[2]), [2.0, 0.5])
-            cover_hessian(CoverOnly(), tclean, oc)
-            cover_hessian(CoverOnly(), tclean, oc; scales = cs)
-            @test cover_hessian(CoverOnly(), tclean, oc; scales = cs).nguarded == 0
-            @test @allocations(cover_hessian(CoverOnly(), tclean, oc; scales = cs)) <=
-                @allocations(cover_hessian(CoverOnly(), tclean, oc)) + 1
             vc = adjoints(tclean, oc)
-            DerivativeCovers.local_covers(tclean, vc)
-            DerivativeCovers.local_covers(tclean, vc; scales = cs)
-            @test @allocations(DerivativeCovers.local_covers(tclean, vc; scales = cs)) <=
-                @allocations(DerivativeCovers.local_covers(tclean, vc)) + 1
+            hessian_allocs(s) = @allocations cover_hessian(CoverOnly(), tclean, oc; scales = s)
+            local_allocs(s) = @allocations DerivativeCovers.local_covers(tclean, vc; scales = s)
+            @test cover_hessian(CoverOnly(), tclean, oc; scales = cs).nguarded == 0
+            for s in (nothing, cs)
+                hessian_allocs(s)
+                local_allocs(s)
+            end
+            @test hessian_allocs(cs) <= hessian_allocs(nothing) + 1
+            @test local_allocs(cs) <= local_allocs(nothing) + 1
         end
 
         # An input whose only curvature passes through guarded blocks has no scale the program
