@@ -37,7 +37,9 @@ Under the same declared scales, the sign-averaged cover is at most `h_quad`, the
 of [`HessianDiagnostics`](@ref), which is at most the sum cover, coordinatewise. A coordinate
 reached by a single contribution has equal sum and sign-averaged covers; one built by summing many
 overlapping contributions has the sum cover grow like their sum and the sign-averaged cover like
-their root-sum-square, so their ratio grows with the effective overlap.
+their root-sum-square, so their ratio grows with the effective overlap. Under
+[`CurvatureScales`](@ref), each cover derives its own scales, so where a block is guarded the two
+covers can split it differently and the comparison no longer holds term by term.
 
 A variable that enters one elemental through two slots is two paths whose contributions combine
 in quadrature, although in the program they share a sign: `x[1] * x[1]` seeds each of its two
@@ -913,7 +915,7 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
 end
 
 """
-    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing) -> (etas, theta, nguarded)
+    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing, merge=SumMerge()) -> (etas, theta, nguarded)
 
 Per-node rank-1 covers. For node `k`, `etas[k][i] >= 0` satisfies
 `etas[k][i] * etas[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
@@ -930,15 +932,18 @@ own rank-1 cover, and there is no recorded `C` to check it against, so `check` c
 nodes — validity is conditional on the declaration.
 
 `scales` declares the input scales the split falls back on and `ratio` the threshold at which it
-does so; see [`split_block`](@ref) and [`split_ratio`](@ref). `check` verifies the covering
-invariant at every recorded node.
+does so; see [`split_block`](@ref) and [`split_ratio`](@ref). `merge` matters only for
+`scales = `[`CurvatureScales`](@ref)`()`, which derives the scales for the cover it selects.
+`check` verifies the covering invariant at every recorded node.
 """
 local_covers(
-    t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing
-) where {T} = local_covers(t, vbar, split_ratio(ratio, T), scales, check)
+    t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing,
+    merge::MergeRule = SumMerge()
+) where {T} = local_covers(t, vbar, split_ratio(ratio, T), scales, check, merge)
 
-# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method.
-function local_covers(t::Tape{T}, vbar::AbstractVector, r, scales, check::Bool) where {T}
+# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method, which
+# derives the scales for the cover that `merge` selects. Other scales do not depend on it.
+function local_covers(t::Tape{T}, vbar::AbstractVector, r, scales, check::Bool, merge::MergeRule = SumMerge()) where {T}
     N = nnodes(t)
     sc = split_scales(scales, t)
     etas = [magtype(T)[] for _ in 1:N]

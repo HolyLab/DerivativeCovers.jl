@@ -68,7 +68,8 @@ They cover the sign ensemble's mean magnitudes, **not the Hessian or `JᵀJ`**. 
 sign-averaged form of the residual-curvature channel. `h_gn` equals the sum merge's `h_gn` for
 `G = m` where each entry of `J` has a single path, and `h` equals `h_gn` where the residuals have
 no curvature. `h` is the sign-averaged cover of [`cover_hessian`](@ref) applied to the loss tape of
-[`nls_loss_tape`](@ref). Each sign-averaged cover is at most the corresponding sum cover.
+[`nls_loss_tape`](@ref). Under the same declared scales, each sign-averaged cover is at most the
+corresponding sum cover.
 
 Rescaling the inputs, `x -> D*x` with `D` diagonal, maps both covers `h -> inv(D)*h` on a program
 without guarded elementals; `scales` and `ratio` reach `h` only through the residual-curvature
@@ -271,7 +272,7 @@ function _nls_channels(merge::MergeRule, r, x0::AbstractVector, ngroups, check::
     groups = nls_partition(nnodes(t), sqidx; ngroups)
     gres = maximum(groups) - 1
     vbar = adjoints(t, outidx)
-    etas, _, nguarded = local_covers(t, vbar; check, scales, ratio)
+    etas, _, nguarded = local_covers(t, vbar; check, scales, ratio, merge)
     h, h_gn = _nls_covers(merge, t, etas, groups, gres, residx)
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, nguarded)
 end

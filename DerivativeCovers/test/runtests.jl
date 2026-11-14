@@ -1137,6 +1137,24 @@ include("maxpath.jl")
         hu = cover_hessian(fpb, xpb).h
         @test !(cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb).h ≈ hu ./ dpb)
 
+        # The sign-averaged cover derives its scales from sign-averaged covers, which transform as
+        # the sum cover does, so it is covariant at the guarded block as well.
+        sa = SignAveragedMerge()
+        for c in (CurvatureScales(), CurvatureScales(rounds = 3), CurvatureScales(rounds = nothing))
+            h = cover_hessian(fpb, xpb; scales = c, merge = sa).h
+            @test cover_hessian(xt -> fpb(xt ./ dpb), dpb .* xpb; scales = c, merge = sa).h ≈ h ./ dpb rtol = 1.0e-12
+            @test cover_hessian(x -> 4 * fpb(x), xpb; scales = c, merge = sa).h ≈ 2 * h rtol = 1.0e-12
+        end
+        let (t, outidx) = tape_function(fpb, xpb), vbar = adjoints(t, outidx), r = DerivativeCovers.split_ratio(nothing, Float64)
+            v = cover_hessian(fpb, xpb; scales = cs, merge = sa)
+            @test v.nguarded == 1
+            wsa = DerivativeCovers.resolve_scales(cs, t, vbar, r, true, sa)
+            wsum = DerivativeCovers.resolve_scales(cs, t, vbar, r, true)
+            @test cover_hessian(fpb, xpb; scales = wsa, merge = sa).h == v.h
+            @test cover_hessian(fpb, xpb; scales = wsum, merge = sa).h != v.h
+            @test cover_hessian(fpb, xpb; scales = wsum).h == cover_hessian(fpb, xpb; scales = cs).h
+        end
+
         # Every tape-based entry point resolves the scales the same way.
         t, outidx = tape_function(fpb, xpb)
         vbar = adjoints(t, outidx)
@@ -1158,6 +1176,14 @@ include("maxpath.jl")
         @test nres.nguarded == 1
         @test max_coverage_ratio(nres.h, Hpb) <= GATE
         @test cover_nls(xt -> rpb(xt ./ dpb), dpb .* xpb; scales = cs).h ≈ nres.h ./ dpb rtol = 1.0e-12
+        # The sign-averaged least-squares cover derives its scales as cover_hessian's does on the
+        # loss tape, of which it is the sign-averaged cover.
+        nv = cover_nls(rpb, xpb; scales = cs, merge = SignAveragedMerge())
+        @test nv.nguarded == 1
+        tl, ol, _, _ = nls_loss_tape(rpb, xpb)
+        @test nv.h ≈ cover_hessian(tl, ol; scales = cs, merge = SignAveragedMerge()).h rtol = 1.0e-12
+        @test cover_nls(xt -> rpb(xt ./ dpb), dpb .* xpb; scales = cs, merge = SignAveragedMerge()).h ≈
+            nv.h ./ dpb rtol = 1.0e-12
 
         # The drop pass leaves the guarded block's cross term uncovered and records its parents.
         drop = DerivativeCovers.DropGuarded()

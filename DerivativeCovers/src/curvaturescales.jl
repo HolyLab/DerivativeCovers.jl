@@ -15,6 +15,11 @@ propagated scales. Covers have units: under `x -> D*x` and `f -> c*f` a cover tr
 `1/sqrt(c)` common to every input, which cancels from every ratio. Scales derived this way
 therefore make the cover covariant at the guarded blocks as well.
 
+Each cover derives its scales from covers of its own kind: the sum cover from sum covers, and the
+sign-averaged cover (`merge = SignAveragedMerge()`) from sign-averaged covers, which transform in
+the same way. [`cover_nls`](@ref) derives them from the Hessian cover of that kind of its loss
+tape. The two covers of one program can therefore split a guarded block differently.
+
 The derivation starts from a *drop pass*: a sweep in which the guarded blocks contribute only their
 diagonal curvature, so that its result `h_drop` depends on no declared scale. An input with
 `h_drop[i] > 0` is *anchored* and receives `sigma[i] = 1 / h_drop[i]`. An input with
@@ -25,7 +30,7 @@ the derivation throws, naming the inputs, and the caller must declare scales exp
 `scales = w`.
 
 The scales from the drop pass define round 1. Each later round re-derives the anchored scales from
-the sum-merge cover computed with the previous round's scales; the scales of unanchored inputs
+the cover computed with the previous round's scales; the scales of unanchored inputs
 stay fixed, since they would otherwise feed on the guarded blocks that are their only curvature.
 
   - `rounds = 1`: run exactly this many rounds, with no convergence test.
@@ -37,9 +42,7 @@ stay fixed, since they would otherwise feed on the guarded blocks that are their
 Cost: the drop pass is the entry point's own cover sweep, so a program with no guarded block costs
 exactly what it costs without `CurvatureScales`, and its result has `nguarded == 0`. On a program
 with guarded blocks, `rounds = 1` adds one cover sweep, about doubling the cost of the cover; each
-further round adds another. The scales always derive from sum covers, so for the sign-averaged
-cover (`merge = SignAveragedMerge()`) a program with guarded blocks adds one further sweep, the
-sum cover of the drop pass. Checking unanchored inputs, when there are any, takes one forward
+further round adds another. Checking unanchored inputs, when there are any, takes one forward
 sweep plus one per such input. Otherwise `nguarded` counts the blocks whose split read the derived
 scales.
 
@@ -90,26 +93,31 @@ check_input_scales(::CurvatureScales, ninputs::Integer) = throw(
 )
 
 """
-    resolve_scales(scales, t::Tape, vbar_or_outidx, ratio, check) -> w
+    resolve_scales(scales, t::Tape, vbar_or_outidx, ratio, check, merge=SumMerge()) -> w
 
 The declared input scales to run the split with: `scales` itself, or for a
-[`CurvatureScales`](@ref) the scales [`derived_scales`](@ref) finds after a drop pass over the
-adjoints `vbar` (computed from `outidx` when an output index is passed), or `nothing` when that
-pass guards no block. `ratio` is the resolved threshold of [`split_ratio`](@ref).
+[`CurvatureScales`](@ref) the scales [`derived_scales`](@ref) finds for the cover `merge` selects
+after a drop pass over the adjoints `vbar` (computed from `outidx` when an output index is
+passed), or `nothing` when that pass guards no block. `ratio` is the resolved threshold of
+[`split_ratio`](@ref).
 
 The sweep entry points do not call this: they run the drop pass as their own sweep and keep its
 result when it guards no block, which leaves the cost of such a program unchanged (see
 `cover_only_channel!` and [`local_covers`](@ref)). This serves the computations that
 need the scales before a sweep of their own.
 """
-resolve_scales(w, t::Tape, vbar_or_outidx, ratio, check::Bool) = w
-resolve_scales(cs::CurvatureScales, t::Tape, outidx::Integer, ratio, check::Bool) =
-    resolve_scales(cs, t, adjoints(t, outidx), ratio, check)
-function resolve_scales(cs::CurvatureScales, t::Tape, vbar::AbstractVector, ratio, check::Bool)
+resolve_scales(w, t::Tape, vbar_or_outidx, ratio, check::Bool, merge::SweepMerge = SumMerge()) = w
+resolve_scales(
+    cs::CurvatureScales, t::Tape, outidx::Integer, ratio, check::Bool, merge::SweepMerge = SumMerge()
+) = resolve_scales(cs, t, adjoints(t, outidx), ratio, check, merge)
+function resolve_scales(
+        cs::CurvatureScales, t::Tape, vbar::AbstractVector, ratio, check::Bool,
+        merge::SweepMerge = SumMerge()
+    )
     drop = DropGuarded()
-    abar = cover_only_sweep!(Val(false), SumMerge(), vbar, t, ratio, split_scales(drop, t), check)
+    hdrop = cover_only_sweep!(Val(false), merge, vbar, t, ratio, split_scales(drop, t), check)
     isempty(drop.pairs) && return nothing
-    return derived_scales(cs, t, vbar, abar, drop.pairs, ratio, check)
+    return derived_scales(cs, merge, t, vbar, hdrop, drop.pairs, ratio, check)
 end
 
 # The drop pass is a sweep of the entry point's own kind, and where it guards no block it read no
@@ -120,35 +128,40 @@ function cover_only_channel!(p::Val, merge::SweepMerge, vbar, t::Tape, r, cs::Cu
     h, nguarded = cover_only_channel!(p, merge, vbar, t, r, drop, check)
     isempty(drop.pairs) && return h, nguarded
     # A propagating sweep has finished the adjoints in `vbar`, so the rest only reads them.
-    w = derived_scales(cs, t, vbar, drop_sum_cover(merge, h, vbar, t, r, check), drop.pairs, r, check)
+    w = derived_scales(cs, merge, t, vbar, h, drop.pairs, r, check)
     return cover_only_channel!(Val(false), merge, vbar, t, r, w, check)
 end
 
-# The sum cover of the drop pass, from which the scales derive whichever cover the entry point
-# returns.
-drop_sum_cover(::SumMerge, h, vbar, t::Tape, r, check::Bool) = h
-drop_sum_cover(::SignAveragedMerge, h, vbar, t::Tape, r, check::Bool) =
-    cover_only_sweep!(Val(false), SumMerge(), vbar, t, r, split_scales(DropGuarded(), t), check)
-
-function local_covers(t::Tape, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool)
+function local_covers(
+        t::Tape, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool,
+        merge::MergeRule = SumMerge()
+    )
+    check_sweep_merge(merge)
     drop = DropGuarded()
-    res = local_covers(t, vbar, r, drop, check)
-    isempty(drop.pairs) && return res
-    hdrop = abs_reverse(t, res[2])
-    return local_covers(t, vbar, r, derived_scales(cs, t, vbar, hdrop, drop.pairs, r, check), check)
+    etas, theta, nguarded = local_covers(t, vbar, r, drop, check)
+    isempty(drop.pairs) && return etas, theta, nguarded
+    hdrop = drop_cover(merge, t, etas, theta)
+    w = derived_scales(cs, merge, t, vbar, hdrop, drop.pairs, r, check)
+    return local_covers(t, vbar, r, w, check)
 end
 
-"""
-    derived_scales(cs::CurvatureScales, t::Tape, vbar, hdrop, pairs, ratio, check) -> Vector
+# The drop pass's cover of the kind `merge` selects, merged from its local covers.
+drop_cover(::SumMerge, t::Tape, etas, theta) = abs_reverse(t, theta)
+drop_cover(::SignAveragedMerge, t::Tape, etas, theta) =
+    _reverse_sweep(hypot, _absslot, t, quadrature_seeds(t, etas))
 
-The declared input scales [`CurvatureScales`](@ref) describes, in
+"""
+    derived_scales(cs::CurvatureScales, merge, t::Tape, vbar, hdrop, pairs, ratio, check) -> Vector
+
+The declared input scales [`CurvatureScales`](@ref) describes for the cover `merge` selects, in
 [`ExpScaled`](@ref)`{magtype(T)}`, from a completed drop pass over the program `t` with node
-adjoints `vbar`: `hdrop[1:t.ninputs]` is its sum-merge cover and `pairs` the parents of the blocks
-it dropped (see [`DropGuarded`](@ref)), of which there must be at least one.
+adjoints `vbar`: `hdrop[1:t.ninputs]` is the drop pass's cover of that kind and `pairs` the parents
+of the blocks it dropped (see [`DropGuarded`](@ref)), of which there must be at least one. Later
+rounds sweep covers of the same kind.
 """
 function derived_scales(
-        cs::CurvatureScales, t::Tape{T}, vbar::AbstractVector, hdrop::AbstractVector, pairs,
-        ratio, check::Bool
+        cs::CurvatureScales, merge::SweepMerge, t::Tape{T}, vbar::AbstractVector,
+        hdrop::AbstractVector, pairs, ratio, check::Bool
     ) where {T}
     n = t.ninputs
     M = magtype(T)
@@ -156,7 +169,7 @@ function derived_scales(
     anchored = [plainvalue(hdrop[i]) > 0 for i in 1:n]
     sigma = E[anchored[i] ? inv(E(plainvalue(hdrop[i]))) : one(E) for i in 1:n]
     all(anchored) || check_unanchored(t, sigma, anchored, pairs)
-    sweep(sigma) = tomag(T, cover_only_sweep!(Val(false), SumMerge(), vbar, t, ratio, split_scales(sigma, t), check)[1:n])
+    sweep(sigma) = tomag(T, cover_only_sweep!(Val(false), merge, vbar, t, ratio, split_scales(sigma, t), check)[1:n])
     rederive!(sigma, h) = for i in 1:n
         anchored[i] && (sigma[i] = inv(E(h[i])))
     end
