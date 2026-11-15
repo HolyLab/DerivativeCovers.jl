@@ -956,7 +956,7 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
 end
 
 """
-    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing, merge=SumMerge()) -> (etas, theta, nguarded)
+    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing) -> (etas, theta, nguarded)
 
 Per-node rank-1 covers. For node `k`, `etas[k][i] >= 0` satisfies
 `etas[k][i] * etas[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
@@ -973,18 +973,15 @@ own rank-1 cover, and there is no recorded `C` to check it against, so `check` c
 nodes — validity is conditional on the declaration.
 
 `scales` declares the input scales the split falls back on and `ratio` the threshold at which it
-does so; see [`split_block`](@ref) and [`split_ratio`](@ref). `merge` matters only for
-`scales = `[`CurvatureScales`](@ref)`()`, which derives the scales for the cover it selects.
-`check` verifies the covering invariant at every recorded node.
+does so; see [`split_block`](@ref) and [`split_ratio`](@ref). With
+`scales = `[`CurvatureScales`](@ref)`()`, the scales derive from sum covers. `check` verifies the
+covering invariant at every recorded node.
 """
-local_covers(
-    t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing,
-    merge::MergeRule = SumMerge()
-) where {T} = local_covers(t, vbar, split_ratio(ratio, T), scales, check, merge)
+local_covers(t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing) where {T} =
+    local_covers(t, vbar, split_ratio(ratio, T), scales, check)
 
-# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method, which
-# derives the scales for the cover that `merge` selects. Other scales do not depend on it.
-local_covers(t::Tape, vbar::AbstractVector, r, scales, check::Bool, merge::MergeRule = SumMerge()) =
+# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method.
+local_covers(t::Tape, vbar::AbstractVector, r, scales, check::Bool) =
     local_covers!(t, vbar, r, split_scales(scales, t), check)
 
 # `local_covers` under the scale references `sc`.

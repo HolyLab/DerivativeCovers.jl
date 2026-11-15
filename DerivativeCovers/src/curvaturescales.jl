@@ -149,16 +149,12 @@ end
 merged_channels(::SumMerge, C::AbstractMatrix) = [sum(view(C, :, k)) for k in axes(C, 2)]
 merged_channels(::SignAveragedMerge, C::AbstractMatrix) = [foldl(hypot, view(C, :, k)) for k in axes(C, 2)]
 
-function local_covers(
-        t::Tape{T}, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool,
-        merge::MergeRule = SumMerge()
-    ) where {T}
-    check_sweep_merge(merge)
+function local_covers(t::Tape{T}, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool) where {T}
     drop = DropGuarded{magtype(T)}()
     sc = split_scales(drop, t)
     etas, theta, nguarded = local_covers!(t, vbar, r, sc, check)
     isempty(drop.blocks) && return etas, theta, nguarded
-    redo = GuardedRedo(merge, t, vbar, r, drop_cover(merge, t, etas, theta), drop, sc.store.lives, check)
+    redo = GuardedRedo(SumMerge(), t, vbar, r, abs_reverse(t, theta), drop, sc.store.lives, check)
     sigma, S = derived_scales(cs, redo)
     guarded, nguarded = guarded_covers(redo, sigma, S)
     for (j, k) in enumerate(redo.nodes)
@@ -166,11 +162,6 @@ function local_covers(
     end
     return etas, seeds_from(t, etas), nguarded
 end
-
-# The drop pass's cover of the kind `merge` selects, merged from its local covers.
-drop_cover(::SumMerge, t::Tape, etas, theta) = abs_reverse(t, theta)
-drop_cover(::SignAveragedMerge, t::Tape, etas, theta) =
-    _reverse_sweep(hypot, _absslot, t, quadrature_seeds(t, etas))
 
 """
     GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded, lives, check)
