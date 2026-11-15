@@ -54,22 +54,22 @@ the [`Tape`](@ref) it was computed from, `M =` [`magtype`](@ref)`(T)` the type o
   scales, as in [`HessianCover`](@ref). Zero means the `scales` keyword played no part in this
   cover.
 
-For `R = SumMerge`, `h` and `h_gn` are certified covers, read off one grouped reverse sweep with
-`G` residual channels and one residual-curvature channel, so together they cost `O(G * L)` time and
-memory. With `G = 1`, the default, `h_gn` is the sum `∑ₖ ũ`. With `G = m`, one residual per
-channel, `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which equals `sqrt.(diag(J'J))` when no
-signed paths cancel.
+For `R = SumMerge`, `h` and `h_gn` are certified covers, read off one reverse sweep that
+propagates the gradient together with `G` residual channels and one residual-curvature channel, so
+the three cost `O(G * L)` time and memory. With `G = 1`, the default, `h_gn` is the sum `∑ₖ ũ`.
+With `G = m`, one residual per channel, `h_gn` is the per-residual quadrature `√(∑ₖ ũ²)`, which
+equals `sqrt.(diag(J'J))` when no signed paths cancel.
 
 For `R = SignAveragedMerge`, `h` and `h_gn` are sign-averaged covers, root-mean-square column
 scales under random local signs (one independent sign per parent slot, as for the sign-averaged
-cover of [`cover_hessian`](@ref)), read off one two-channel `O(L)` sweep through squared partials.
-They cover the sign ensemble's mean magnitudes, **not the Hessian or `JᵀJ`**. `h_gn` is the
-[`gramvariance`](@ref) of the residuals, and `h² = h_gn² + c_var²`, where `c_var` is the
-sign-averaged form of the residual-curvature channel. `h_gn` equals the sum merge's `h_gn` for
-`G = m` where each entry of `J` has a single path, and `h` equals `h_gn` where the residuals have
-no curvature. `h` is the sign-averaged cover of [`cover_hessian`](@ref) applied to the loss tape of
-[`nls_loss_tape`](@ref). Under the same declared scales, each sign-averaged cover is at most the
-corresponding sum cover.
+cover of [`cover_hessian`](@ref)), read off one `O(L)` reverse sweep that propagates the gradient
+together with two channels through squared partials. They cover the sign ensemble's mean
+magnitudes, **not the Hessian or `JᵀJ`**. `h_gn` is the [`gramvariance`](@ref) of the residuals,
+and `h² = h_gn² + c_var²`, where `c_var` is the sign-averaged form of the residual-curvature
+channel. `h_gn` equals the sum merge's `h_gn` for `G = m` where each entry of `J` has a single
+path, and `h` equals `h_gn` where the residuals have no curvature. `h` is the sign-averaged cover
+of [`cover_hessian`](@ref) applied to the loss tape of [`nls_loss_tape`](@ref). Under the same
+declared scales, each sign-averaged cover is at most the corresponding sum cover.
 
 Rescaling the inputs, `x -> D*x` with `D` diagonal, maps both covers `h -> inv(D)*h` on a program
 without guarded elementals; `scales` and `ratio` reach `h` only through the residual-curvature
@@ -188,15 +188,15 @@ than these matrices. [`WithDiagnostics`](@ref) returns an [`NLSDiagnostics`](@re
 absolute-sensitivity surrogate `Utilde` for a further `O(m * L)`.
 
 For the sum covers, `ngroups` sets the number of residual channels `G`, and with it the entire cost
-of the [`CoverOnly`](@ref) mode: `O(G * L)` time and `O(G * n)` memory. The residuals are spread
-cyclically over the `G` channels, and their sensitivities are summed within a channel before the
-quadrature merge. The default `1` sums them all, so `h_gn` is the [`gramcover`](@ref) of the
-residuals and both covers cost `O(L)`. `ngroups=nothing` gives every residual a channel of its own
-(`G = m`), the tightest pair of covers available, at `O(m * L)`; its `h_gn[j]` is smaller than the
-default's by a factor of at most `sqrt(n_j)`, where `n_j` is the number of residuals input `j`
-reaches. That factor varies with `j`, so it changes the dispersion of the cover as well as its
-level. The sign-averaged covers cost `O(L)` and do not depend on `G`, so they accept only the
-default `ngroups`.
+of the [`CoverOnly`](@ref) mode, one reverse sweep that also propagates the gradient: `O(G * L)`
+time and memory. The residuals are spread cyclically over the `G` channels, and their
+sensitivities are summed within a channel before the quadrature merge. The default `1` sums them
+all, so `h_gn` is the [`gramcover`](@ref) of the residuals and both covers cost `O(L)`.
+`ngroups=nothing` gives every residual a channel of its own (`G = m`), the tightest pair of covers
+available, at `O(m * L)`; its `h_gn[j]` is smaller than the default's by a factor of at most
+`sqrt(n_j)`, where `n_j` is the number of residuals input `j` reaches. That factor varies with
+`j`, so it changes the dispersion of the cover as well as its level. The sign-averaged covers cost
+`O(L)` and do not depend on `G`, so they accept only the default `ngroups`.
 
 `scales` and `ratio` govern the split, as in [`cover_hessian`](@ref), and reach only the
 residual-curvature channel, and through it `h`: the residual channels carry unit atoms, which
@@ -257,9 +257,9 @@ end
 cover_nls(r, x0::AbstractVector; kwargs...) = cover_nls(CoverOnly(), r, x0; kwargs...)
 
 # The residual channels of a cover give `h_gn`, and together with the residual-curvature channel
-# they give `h`. For the sum covers, one grouped reverse sweep carries the `gres` residual channels
-# and the curvature channel; for the sign-averaged covers, a two-channel quadrature sweep carries
-# one of each.
+# they give `h`. One reverse sweep propagates the adjoints and carries the channels: for the sum
+# covers, the `gres` residual channels and the curvature channel; for the sign-averaged covers, one
+# of each, since `ngroups = 1` puts every residual square in channel 1.
 function _nls_channels(merge::MergeRule, r, x0::AbstractVector, ngroups, check::Bool, scales, ratio)
     check_sweep_merge(merge)
     merge isa SignAveragedMerge && ngroups != 1 && throw(
@@ -270,49 +270,28 @@ function _nls_channels(merge::MergeRule, r, x0::AbstractVector, ngroups, check::
         )
     )
     t, outidx, residx, sqidx = nls_loss_tape(r, x0)
-    n = t.ninputs
-    groups = nls_partition(nnodes(t), sqidx; ngroups)
+    T = eltype(t)
+    n, N = t.ninputs, nnodes(t)
+    groups = nls_partition(N, sqidx; ngroups)
     gres = maximum(groups) - 1
-    vbar = adjoints(t, outidx)
-    etas, _, nguarded = local_covers(t, vbar; check, scales, ratio, merge)
-    h, h_gn = _nls_covers(merge, t, etas, groups, gres, residx)
+    vbar = zeros(T, N)
+    vbar[outidx] = 1
+    layout = GroupedChannels(groups, gres + 1)
+    C, nguarded = cover_only_channels!(Val(true), merge, vbar, t, split_ratio(ratio, T), scales, check, layout)
+    h, h_gn = _nls_covers(merge, T, C, gres, n)
     return (; t, residx, rgroups = groups[sqidx], gres, grad = vbar[1:n], h, h_gn, nguarded)
 end
 
-function _nls_covers(::SumMerge, t::Tape{T}, etas, groups, gres, residx) where {T}
-    Abar = abs_reverse(t, group_seeds(t, etas, groups))
-    cols = 1:t.ninputs
-    h = tomag(T, [sqrt(sum(abs2, view(Abar, :, j))) for j in cols])
-    h_gn = tomag(T, [sqrt(sum(abs2, view(Abar, 1:gres, j))) for j in cols])
+function _nls_covers(::SumMerge, ::Type{T}, C, gres, n) where {T}
+    h = tomag(T, [sqrt(sum(abs2, view(C, :, j))) for j in 1:n])
+    h_gn = tomag(T, [sqrt(sum(abs2, view(C, 1:gres, j))) for j in 1:n])
     return h, h_gn
 end
 
-function _nls_covers(::SignAveragedMerge, t::Tape{T}, etas, groups, gres, residx) where {T}
-    Rho = _nls_quadrature_seeds(t, etas, groups, gres + 1, residx)
-    Rbar = _reverse_sweep(hypot, _absslot, t, Rho)
-    cols = 1:t.ninputs
-    h = tomag(T, [hypot(Rbar[1, j], Rbar[2, j]) for j in cols])
-    h_gn = tomag(T, Rbar[1, cols])
+function _nls_covers(::SignAveragedMerge, ::Type{T}, C, gres, n) where {T}
+    h = tomag(T, [hypot(C[1, j], C[2, j]) for j in 1:n])
+    h_gn = tomag(T, C[1, 1:n])
     return h, h_gn
-end
-
-# Seeds of the two quadrature channels, in root form. Row 1 places unit weight at each residual, as
-# `gramvariance` does; row 2 holds the `quadrature_seeds` of the nodes in the residual-curvature
-# group `curv`.
-function _nls_quadrature_seeds(t::Tape{T}, etas, groups, curv, residx) where {T}
-    Rho = zeros(boundtype(T), 2, nnodes(t))
-    for k in residx
-        Rho[1, k] = hypot(Rho[1, k], one(eltype(Rho)))
-    end
-    for k in (t.ninputs + 1):nnodes(t)
-        groups[k] == curv || continue
-        eta = etas[k]
-        isempty(eta) && continue
-        for (i, p) in enumerate(t.parents[k])
-            Rho[2, p] = hypot(Rho[2, p], tobound(T, eta[i]))
-        end
-    end
-    return Rho
 end
 
 # The residual channels are the square nodes' cover atoms, which are unit only because the loss

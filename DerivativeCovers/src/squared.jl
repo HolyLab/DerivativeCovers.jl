@@ -49,8 +49,8 @@ quadrature, holding the root of their sum of squares; seeded with the matching `
 quadrature merge from below. It accumulates with `hypot`, so no square is formed. Both channels
 hold magnitudes: `rbar` is not an adjoint.
 
-[`cover_hessian`](@ref) forms either channel, as `merge` selects, within its adjoint sweep instead;
-this form seeds both from given local covers.
+[`cover_hessian`](@ref) and [`cover_nls`](@ref) form either channel, as `merge` selects, within
+their adjoint sweeps instead; this form seeds both from given local covers.
 """
 function dependency_sweep(t::Tape, theta::AbstractVector, rho::AbstractVector)
     N = nnodes(t)
