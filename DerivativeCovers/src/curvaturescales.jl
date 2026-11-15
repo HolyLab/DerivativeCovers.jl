@@ -105,7 +105,7 @@ passed), or `nothing` when that pass guards no block. `ratio` is the resolved th
 
 The sweep entry points do not call this: they run the drop pass as their own sweep and keep its
 result when it guards no block, which leaves the cost of such a program unchanged (see
-`cover_only_channel!` and [`local_covers`](@ref)). This serves the computations that
+`cover_only_channels!` and [`local_covers`](@ref)). This serves the computations that
 need the scales before a sweep of their own.
 """
 resolve_scales(w, t::Tape, vbar_or_outidx, ratio, check::Bool, merge::SweepMerge = SumMerge()) = w
@@ -118,39 +118,43 @@ function resolve_scales(
     ) where {T}
     drop = DropGuarded{magtype(T)}()
     sc = split_scales(drop, t)
-    hdrop = cover_only_sweep!(Val(false), merge, vbar, t, ratio, sc, check)
+    C = cover_only_sweep!(Val(false), merge, vbar, t, ratio, sc, check)
     isempty(drop.blocks) && return nothing
-    redo = GuardedRedo(merge, t, vbar, ratio, hdrop, drop, sc.store.lives, check)
+    redo = GuardedRedo(merge, t, vbar, ratio, merged_channels(merge, C), drop, sc.store.lives, check)
     return first(derived_scales(cs, redo))
 end
 
 # The drop pass is a sweep of the entry point's own kind, and where it guards no block it read no
 # declared scale, so its result is the cover under any scales: a program without guarded blocks
-# pays for one sweep, as it would without `CurvatureScales`.
-function cover_only_channel!(
-        p::Val, merge::SweepMerge, vbar, t::Tape{T}, r, cs::CurvatureScales, check::Bool
+# pays for one sweep, as it would without `CurvatureScales`. The scales derive from the cover of
+# all channels merged, the Hessian cover of the program, whatever the channels of `layout`.
+function cover_only_channels!(
+        p::Val, merge::SweepMerge, vbar, t::Tape{T}, r, cs::CurvatureScales, check::Bool,
+        layout = OneChannel()
     ) where {T}
     drop = DropGuarded{magtype(T)}()
     sc = split_scales(drop, t)
-    hdrop = cover_only_sweep!(p, merge, vbar, t, r, sc, check)
-    isempty(drop.blocks) && return hdrop, sc.store.nguarded
+    C = cover_only_sweep!(p, merge, vbar, t, r, sc, check, layout)
+    isempty(drop.blocks) && return C, sc.store.nguarded
     # A propagating sweep has finished the adjoints in `vbar`, so the rest only reads them.
-    redo = GuardedRedo(merge, t, vbar, r, hdrop, drop, sc.store.lives, check)
+    redo = GuardedRedo(merge, t, vbar, r, merged_channels(merge, C), drop, sc.store.lives, check)
     sigma, S = derived_scales(cs, redo)
     etas, nguarded = guarded_covers(redo, sigma, S)
-    return raised_cover(redo, etas), nguarded
+    return raise_channels!(C, redo, etas, layout), nguarded
 end
 
-function local_covers(
-        t::Tape{T}, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool,
-        merge::MergeRule = SumMerge()
-    ) where {T}
-    check_sweep_merge(merge)
+# The cover of all the channels `C` of a sweep merged into one, at every node. Both covers are
+# linear in their seeds, the sum cover in the seeds and the sign-averaged cover in their squares,
+# so this is the cover of a single-channel sweep with the same seeds.
+merged_channels(::SumMerge, C::AbstractMatrix) = [sum(view(C, :, k)) for k in axes(C, 2)]
+merged_channels(::SignAveragedMerge, C::AbstractMatrix) = [foldl(hypot, view(C, :, k)) for k in axes(C, 2)]
+
+function local_covers(t::Tape{T}, vbar::AbstractVector, r, cs::CurvatureScales, check::Bool) where {T}
     drop = DropGuarded{magtype(T)}()
     sc = split_scales(drop, t)
     etas, theta, nguarded = local_covers!(t, vbar, r, sc, check)
     isempty(drop.blocks) && return etas, theta, nguarded
-    redo = GuardedRedo(merge, t, vbar, r, drop_cover(merge, t, etas, theta), drop, sc.store.lives, check)
+    redo = GuardedRedo(SumMerge(), t, vbar, r, abs_reverse(t, theta), drop, sc.store.lives, check)
     sigma, S = derived_scales(cs, redo)
     guarded, nguarded = guarded_covers(redo, sigma, S)
     for (j, k) in enumerate(redo.nodes)
@@ -158,11 +162,6 @@ function local_covers(
     end
     return etas, seeds_from(t, etas), nguarded
 end
-
-# The drop pass's cover of the kind `merge` selects, merged from its local covers.
-drop_cover(::SumMerge, t::Tape, etas, theta) = abs_reverse(t, theta)
-drop_cover(::SignAveragedMerge, t::Tape, etas, theta) =
-    _reverse_sweep(hypot, _absslot, t, quadrature_seeds(t, etas))
 
 """
     GuardedRedo(merge, t, vbar, ratio, hdrop, drop::DropGuarded, lives, check)
@@ -233,18 +232,39 @@ alone and adds to `hdrop`. A split weight is never below the drop pass's weight 
 (see [`balanced_split`](@ref)), so every change is nonnegative.
 """
 function raised_cover(redo::GuardedRedo, etas)
+    delta = cover_increase(redo, etas, eachindex(redo.nodes))
+    return [combine_channels(redo.merge, redo.hdrop[i], delta[i]) for i in 1:redo.tape.ninputs]
+end
+
+# The channels `C` of the drop pass, raised in place at the inputs to the slot covers `etas` of
+# the nodes of `redo`. Each node raises the channel of `layout` that it seeds, in one reverse sweep
+# per channel that any of them seeds.
+function raise_channels!(C::AbstractMatrix, redo::GuardedRedo, etas, layout)
+    gs = [channel_of(layout, k) for k in redo.nodes]
+    for g in unique(gs)
+        delta = cover_increase(redo, etas, findall(==(g), gs))
+        for i in 1:redo.tape.ninputs
+            C[g, i] = combine_channels(redo.merge, C[g, i], delta[i])
+        end
+    end
+    return C
+end
+
+# The change, at every node, of the cover seeded by the nodes `redo.nodes[js]` when they take the
+# slot covers `etas[js]` in place of the drop pass's.
+function cover_increase(redo::GuardedRedo, etas, js)
     t = redo.tape
     T = eltype(t)
     merge = redo.merge
     rho = zeros(channeltype(merge, T), nnodes(t))
-    for (j, k) in enumerate(redo.nodes)
+    for j in js
+        k = redo.nodes[j]
         e0, e1 = redo.etas[j], etas[j]
         for (i, p) in enumerate(t.parents[k])
             rho[p] = raise_seed(merge, T, rho[p], e0[i], e1[i], k, redo.check)
         end
     end
-    delta = _reverse_sweep(channel_accumulator(merge), _absslot, t, rho)
-    return [combine_channels(merge, redo.hdrop[i], delta[i]) for i in 1:t.ninputs]
+    return _reverse_sweep(channel_accumulator(merge), _absslot, t, rho)
 end
 
 # A slot's seed increase from `e0` to `e1`. Rounding can leave a split weight a hair below the

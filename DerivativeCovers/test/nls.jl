@@ -134,6 +134,33 @@ nls_loss(rmap) = x -> sum(abs2, rmap(x)) / 2
         @test lin.h ≈ lin.h_gn
     end
 
+    @testset "one sweep carries the gradient and the channels" begin
+        # The sweep that forms the channels also propagates the adjoints, in the order of an
+        # ordinary reverse pass, so the gradient is that pass's to the bit.
+        rng = MersenneTwister(8)
+        n, m = 3, 5
+        W = randn(rng, m, n)
+        x0 = 0.4 .* randn(rng, n)
+        rmap(x) = [exp(sum(W[k, j] * x[j] for j in 1:n)) * x[1 + k % n] - 1 for k in 1:m]
+        t, outidx, _, _ = nls_loss_tape(rmap, x0)
+        g = adjoints(t, outidx)[1:n]
+        for merge in (SumMerge(), SignAveragedMerge())
+            @test cover_nls(rmap, x0; merge).grad == g
+        end
+        @test cover_nls(rmap, x0; ngroups = nothing).grad == g
+        # Without a guarded block, the drop pass of `CurvatureScales` is that sweep, so deriving
+        # the scales costs nothing; the one extra allocation is the empty record of dropped blocks.
+        cs = CurvatureScales()
+        @test !DerivativeCovers.guards_any_block(t)
+        nls_allocs(s, merge) = @allocations cover_nls(rmap, x0; scales = s, merge)
+        for merge in (SumMerge(), SignAveragedMerge())
+            @test cover_nls(rmap, x0; scales = cs, merge).h == cover_nls(rmap, x0; merge).h
+            nls_allocs(nothing, merge)
+            nls_allocs(cs, merge)
+            @test nls_allocs(cs, merge) <= nls_allocs(nothing, merge) + 1
+        end
+    end
+
     @testset "sign-averaged cover of the full Hessian" begin
         rtol = 1.0e-13
         sa = SignAveragedMerge()

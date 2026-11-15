@@ -956,7 +956,7 @@ function split_block(ratio, c11, c12, c22, s1::SplitScale, s2::SplitScale)
 end
 
 """
-    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing, merge=SumMerge()) -> (etas, theta, nguarded)
+    local_covers(t::Tape, vbar; check::Bool=true, scales=nothing, ratio=nothing) -> (etas, theta, nguarded)
 
 Per-node rank-1 covers. For node `k`, `etas[k][i] >= 0` satisfies
 `etas[k][i] * etas[k][j] >= c^k[i,j]` where `c^k[i,j] = magnitude(vbar[k]) * magnitude(C^k[i,j])`,
@@ -973,18 +973,15 @@ own rank-1 cover, and there is no recorded `C` to check it against, so `check` c
 nodes — validity is conditional on the declaration.
 
 `scales` declares the input scales the split falls back on and `ratio` the threshold at which it
-does so; see [`split_block`](@ref) and [`split_ratio`](@ref). `merge` matters only for
-`scales = `[`CurvatureScales`](@ref)`()`, which derives the scales for the cover it selects.
-`check` verifies the covering invariant at every recorded node.
+does so; see [`split_block`](@ref) and [`split_ratio`](@ref). With
+`scales = `[`CurvatureScales`](@ref)`()`, the scales derive from sum covers. `check` verifies the
+covering invariant at every recorded node.
 """
-local_covers(
-    t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing,
-    merge::MergeRule = SumMerge()
-) where {T} = local_covers(t, vbar, split_ratio(ratio, T), scales, check, merge)
+local_covers(t::Tape{T}, vbar::AbstractVector; check::Bool = true, scales = nothing, ratio = nothing) where {T} =
+    local_covers(t, vbar, split_ratio(ratio, T), scales, check)
 
-# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method, which
-# derives the scales for the cover that `merge` selects. Other scales do not depend on it.
-local_covers(t::Tape, vbar::AbstractVector, r, scales, check::Bool, merge::MergeRule = SumMerge()) =
+# The positional form takes the resolved threshold `r`; `CurvatureScales` adds a method.
+local_covers(t::Tape, vbar::AbstractVector, r, scales, check::Bool) =
     local_covers!(t, vbar, r, split_scales(scales, t), check)
 
 # `local_covers` under the scale references `sc`.
@@ -1312,8 +1309,8 @@ function cover_hessian(
     n, N = t.ninputs, nnodes(t)
     vbar = zeros(T, N)
     vbar[outidx] = 1
-    h, nguarded = cover_only_channel!(Val(true), merge, vbar, t, split_ratio(ratio, T), scales, check)
-    return HessianCover{T}(merge, vbar[1:n], tomag(T, h[1:n]), nguarded)
+    C, nguarded = cover_only_channels!(Val(true), merge, vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover{T}(merge, vbar[1:n], tomag(T, C[1, 1:n]), nguarded)
 end
 
 function cover_hessian(
@@ -1325,8 +1322,8 @@ function cover_hessian(
     axes(vbar) == (Base.OneTo(N),) || throw(
         DimensionMismatch("vbar must hold one adjoint per tape node, indices $(Base.OneTo(N)); got $(axes(vbar))")
     )
-    h, nguarded = cover_only_channel!(Val(false), merge, vbar, t, split_ratio(ratio, T), scales, check)
-    return HessianCover{T}(merge, vbar[1:n], tomag(T, h[1:n]), nguarded)
+    C, nguarded = cover_only_channels!(Val(false), merge, vbar, t, split_ratio(ratio, T), scales, check)
+    return HessianCover{T}(merge, vbar[1:n], tomag(T, C[1, 1:n]), nguarded)
 end
 
 # The merge rules a single reverse sweep can carry.
@@ -1340,12 +1337,31 @@ check_sweep_merge(merge::MergeRule) = throw(
     )
 )
 
-# The `CoverOnly` sweep under the declared scales `scales`, returning the channel `merge` selects
-# and the number of guarded blocks; `CurvatureScales` adds a method. `r` is the resolved threshold.
-function cover_only_channel!(p::Val, merge::SweepMerge, vbar, t::Tape, r, scales, check::Bool)
+# The channels of a `CoverOnly` sweep, and the channel that each node's slot covers seed. With
+# `OneChannel()`, every node seeds the single channel, whose value at the inputs is the cover of
+# `cover_hessian`. With `GroupedChannels(groups, G)`, node `k` seeds channel `groups[k]` of `G`,
+# and the caller merges the channels at each input, as `cover_nls` merges its residual and
+# residual-curvature channels.
+struct OneChannel end
+struct GroupedChannels
+    groups::Vector{Int}
+    G::Int
+end
+
+nchannels(::OneChannel) = 1
+nchannels(layout::GroupedChannels) = layout.G
+channel_of(::OneChannel, k::Integer) = 1
+channel_of(layout::GroupedChannels, k::Integer) = layout.groups[k]
+
+# The `CoverOnly` sweep under the declared scales `scales`, returning its channels as the rows of a
+# matrix over all nodes, and the number of guarded blocks; `CurvatureScales` adds a method. `r` is
+# the resolved threshold.
+function cover_only_channels!(
+        p::Val, merge::SweepMerge, vbar, t::Tape, r, scales, check::Bool, layout = OneChannel()
+    )
     sc = split_scales(scales, t)
-    h = cover_only_sweep!(p, merge, vbar, t, r, sc, check)
-    return h, sc.store.nguarded
+    C = cover_only_sweep!(p, merge, vbar, t, r, sc, check, layout)
+    return C, sc.store.nguarded
 end
 
 # The element type of a channel: the sum cover is a bound and rounds as the tape asks, while the
@@ -1353,40 +1369,52 @@ end
 channeltype(::SumMerge, ::Type{T}) where {T} = boundtype(T)
 channeltype(::SignAveragedMerge, ::Type{T}) where {T} = magtype(T)
 
-# The reverse sweep of `CoverOnly`, returning the channel `merge` selects over all nodes. With
-# `Val(true)`, `vbar` holds only the output seed on entry and the sweep accumulates the adjoints
-# into it alongside the channel. With `Val(false)`, `vbar` holds finished adjoints and is only
-# read. Both forms perform the same channel operations in the same order, so they return identical
-# channels whenever the adjoints agree. A drop pass completes its record of dropped blocks.
+# The reverse sweep of `CoverOnly`, returning the channels of `layout`, of the kind `merge`
+# selects, as the rows of a matrix over all nodes. With `Val(true)`, `vbar` holds only the output
+# seed on entry and the sweep accumulates the adjoints into it alongside the channels. With
+# `Val(false)`, `vbar` holds finished adjoints and is only read. Both forms perform the same
+# channel operations in the same order, so they return identical channels whenever the adjoints
+# agree. A drop pass completes its record of dropped blocks.
 function cover_only_sweep!(
-        ::Val{propagate}, merge::SweepMerge, vbar, t::Tape{T}, r, sc, check::Bool
+        ::Val{propagate}, merge::SweepMerge, vbar, t::Tape{T}, r, sc, check::Bool,
+        layout = OneChannel()
     ) where {propagate, T}
     N = nnodes(t)
-    c = zeros(channeltype(merge, T), N)
+    G = nchannels(layout)
+    C = zeros(channeltype(merge, T), G, N)
     for k in N:-1:1
-        vk, ck = vbar[k], c[k]
+        vk = vbar[k]
         ps = t.parents[k]
         eta = node_cover(r, t, k, vk, sc, check)
         note_dropped!(sc, k, eta)
+        gk = channel_of(layout, k)
         if merge isa SumMerge && eta !== nothing
             for (i, p) in enumerate(ps)
-                c[p] += eta[i]
+                C[gk, p] += eta[i]
             end
         end
         vsends = propagate && !iszero(magnitude(vk))
-        czero = iszero(ck)
+        czero = all(g -> iszero(C[g, k]), 1:G)
         (vsends || !czero || eta !== nothing) || continue
         # A zero partial transmits nothing, and must not carry an infinite channel into its parent
         # as `0 * Inf`. A finite channel crosses it unchanged, so only an infinite one tests slots.
-        cfinite = czero || isfinite(ck)
+        cfinite = all(g -> isfinite(C[g, k]), 1:G)
         ds = t.ds[k]
         for (i, p) in enumerate(ps)
-            vsends && (vbar[p] += ds[i] * vk)
-            transmits = !czero && (cfinite || !iszero(magnitude(ds[i])))
-            c[p] = channel_step(merge, c[p], eta, i, ds[i], ck, transmits)
+            d = ds[i]
+            vsends && (vbar[p] += d * vk)
+            dsends = cfinite || !iszero(magnitude(d))
+            # Only channel `gk` takes the node's own cover term.
+            for g in 1:G
+                g == gk && continue
+                ck = C[g, k]
+                C[g, p] = channel_step(merge, C[g, p], nothing, i, d, ck, dsends && !iszero(ck))
+            end
+            ck = C[gk, k]
+            C[gk, p] = channel_step(merge, C[gk, p], eta, i, d, ck, dsends && !iszero(ck))
         end
     end
-    return c
+    return C
 end
 
 # The slot-aligned cover of node `k`, or `nothing` where it contributes no second-order term. The
