@@ -176,8 +176,9 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
   inputs.
 - [Programs and new operations](@ref) describes what a program may contain and
   how to add operations.
-- [Writing a cover by hand](@ref) gives the rules for writing the sweep for one
-  program directly, and shows how to test such code against this package.
+- [Writing a cover by hand](@ref) describes how to cover an analytic Hessian
+  without forming it, and how to write the sweep for one program directly and
+  test it against this package.
 - The reference pages list the public API:
   [Computing and using covers](@ref), the [Extension interface](@ref), and the
   companion package [DerivativeCoverProblems](@ref). Names that are public but
