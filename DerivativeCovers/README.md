@@ -74,3 +74,11 @@ Pkg.add(url="https://github.com/HolyLab/DerivativeCovers.jl", subdir="Derivative
 
 Test problems for studying cover tightness are provided by the companion
 package [DerivativeCoverProblems](../DerivativeCoverProblems).
+
+## Recommended usage
+
+For computing covers from programs, DerivativeCovers is intended to serve as the standard reference implementation.
+For small programs it is usable in production, but because it is tape-based its performance is far slower than would be expected from a compiled-tape implementation.
+
+Until a compiled-tape package arises, for production use on larger problems a better option is to follow the guidance on [writing covers by hand](https://holylab.github.io/DerivativeCovers.jl/dev/byhand) (AI agents can help you do this) and use DerivativeCovers **in the test suite** to check the correctness of your hand-written cover.
+Thus it serves the same role as [FiniteDifferences.jl](https://github.com/JuliaDiff/FiniteDifferences.jl) and [FiniteDiff.jl](https://github.com/JuliaDiff/FiniteDiff.jl) in checking hand-written gradients and Hessians.
