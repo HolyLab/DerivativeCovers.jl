@@ -26,6 +26,7 @@ makedocs(;
         "Tightness" => "tightness.md",
         "Covers over a box" => "intervals.md",
         "Programs and new operations" => "extending.md",
+        "Writing a cover by hand" => "byhand.md",
         "Reference" => [
             "Computing and using covers" => "reference/covers.md",
             "Extension interface" => "reference/extending.md",
